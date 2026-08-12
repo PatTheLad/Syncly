@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Syncly</AssemblyName>
+    <RootNamespace>Syncly.Desktop</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Photino.Blazor" Version="4.0.13" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Syncly.App\Syncly.App.csproj" />
+    <ProjectReference Include="..\Syncly.Transport.Lan\Syncly.Transport.Lan.csproj" />
+    <ProjectReference Include="..\Syncly.Transport.WifiDirect\Syncly.Transport.WifiDirect.csproj" />
+    <ProjectReference Include="..\Syncly.UI\Syncly.UI.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="wwwroot\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!-- Photino serves files from disk, so the shared UI assets are copied next to the host. -->
+  <Target Name="CopyUiAssets" AfterTargets="Build">
+    <ItemGroup>
+      <_UiAssets Include="..\Syncly.UI\wwwroot\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_UiAssets)"
+          DestinationFiles="@(_UiAssets->'$(OutputPath)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

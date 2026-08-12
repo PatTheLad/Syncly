@@ -1,73 +1,170 @@
 @page "/devices"
-@inject AppState State
-@inject IDeviceIdentity Identity
+@namespace Syncly.UI.Pages
 @implements IDisposable
+@inject SynclyApp App
 
-<div class="page">
-    <h1>Devices</h1>
-    <p class="lede">Find nearby Syncly peers on your network. Discovery is not trust — confirm fingerprints when prompted.</p>
-
-    <div class="panel row">
-        <div>
-            <span class="status-dot @(State.Host.IsDiscoverable ? "" : "off")"></span>
-            @(State.Host.IsDiscoverable ? "Discoverable" : "Hidden")
-            <div class="lede" style="margin:0.35rem 0 0">@Identity.Current.DisplayName</div>
+<div class="workspace">
+    <div class="topbar">
+        <div class="crumbs"><span class="crumb-current">Devices</span></div>
+        <div class="topbar-actions">
+            <span class="chip muted">@string.Join(" · ", App.Sync.TransportNames)</span>
+            <button class="chip primary" @onclick="() => App.Sync.SyncNowAsync()">Sync now</button>
         </div>
-        <button @onclick="ToggleDiscoverable" disabled="@_busy">
-            @(State.Host.IsDiscoverable ? "Go hidden" : "Become discoverable")
-        </button>
     </div>
 
-    <section class="panel">
-        <h2 style="font-family:var(--font-note);font-weight:600;margin:0 0 0.75rem;font-size:1.2rem">Nearby</h2>
-        @if (!State.Host.NearbyPeers.Any())
-        {
-            <p class="lede">No peers yet. Enable discoverable here and on another device.</p>
-        }
-        else
-        {
-            @foreach (var peer in State.Host.NearbyPeers)
-            {
-                <div class="peer row">
-                    <div>
-                        <strong><span class="status-dot"></span>@peer.DisplayName</strong>
-                        <span style="color:var(--muted);font-size:0.85rem">@peer.Endpoint.Host:@peer.Endpoint.Port</span>
-                    </div>
-                    <button @onclick="() => SyncAsync(peer)" disabled="@_busy">Sync</button>
+    <div class="editor-scroll">
+        <div class="page">
+            <section>
+                <h2>This device</h2>
+                <div class="card">
+                    <div class="card-title">@App.Identity.DisplayName</div>
+                    <div class="card-sub">@App.Identity.DeviceId</div>
+                    <div class="card-sub">Listening for peers on the local network.</div>
                 </div>
-            }
-        }
-    </section>
+            </section>
 
-    @if (!string.IsNullOrEmpty(_error))
-    {
-        <p style="color:var(--danger)">@_error</p>
-    }
+            <section>
+                <h2>Active sessions</h2>
+                @if (App.Sync.Sessions.Count == 0)
+                {
+                    <div class="panel-empty">Nothing connected right now.</div>
+                }
+                else
+                {
+                    @foreach (var session in App.Sync.Sessions)
+                    {
+                        <div class="card" @key="session.DeviceId">
+                            <div class="row">
+                                <span class="status-dot @PhaseClass(session.Phase)"></span>
+                                <span class="card-title grow">@session.DisplayName</span>
+                                <span class="chip muted">@session.Phase</span>
+                            </div>
+                            <div class="card-sub">
+                                @(session.Detail ?? "—") · sent @session.OpsSent · received @session.OpsReceived
+                            </div>
+                        </div>
+                    }
+                }
+            </section>
+
+            <section>
+                <h2>Nearby</h2>
+                @if (App.Sync.DiscoveredPeers.Count == 0)
+                {
+                    <div class="panel-empty">
+                        No devices found yet. Both devices must be on the same network with Syncly open.
+                    </div>
+                }
+                else
+                {
+                    @foreach (var peer in App.Sync.DiscoveredPeers)
+                    {
+                        <div class="card" @key="peer.DeviceId + peer.Endpoint">
+                            <div class="row">
+                                <span class="card-title grow">@peer.DisplayName</span>
+                                <span class="chip muted">@peer.Transport</span>
+                                <button class="chip" @onclick="() => ConnectAsync(peer.Address, peer.Port)">
+                                    Connect
+                                </button>
+                            </div>
+                            <div class="card-sub">@peer.Endpoint · seen @peer.SeenAt.ToLocalTime().ToString("t")</div>
+                        </div>
+                    }
+                }
+            </section>
+
+            <section>
+                <h2>Connect manually</h2>
+                <div class="card">
+                    <div class="row">
+                        <input class="field grow" placeholder="192.168.1.42" @bind="_address" />
+                        <input class="field port" type="number" @bind="_port" />
+                        <button class="chip primary" @onclick="() => ConnectAsync(_address, _port)">Connect</button>
+                    </div>
+                    @if (_error is { Length: > 0 })
+                    {
+                        <div class="card-sub error">@_error</div>
+                    }
+                </div>
+            </section>
+
+            <section>
+                <h2>Paired devices</h2>
+                @if (_trusted.Count == 0)
+                {
+                    <div class="panel-empty">Nothing paired yet.</div>
+                }
+                else
+                {
+                    @foreach (var device in _trusted)
+                    {
+                        <div class="card" @key="device.DeviceId">
+                            <div class="row">
+                                <span class="card-title grow">@device.DisplayName</span>
+                                <button class="chip danger" @onclick="() => RevokeAsync(device.DeviceId)">
+                                    Unpair
+                                </button>
+                            </div>
+                            <div class="card-sub">
+                                @device.DeviceId · paired @device.TrustedAt.ToLocalTime().ToString("g")
+                            </div>
+                        </div>
+                    }
+                }
+            </section>
+        </div>
+    </div>
 </div>
 
 @code {
-    private bool _busy;
+    private List<TrustedDevice> _trusted = [];
+    private string _address = string.Empty;
+    private int _port = 45_654;
     private string? _error;
 
-    protected override void OnInitialized() => State.Changed += OnChanged;
-    private void OnChanged() => InvokeAsync(StateHasChanged);
-    public void Dispose() => State.Changed -= OnChanged;
-
-    private async Task ToggleDiscoverable()
+    protected override async Task OnInitializedAsync()
     {
-        _busy = true;
-        _error = null;
-        try { await State.Host.SetDiscoverableAsync(!State.Host.IsDiscoverable); }
-        catch (Exception ex) { _error = ex.Message; }
-        finally { _busy = false; }
+        App.Sync.Changed += Refresh;
+        await LoadAsync();
     }
 
-    private async Task SyncAsync(Peer peer)
+    private void Refresh() => InvokeAsync(StateHasChanged);
+
+    private async Task LoadAsync() => _trusted = await App.Peers.ListAsync();
+
+    private async Task ConnectAsync(string address, int port)
     {
-        _busy = true;
         _error = null;
-        try { await State.Host.SyncWithAsync(peer); }
-        catch (Exception ex) { _error = ex.Message; }
-        finally { _busy = false; }
+
+        if (string.IsNullOrWhiteSpace(address))
+        {
+            _error = "Enter an address first.";
+            return;
+        }
+
+        try
+        {
+            await App.Sync.ConnectAsync(address.Trim(), port);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
     }
+
+    private async Task RevokeAsync(string deviceId)
+    {
+        await App.Peers.RevokeAsync(deviceId);
+        await LoadAsync();
+    }
+
+    private static string PhaseClass(SyncPhase phase) => phase switch
+    {
+        SyncPhase.Live => "live",
+        SyncPhase.Failed => "failed",
+        _ => "working",
+    };
+
+    public void Dispose() => App.Sync.Changed -= Refresh;
 }

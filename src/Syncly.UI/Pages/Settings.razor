@@ -1,49 +1,87 @@
 @page "/settings"
-@inject IDeviceIdentity Identity
-@inject Syncly.Core.Identity.DeviceIdentityService IdentityService
+@namespace Syncly.UI.Pages
+@inject SynclyApp App
+@inject EditorState State
 
-<div class="page">
-    <h1>Settings</h1>
-    <p class="lede">Identity and local preferences for this vault.</p>
-
-    <div class="panel">
-        <label>
-            Device name
-            <input @bind="_name" />
-        </label>
-        <button @onclick="SaveName" disabled="@_busy">Save name</button>
+<div class="workspace">
+    <div class="topbar">
+        <div class="crumbs"><span class="crumb-current">Settings</span></div>
     </div>
 
-    <div class="panel">
-        <p><strong>Device ID</strong></p>
-        <p class="fingerprint">@Identity.Current.DeviceId</p>
-        <p><strong>Fingerprint</strong></p>
-        <p class="fingerprint">@Identity.Current.PublicKeyFingerprint</p>
-        <p class="lede" style="margin-top:0.75rem">Transport: LAN/TCP. Wi-Fi Direct hooks are ready per platform.</p>
-    </div>
+    <div class="editor-scroll">
+        <div class="page">
+            <section>
+                <h2>Identity</h2>
+                <div class="card">
+                    <div class="card-title">@App.Identity.DisplayName</div>
+                    <div class="card-sub">Device ID @App.Identity.DeviceId</div>
+                    <div class="card-sub">
+                        The key never leaves this device. Set <code>SYNCLY_DEVICE_NAME</code> to rename it.
+                    </div>
+                </div>
+            </section>
 
-    @if (!string.IsNullOrEmpty(_message))
-    {
-        <p>@_message</p>
-    }
+            <section>
+                <h2>Storage</h2>
+                <div class="card">
+                    <div class="card-sub">@App.DataDirectory</div>
+                    <div class="card-sub">@_pageCount page(s) · @_opCount operation(s) in the log</div>
+                    <div class="row">
+                        <button class="chip" @onclick="CompactAsync">Compact history</button>
+                        <span class="card-sub">@_maintenance</span>
+                    </div>
+                </div>
+            </section>
+
+            <section>
+                <h2>Editing</h2>
+                <div class="card">
+                    <div class="row">
+                        <span class="card-title grow">Open pages read-only</span>
+                        <button class="chip @(State.ReadingMode ? "primary" : null)"
+                                @onclick="State.ToggleReadingMode">
+                            @(State.ReadingMode ? "On" : "Off")
+                        </button>
+                    </div>
+                    <div class="card-sub">Ctrl+E toggles it anywhere. Ctrl+K opens the command palette.</div>
+                </div>
+            </section>
+
+            <section>
+                <h2>Shortcuts</h2>
+                <div class="card">
+                    <div class="shortcuts">
+                        <div><kbd>Ctrl</kbd>+<kbd>K</kbd><span>Command palette</span></div>
+                        <div><kbd>Ctrl</kbd>+<kbd>E</kbd><span>Reading mode</span></div>
+                        <div><kbd>Ctrl</kbd>+<kbd>N</kbd><span>New page</span></div>
+                        <div><kbd>Ctrl</kbd>+<kbd>S</kbd><span>Sync now</span></div>
+                        <div><kbd>/</kbd><span>Block menu</span></div>
+                        <div><kbd>Tab</kbd><span>Indent block</span></div>
+                        <div><kbd>Alt</kbd>+<kbd>↑</kbd><span>Move block</span></div>
+                        <div><kbd>Ctrl</kbd>+<kbd>B</kbd><span>Bold</span></div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
 </div>
 
 @code {
-    private string _name = "";
-    private bool _busy;
-    private string? _message;
+    private int _pageCount;
+    private long _opCount;
+    private string _maintenance = string.Empty;
 
-    protected override void OnInitialized() => _name = Identity.Current.DisplayName;
-
-    private void SaveName()
+    protected override async Task OnInitializedAsync()
     {
-        _busy = true;
-        try
-        {
-            IdentityService.UpdateDisplayName(_name);
-            _message = "Saved.";
-        }
-        catch (Exception ex) { _message = ex.Message; }
-        finally { _busy = false; }
+        _pageCount = App.Workspace.Pages.Count;
+        _opCount = await App.OpLog.CountAsync();
+    }
+
+    private async Task CompactAsync()
+    {
+        _maintenance = "Working…";
+        await App.Sync.CollectAsync();
+        _opCount = await App.OpLog.CountAsync();
+        _maintenance = "Done";
     }
 }

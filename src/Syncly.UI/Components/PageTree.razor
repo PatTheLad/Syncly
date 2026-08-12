@@ -1,0 +1,68 @@
+@namespace Syncly.UI.Components
+
+@foreach (var page in Workspace.ChildrenOf(ParentId))
+{
+    var children = Workspace.ChildrenOf(page.Id);
+    var expanded = _open.Contains(page.Id);
+
+    <div @key="page.Id">
+        <div class="tree-row @(page.Id == SelectedId ? "selected" : null)"
+             @onclick="() => OnSelect.InvokeAsync(page.Id)">
+            <span class="tree-twisty @(expanded ? "open" : null)"
+                  @onclick:stopPropagation="true"
+                  @onclick="() => Toggle(page.Id)">
+                @(children.Count > 0 ? "▶" : "")
+            </span>
+            <span class="tree-label">@Label(page)</span>
+            <button class="tree-add"
+                    title="New sub-page"
+                    @onclick:stopPropagation="true"
+                    @onclick="() => AddChildAsync(page.Id)">+</button>
+        </div>
+
+        @if (expanded && children.Count > 0)
+        {
+            <div style="margin-left:14px">
+                <PageTree Workspace="Workspace"
+                          ParentId="page.Id"
+                          SelectedId="SelectedId"
+                          OnSelect="OnSelect"
+                          OnAddChild="OnAddChild" />
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private readonly HashSet<string> _open = new(StringComparer.Ordinal);
+
+    [Parameter, EditorRequired]
+    public required Workspace Workspace { get; set; }
+
+    [Parameter]
+    public string? ParentId { get; set; }
+
+    [Parameter]
+    public string? SelectedId { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnSelect { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnAddChild { get; set; }
+
+    private static string Label(PageRef page) =>
+        page.Icon is { Length: > 0 } icon ? $"{icon} {page.DisplayTitle}" : page.DisplayTitle;
+
+    private void Toggle(string pageId)
+    {
+        if (!_open.Remove(pageId))
+            _open.Add(pageId);
+    }
+
+    private async Task AddChildAsync(string pageId)
+    {
+        _open.Add(pageId);
+        await OnAddChild.InvokeAsync(pageId);
+    }
+}

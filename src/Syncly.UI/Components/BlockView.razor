@@ -1,0 +1,182 @@
+@namespace Syncly.UI.Components
+@implements IDisposable
+@inject IJSRuntime Js
+
+<div class="block @KindClass" @key="Block.Id">
+    @if (!Host.Reading && Block.Kind != BlockKind.Divider)
+    {
+        <button class="block-handle" title="Block actions" @onclick="OpenMenuAsync">⋮</button>
+    }
+
+    @if (Block.Kind == BlockKind.Todo)
+    {
+        <button class="checkbox @(Block.Checked ? "checked" : null)"
+                title="Toggle"
+                @onclick="() => Host.ToggleTodoAsync(Block.Id)">
+            @(Block.Checked ? "✓" : "")
+        </button>
+    }
+    else if (Block.Kind == BlockKind.Bullet)
+    {
+        <span class="block-marker">•</span>
+    }
+    else if (Block.Kind == BlockKind.Numbered)
+    {
+        <span class="block-marker">@(Index + 1).</span>
+    }
+
+    @if (Block.Kind == BlockKind.Divider)
+    {
+        <hr />
+    }
+    else if (Host.Reading)
+    {
+        <div class="block-text @(Block.Checked ? "done" : null)"
+             title="Double-click to edit"
+             @ondblclick="() => Host.EditAtAsync(Block.Id)">
+            @((MarkupString)InlineMarkup.ToHtml(Block.Text, Host.ResolveLink))
+        </div>
+    }
+    else
+    {
+        <div @ref="_element"
+             id="@ElementId"
+             class="block-text @(Block.Checked ? "done" : null)"
+             contenteditable="true"
+             spellcheck="true"
+             data-placeholder="@Placeholder">@Block.Text</div>
+    }
+</div>
+
+@if (Block.Children.Count > 0)
+{
+    <div class="block-children">
+        @for (var i = 0; i < Block.Children.Count; i++)
+        {
+            var child = Block.Children[i];
+            <BlockView Block="child" Index="i" Host="Host" @key="child.Id" />
+        }
+    </div>
+}
+
+@code {
+    private ElementReference _element;
+    private DotNetObjectReference<BlockView>? _self;
+    private string? _echo;
+    private bool _attached;
+    private bool _wasReading;
+
+    [Parameter, EditorRequired]
+    public required BlockNode Block { get; set; }
+
+    [Parameter]
+    public int Index { get; set; }
+
+    [Parameter, EditorRequired]
+    public required IBlockHost Host { get; set; }
+
+    public string ElementId => $"blk-{Block.Id}";
+
+    private string KindClass => Block.Kind switch
+    {
+        BlockKind.Heading1 => "h1",
+        BlockKind.Heading2 => "h2",
+        BlockKind.Heading3 => "h3",
+        BlockKind.Bullet => "bullet",
+        BlockKind.Numbered => "numbered",
+        BlockKind.Todo => "todo",
+        BlockKind.Quote => "quote",
+        BlockKind.Code => "code",
+        BlockKind.Divider => "divider",
+        _ => "paragraph",
+    };
+
+    private string Placeholder => Block.Kind switch
+    {
+        BlockKind.Heading1 or BlockKind.Heading2 or BlockKind.Heading3 => "Heading",
+        BlockKind.Code => "Code",
+        BlockKind.Quote => "Quote",
+        _ => "Type '/' for commands",
+    };
+
+    /// <summary>
+    /// Suppresses the re-render caused by our own keystroke coming back through the CRDT. A change
+    /// from a peer has different text, so it still lands and the caret is restored afterwards.
+    /// </summary>
+    protected override bool ShouldRender()
+    {
+        if (_echo is not null && string.Equals(_echo, Block.Text, StringComparison.Ordinal))
+        {
+            _echo = null;
+            return false;
+        }
+
+        return true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Host.Reading)
+        {
+            _attached = false;
+            _wasReading = true;
+            return;
+        }
+
+        if (!_attached || _wasReading)
+        {
+            _self ??= DotNetObjectReference.Create(this);
+            await Js.InvokeVoidAsync("syncly.attachBlock", _element, _self, Block.Id);
+            _attached = true;
+            _wasReading = false;
+        }
+    }
+
+    [JSInvokable]
+    public Task OnInput(string text, int caret)
+    {
+        _echo = text;
+        return Host.TextChangedAsync(Block.Id, text, caret);
+    }
+
+    [JSInvokable]
+    public Task OnFocus() => Host.FocusAsync(Block.Id);
+
+    [JSInvokable]
+    public Task OnBlur(string text) => Host.BlurAsync(Block.Id, text);
+
+    [JSInvokable]
+    public Task OnSplit(string text, int caret) => Host.SplitAsync(Block.Id, text, caret);
+
+    [JSInvokable]
+    public Task OnMergeBackward() => Host.MergeBackwardAsync(Block.Id);
+
+    [JSInvokable]
+    public Task OnMergeForward() => Host.MergeForwardAsync(Block.Id);
+
+    [JSInvokable]
+    public Task OnIndent(bool indent) => Host.IndentAsync(Block.Id, indent);
+
+    [JSInvokable]
+    public Task OnMoveBlock(bool up) => Host.MoveAsync(Block.Id, up);
+
+    [JSInvokable]
+    public Task OnStep(bool down, int caret) => Host.StepAsync(Block.Id, down, caret);
+
+    [JSInvokable]
+    public Task OnMark(string shortcut, string text, int start, int end) =>
+        Host.MarkAsync(Block.Id, shortcut, text, start, end);
+
+    [JSInvokable]
+    public Task OnSlash() => Host.SlashAsync(Block.Id);
+
+    [JSInvokable]
+    public Task OnMenuKey(string key) => Host.MenuKeyAsync(key);
+
+    [JSInvokable]
+    public Task OnEscape() => Host.EscapeAsync();
+
+    private Task OpenMenuAsync() => Host.SlashAsync(Block.Id);
+
+    public void Dispose() => _self?.Dispose();
+}

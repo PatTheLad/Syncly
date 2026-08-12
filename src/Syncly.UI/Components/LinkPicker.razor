@@ -1,0 +1,40 @@
+@namespace Syncly.UI.Components
+
+<div class="slash-menu" style="left:@Left.ToString("0")px; top:@Top.ToString("0")px">
+    @for (var i = 0; i < Options.Count; i++)
+    {
+        var index = i;
+        var option = Options[i];
+        <button class="palette-item @(index == Active ? "active" : null)"
+                @key="option.Title + option.Create"
+                @onmousedown:preventDefault="true"
+                @onmousedown="() => OnPick.InvokeAsync(option)">
+            <span class="glyph">@(option.Create ? "+" : "◻")</span>
+            <span class="label">@option.Title</span>
+            @if (option.Create)
+            {
+                <span class="hint">New page</span>
+            }
+        </button>
+    }
+</div>
+
+@code {
+    /// <summary>A page to link to, or a page to create on the way to linking to it.</summary>
+    public sealed record Option(string Title, bool Create);
+
+    [Parameter, EditorRequired]
+    public required IReadOnlyList<Option> Options { get; set; }
+
+    [Parameter]
+    public int Active { get; set; }
+
+    [Parameter]
+    public double Left { get; set; }
+
+    [Parameter]
+    public double Top { get; set; }
+
+    [Parameter]
+    public EventCallback<Option> OnPick { get; set; }
+}

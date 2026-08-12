@@ -7,7 +7,7 @@
       "type": "process",
       "args": [
         "build",
-        "${workspaceFolder}/src/Syncly.App.Linux/Syncly.App.Linux.csproj",
+        "${workspaceFolder}/src/Syncly.Desktop/Syncly.Desktop.csproj",
         "/property:GenerateFullPaths=true",
         "/consoleloggerparameters:NoSummary;ForceNoAlign"
       ],
@@ -18,12 +18,12 @@
       }
     },
     {
-      "label": "build-tests",
+      "label": "build-all",
       "command": "dotnet",
       "type": "process",
       "args": [
         "build",
-        "${workspaceFolder}/tests/Syncly.Core.Tests/Syncly.Core.Tests.csproj",
+        "${workspaceFolder}/Syncly.slnx",
         "/property:GenerateFullPaths=true",
         "/consoleloggerparameters:NoSummary;ForceNoAlign"
       ],
@@ -33,12 +33,24 @@
       "label": "test",
       "command": "dotnet",
       "type": "process",
-      "args": [
-        "test",
-        "${workspaceFolder}/tests/Syncly.Core.Tests/Syncly.Core.Tests.csproj"
-      ],
+      "args": ["test", "${workspaceFolder}/Syncly.slnx"],
       "problemMatcher": "$msCompile",
-      "group": "test"
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "android",
+      "command": "dotnet",
+      "type": "process",
+      "args": [
+        "build",
+        "${workspaceFolder}/src/Syncly.Mobile/Syncly.Mobile.csproj",
+        "-t:Run",
+        "-f:net10.0-android"
+      ],
+      "problemMatcher": "$msCompile"
     }
   ]
 }

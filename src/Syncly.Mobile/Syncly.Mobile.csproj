@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <!-- Kept out of Syncly.slnx on purpose: it needs the MAUI workload, which the desktop and
+       test builds must not depend on. Build it with `dotnet build src/Syncly.Mobile`. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-android</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <UseMaui>true</UseMaui>
+    <SingleProject>true</SingleProject>
+    <RootNamespace>Syncly.Mobile</RootNamespace>
+    <ApplicationTitle>Syncly</ApplicationTitle>
+    <ApplicationId>dev.syncly.app</ApplicationId>
+    <ApplicationDisplayVersion>2.0</ApplicationDisplayVersion>
+    <ApplicationVersion>2</ApplicationVersion>
+    <SupportedOSPlatformVersion>26.0</SupportedOSPlatformVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Maui.Controls" Version="10.0.11" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Maui" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Syncly.App\Syncly.App.csproj" />
+    <ProjectReference Include="..\Syncly.Transport.Lan\Syncly.Transport.Lan.csproj" />
+    <ProjectReference Include="..\Syncly.Transport.WifiDirect\Syncly.Transport.WifiDirect.csproj" />
+    <ProjectReference Include="..\Syncly.UI\Syncly.UI.csproj" />
+  </ItemGroup>
+
+  <!-- The UI assets live once, in Syncly.UI, and are pulled in as MAUI raw assets. -->
+  <ItemGroup>
+    <MauiAsset Include="..\Syncly.UI\wwwroot\**\*" LogicalName="wwwroot\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

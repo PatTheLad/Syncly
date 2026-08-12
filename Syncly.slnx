@@ -1,16 +1,19 @@
 <Solution>
   <Folder Name="/src/">
-    <Project Path="src/Syncly.App.Linux/Syncly.App.Linux.csproj" />
-    <Project Path="src/Syncly.Contracts/Syncly.Contracts.csproj" />
-    <Project Path="src/Syncly.Core/Syncly.Core.csproj" />
-    <Project Path="src/Syncly.Platform.Abstractions/Syncly.Platform.Abstractions.csproj" />
-    <Project Path="src/Syncly.Platform.Android/Syncly.Platform.Android.csproj" />
-    <Project Path="src/Syncly.Platform.Lan/Syncly.Platform.Lan.csproj" />
-    <Project Path="src/Syncly.Platform.Linux/Syncly.Platform.Linux.csproj" />
-    <Project Path="src/Syncly.Platform.Windows/Syncly.Platform.Windows.csproj" />
+    <Project Path="src/Syncly.App/Syncly.App.csproj" />
+    <Project Path="src/Syncly.Crdt/Syncly.Crdt.csproj" />
+    <Project Path="src/Syncly.Desktop/Syncly.Desktop.csproj" />
+    <Project Path="src/Syncly.Model/Syncly.Model.csproj" />
+    <Project Path="src/Syncly.Security/Syncly.Security.csproj" />
+    <Project Path="src/Syncly.Storage/Syncly.Storage.csproj" />
+    <Project Path="src/Syncly.Sync/Syncly.Sync.csproj" />
+    <Project Path="src/Syncly.Transport.Lan/Syncly.Transport.Lan.csproj" />
+    <Project Path="src/Syncly.Transport.WifiDirect/Syncly.Transport.WifiDirect.csproj" />
     <Project Path="src/Syncly.UI/Syncly.UI.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/Syncly.Core.Tests/Syncly.Core.Tests.csproj" />
+    <Project Path="tests/Syncly.Crdt.Tests/Syncly.Crdt.Tests.csproj" />
+    <Project Path="tests/Syncly.Storage.Tests/Syncly.Storage.Tests.csproj" />
+    <Project Path="tests/Syncly.Sync.Tests/Syncly.Sync.Tests.csproj" />
   </Folder>
 </Solution>

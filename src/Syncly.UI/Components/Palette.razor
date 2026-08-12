@@ -1,0 +1,126 @@
+@namespace Syncly.UI.Components
+@inject IJSRuntime Js
+
+<div class="overlay" @onclick="Close">
+    <div class="palette" @onclick:stopPropagation="true">
+        <input id="@InputId"
+               placeholder="@Placeholder"
+               value="@_query"
+               autocomplete="off"
+               @oninput="OnQueryChanged"
+               @onkeydown="OnKeyDown" />
+
+        <div class="palette-list">
+            @if (_matches.Count == 0)
+            {
+                <div class="palette-empty">@EmptyText</div>
+            }
+            else
+            {
+                @for (var i = 0; i < _matches.Count; i++)
+                {
+                    var index = i;
+                    var item = _matches[i];
+                    <button class="palette-item @(index == _active ? "active" : null)"
+                            @onclick="() => RunAsync(item)">
+                        <span class="glyph">@item.Glyph</span>
+                        <span class="label">@item.Label</span>
+                        @if (!string.IsNullOrEmpty(item.Hint))
+                        {
+                            <span class="hint">@item.Hint</span>
+                        }
+                    </button>
+                }
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private string _query = string.Empty;
+    private int _active;
+    private List<PaletteItem> _matches = [];
+
+    /// <summary>One row: an icon, a label, an optional hint, and what to do when chosen.</summary>
+    public sealed record PaletteItem(string Glyph, string Label, string? Hint, Func<Task> Run)
+    {
+        public string SearchText => $"{Label} {Hint}".ToLowerInvariant();
+    }
+
+    [Parameter, EditorRequired]
+    public required IReadOnlyList<PaletteItem> Items { get; set; }
+
+    [Parameter]
+    public string Placeholder { get; set; } = "Search";
+
+    [Parameter]
+    public string EmptyText { get; set; } = "No matches";
+
+    [Parameter]
+    public string InputId { get; set; } = "palette-input";
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    /// <summary>Called on every keystroke, so the caller can search asynchronously.</summary>
+    [Parameter]
+    public EventCallback<string> OnQuery { get; set; }
+
+    protected override void OnParametersSet() => Filter();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await Js.InvokeVoidAsync("syncly.focusElement", InputId, true);
+    }
+
+    private async Task OnQueryChanged(ChangeEventArgs args)
+    {
+        _query = args.Value?.ToString() ?? string.Empty;
+        _active = 0;
+        Filter();
+
+        if (OnQuery.HasDelegate)
+            await OnQuery.InvokeAsync(_query);
+    }
+
+    private void Filter()
+    {
+        var terms = _query.Trim().ToLowerInvariant();
+        _matches = terms.Length == 0
+            ? Items.ToList()
+            : Items.Where(i => i.SearchText.Contains(terms, StringComparison.Ordinal)).ToList();
+
+        _active = Math.Clamp(_active, 0, Math.Max(_matches.Count - 1, 0));
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs args)
+    {
+        switch (args.Key)
+        {
+            case "ArrowDown":
+                _active = _matches.Count == 0 ? 0 : (_active + 1) % _matches.Count;
+                break;
+
+            case "ArrowUp":
+                _active = _matches.Count == 0 ? 0 : (_active - 1 + _matches.Count) % _matches.Count;
+                break;
+
+            case "Enter" when _active < _matches.Count:
+                await RunAsync(_matches[_active]);
+                break;
+
+            case "Escape":
+                await Close();
+                break;
+        }
+    }
+
+    private async Task RunAsync(PaletteItem item)
+    {
+        await Close();
+        await item.Run();
+    }
+
+    private Task Close() => OnClose.InvokeAsync();
+}

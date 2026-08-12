@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:b="clr-namespace:Microsoft.AspNetCore.Components.WebView.Maui;assembly=Microsoft.AspNetCore.Components.WebView.Maui"
+             xmlns:ui="clr-namespace:Syncly.UI;assembly=Syncly.UI"
+             x:Class="Syncly.Mobile.MainPage"
+             BackgroundColor="#08080A">
+
+    <b:BlazorWebView HostPage="wwwroot/index.html">
+        <b:BlazorWebView.RootComponents>
+            <b:RootComponent Selector="#app" ComponentType="{x:Type ui:App}" />
+        </b:BlazorWebView.RootComponents>
+    </b:BlazorWebView>
+
+</ContentPage>

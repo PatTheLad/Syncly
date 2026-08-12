@@ -1,128 +1,111 @@
 # Syncly
 
-Serverless note sync for **Android**, **Linux**, and **Windows**.
-
-Discovery finds nearby Syncly apps. Cryptographic pairing authenticates devices. The sync engine is transport-independent (LAN today, Wi-Fi Direct next).
+A block-based notes app for **Linux**, **Windows**, and **Android** that syncs directly between your
+own devices. No account, no server, no cloud: two devices on the same network find each other, prove
+who they are with a 6-digit code, and merge their edits character by character.
 
 ```
-Discovery → Connect → Exchange keys → Authenticate → Encrypted sync
+Discover → Pair (6 digits) → Encrypted session → Anti-entropy sync → Live streaming
 ```
 
-## Stack
+## What it is
 
-| Layer | Tech |
-|-------|------|
-| UI | Shared Blazor (`Syncly.UI`) |
-| Linux host | Photino.Blazor |
-| Android / Windows host | .NET MAUI Blazor Hybrid (`Syncly.App.Maui`) |
-| Core | C# / .NET 10 — identity, SQLite, crypto, sync protocol |
-| Transport v1 | LAN UDP discovery + TCP framed messages |
-| Transport later | Wi-Fi Direct stubs per platform |
+Pages are trees of blocks — paragraphs, headings, bullets, to-dos, quotes, code, dividers — the way
+Obsidian and Anytype work. Pages nest, `[[wikilinks]]` connect them, and every page shows what links
+back to it.
 
-## Solution layout
+The interesting part is underneath. Syncly does not last-write-wins your notes. Every edit is a small
+operation in an append-only log, and the log is a CRDT, so two devices editing the same paragraph
+while offline both keep their words when they meet again.
+
+## How sync works
+
+Each device keeps a version vector: the highest operation sequence it has seen from every device.
+When two devices connect they trade vectors, and each sends only what the other is missing.
+
+- A device that was offline for months catches up in a single pass.
+- Convergence is transitive, so three devices reconcile with no device acting as a hub.
+- The connection stays open after the first pass, so edits appear as you type them.
+- Batches are chunked, Brotli-compressed, and acked before peer state advances, so a dropped
+  connection resumes instead of restarting.
+- Tombstones are collected only once every paired device has acknowledged past them.
+
+Pairing is ECDH over P-256 with the signature covering the whole handshake transcript, then AES-GCM
+with strictly increasing counters. The 6-digit code is derived from that transcript, so if the digits
+match on both screens there is no one in the middle.
+
+## Layout
 
 ```
 src/
-  Syncly.Contracts/           # Peer models, IPeerDiscovery, ISyncTransport, ISyncEngine
-  Syncly.Core/                # Identity, AES-GCM sessions, SQLite, sync engine
-  Syncly.UI/                  # Devices, Notes, Sync, Pairing, Settings
-  Syncly.Platform.Lan/        # Working LAN discovery + TCP
-  Syncly.Platform.Android/    # WifiP2pManager stub
-  Syncly.Platform.Windows/    # Wi-Fi Direct stub
-  Syncly.Platform.Linux/      # NetworkManager P2P stub
-  Syncly.App.Linux/           # Photino desktop app (primary on Linux)
-  Syncly.App.Maui/            # MAUI Blazor Hybrid (Android + Windows)
+  Syncly.Crdt/                 HLC, op log, RGA text, fractional-index block tree, version vectors
+  Syncly.Model/                Blocks, pages, peers, wikilinks
+  Syncly.Storage/              SQLite: ops, projections, snapshots, links, FTS5 search
+  Syncly.Security/             Device identity, handshake, secure channel
+  Syncly.Sync/                 Protocol, sessions, anti-entropy engine
+  Syncly.Transport.Lan/        UDP discovery + framed TCP
+  Syncly.Transport.WifiDirect/ Platform stubs
+  Syncly.App/                  Workspace commands, inline markup, composition root
+  Syncly.UI/                   Blazor components (shared by every host)
+  Syncly.Desktop/              Photino host — Linux and Windows
+  Syncly.Mobile/               MAUI host — Android (needs the MAUI workload, so it is not in the solution)
 tests/
-  Syncly.Core.Tests/
+  Syncly.Crdt.Tests/           Randomized convergence and fuzz
+  Syncly.Sync.Tests/           Multi-device partition simulation
+  Syncly.Storage.Tests/
 ```
 
-## Prerequisites
-
-- .NET 10 SDK
-- Linux GUI deps for Photino: WebKitGTK (e.g. `webkit2gtk-4.1` / distro equivalent)
-- For MAUI: `dotnet workload install maui` (Android SDK / Windows tooling as needed)
-
-## Run (Linux Photino)
+## Running it
 
 ```bash
 dotnet build Syncly.slnx
-dotnet run --project src/Syncly.App.Linux
+dotnet test  Syncly.slnx
+
+# Desktop (Linux/Windows)
+dotnet run --project src/Syncly.Desktop
+
+# Android
+dotnet build src/Syncly.Mobile -t:Run -f:net10.0-android
 ```
 
-Two instances on one machine (separate data dirs + ports):
+Two instances on one machine, to watch sync happen:
 
 ```bash
-SYNCLY_DATA_DIR=/tmp/syncly-a SYNCLY_PORT=45678 dotnet run --project src/Syncly.App.Linux
-SYNCLY_DATA_DIR=/tmp/syncly-b SYNCLY_PORT=45688 dotnet run --project src/Syncly.App.Linux -- --port 45688
+SYNCLY_DATA_DIR=.local/a SYNCLY_DEVICE_NAME="Peer A" SYNCLY_PORT=45678 dotnet run --project src/Syncly.Desktop &
+SYNCLY_DATA_DIR=.local/b SYNCLY_DEVICE_NAME="Peer B" SYNCLY_PORT=45688 dotnet run --project src/Syncly.Desktop
 ```
 
-1. Make both **Discoverable**
-2. Open **Pairing** on both — confirm fingerprints on first sync
-3. Create a note on one device, tap **Sync** on the other
+VS Code has the same thing as the **Syncly (both peers)** compound launch configuration.
 
-## MAUI (Android / Windows)
+| Variable | Meaning |
+|----------|---------|
+| `SYNCLY_DATA_DIR` | Where `syncly.db` lives (default: local app data) |
+| `SYNCLY_DEVICE_NAME` | Name other devices see (default: machine name) |
+| `SYNCLY_PORT` | TCP listen port (default: 45654; discovery beacons use 45655) |
 
-The MAUI project lives at [`src/Syncly.App.Maui`](src/Syncly.App.Maui) but is **not** in the default solution (so Linux CI/builds work without the MAUI workload).
+## Editing
 
-```bash
-dotnet workload install maui
-dotnet sln Syncly.slnx add src/Syncly.App.Maui/Syncly.App.Maui.csproj
-dotnet build src/Syncly.App.Maui/Syncly.App.Maui.csproj -f net10.0-android
-# or: -f net10.0-windows10.0.19041.0
-```
+| Key | Does |
+|-----|------|
+| `Ctrl`+`K` | Command palette: jump to a page, new page, sync now |
+| `Ctrl`+`E` | Reading mode — pages open read-only until you ask to edit |
+| `Ctrl`+`N` / `Ctrl`+`S` | New page / sync now |
+| `/` | Block menu on an empty block |
+| `# `, `- `, `1. `, `[] `, `> `, `--- ` | Turn the block into that type as you type |
+| `Enter` / `Backspace` | Split a block / merge it into the one above |
+| `Tab` / `Shift`+`Tab` | Indent / outdent |
+| `Alt`+`↑` / `Alt`+`↓` | Move a block |
+| `Ctrl`+`B` / `Ctrl`+`I` / `Ctrl`+`U` | Bold, italic, underline |
 
-`MauiProgram` registers the same Core + LAN services as the Photino host. Android permissions for nearby Wi-Fi are declared for a future WifiP2p implementation.
+Marks are stored in the text itself (`**bold**`, `__underline__`), so two people formatting
+overlapping words merge as text instead of fighting over a range.
 
-## Tests
+## Upgrading from v1
 
-```bash
-dotnet test tests/Syncly.Core.Tests
-```
+The first launch after the rewrite reads the old `notes` table, turns each note into a page whose
+body lines become blocks, and leaves the old table untouched as a backup.
 
-Covers identity persistence, encrypted handshake, and note sync over an in-memory transport.
+## Not in this pass
 
-## Architecture
-
-```
-Blazor UI
-    │
-Syncly.Core (identity · trust · SQLite · sync protocol)
-    │
-ISyncTransport / IPeerDiscovery
-    ├── LanTcpTransport + LanPeerDiscovery   ← v1
-    ├── AndroidWifiDirect*                   ← stub
-    ├── WindowsWifiDirect*                   ← stub
-    └── LinuxWifiDirect*                     ← stub
-```
-
-### Protocol (v1)
-
-1. `Hello` — device id, name, ECDSA P-256 public key  
-2. Trust check / interactive pairing (fingerprint confirm)  
-3. ECDH ephemeral key offers (signed) → HKDF → AES-GCM session  
-4. `Manifest` → `Need` → `Object` → `Done` (last-write-wins)
-
-Discovery alone never grants trust.
-
-### Service advertisement
-
-UDP broadcast JSON on port `45679`:
-
-`Service=Syncly`, device id, display name, TCP port, protocol version.
-
-## Wi-Fi Direct next steps
-
-| Platform | Implementation hook |
-|----------|---------------------|
-| Android | [`AndroidWifiDirectDiscovery`](src/Syncly.Platform.Android/AndroidWifiDirectDiscovery.cs) → `WifiP2pManager` DNS-SD |
-| Windows | [`WindowsWifiDirectDiscovery`](src/Syncly.Platform.Windows/WindowsWifiDirectDiscovery.cs) → current WinRT Wi-Fi Direct APIs |
-| Linux | [`LinuxWifiDirectDiscovery`](src/Syncly.Platform.Linux/LinuxWifiDirectDiscovery.cs) → NetworkManager D-Bus |
-
-After a P2P link is up, reuse the same framed TCP + Core sync path.
-
-## Out of scope (this base)
-
-- Real Wi-Fi Direct connect
-- CRDTs
-- Internet P2P / QUIC
-- File attachments / chunked blobs beyond note text
+Graph view, sync over the internet, real Wi-Fi Direct connection setup, encryption at rest, and file
+attachments.

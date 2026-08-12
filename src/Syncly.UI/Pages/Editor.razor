@@ -1,0 +1,733 @@
+@page "/"
+@page "/page/{PageId}"
+@namespace Syncly.UI.Pages
+@implements IBlockHost
+@implements IAsyncDisposable
+@inject EditorState State
+@inject SynclyApp App
+@inject IJSRuntime Js
+
+<div class="workspace">
+    <div class="topbar">
+        <div class="crumbs">
+            @if (State.CanGoBack)
+            {
+                <button title="Back" @onclick="State.Back">←</button>
+            }
+
+            @foreach (var crumb in Breadcrumbs())
+            {
+                <button @onclick="() => State.Open(crumb.Id)">@crumb.DisplayTitle</button>
+                <span class="crumb-sep">/</span>
+            }
+
+            <span class="crumb-current">@(_page?.DisplayTitle ?? "Syncly")</span>
+        </div>
+
+        @if (_page is not null)
+        {
+            <div class="topbar-actions">
+                <span class="chip muted">@_saveHint</span>
+
+                @if (State.ReadingMode)
+                {
+                    <button class="chip primary" title="Ctrl+E" @onclick="() => State.SetReadingMode(false)">Edit</button>
+                }
+                else
+                {
+                    <button class="chip" title="Ctrl+E" @onclick="StopEditingAsync">Done</button>
+                }
+
+                <button class="chip" title="New sub-page" @onclick="() => NewSubPageAsync()">Sub-page</button>
+                <button class="chip danger" @onclick="DeletePageAsync">Delete</button>
+            </div>
+        }
+    </div>
+
+    <div class="editor-scroll">
+        <div class="editor">
+            @if (_page is null)
+            {
+                <div class="empty-state">
+                    <h2>Nothing open</h2>
+                    <p>Create a page to start writing. Everything you write syncs to your other devices.</p>
+                    <button class="chip primary" @onclick="() => CreateFirstPageAsync()">New page</button>
+                </div>
+            }
+            else
+            {
+                <div class="editor-inner">
+                    @if (State.ReadingMode)
+                    {
+                        <h1 class="page-title">@_page.DisplayTitle</h1>
+                    }
+                    else
+                    {
+                        <input class="page-title"
+                               placeholder="Untitled"
+                               value="@_titleDraft"
+                               @oninput="OnTitleInput"
+                               @onblur="FlushAsync" />
+                    }
+
+                    <div class="page-meta">
+                        @_snapshot.Blocks.Count block(s) · updated @_snapshot.UpdatedAt.ToLocalTime().ToString("g")
+                    </div>
+
+                    @for (var i = 0; i < _snapshot.Blocks.Count; i++)
+                    {
+                        var block = _snapshot.Blocks[i];
+                        <BlockView Block="block" Index="i" Host="this" @key="block.Id" />
+                    }
+
+                    @if (!State.ReadingMode)
+                    {
+                        <button class="chip muted" @onclick="AppendBlockAsync">+ Add block</button>
+                    }
+                </div>
+            }
+        </div>
+
+        @if (_page is not null)
+        {
+            <aside class="panel">
+                <div class="panel-section">
+                    <h3>Outline</h3>
+                    @if (Outline().Count == 0)
+                    {
+                        <div class="panel-empty">No headings yet.</div>
+                    }
+                    else
+                    {
+                        @foreach (var heading in Outline())
+                        {
+                            <button class="outline-item level-@((int)heading.Kind)"
+                                    @key="heading.Id"
+                                    @onclick="() => FocusBlockAsync(heading.Id, -1)">
+                                @heading.Text
+                            </button>
+                        }
+                    }
+                </div>
+
+                <div class="panel-section">
+                    <h3>Backlinks</h3>
+                    @if (_backlinks.Count == 0)
+                    {
+                        <div class="panel-empty">
+                            Nothing links here yet. Type <code>[[@_page.DisplayTitle]]</code> on another page.
+                        </div>
+                    }
+                    else
+                    {
+                        @foreach (var link in _backlinks)
+                        {
+                            <button class="backlink" @key="link.BlockId" @onclick="() => State.Open(link.ObjectId)">
+                                <strong>@link.Title</strong>
+                                <span>@link.Text</span>
+                            </button>
+                        }
+                    }
+                </div>
+            </aside>
+        }
+    </div>
+</div>
+
+@if (_link is { Options.Count: > 0 } picker)
+{
+    <LinkPicker Options="picker.Options"
+                Active="picker.Active"
+                Left="picker.Left"
+                Top="picker.Top"
+                OnPick="AcceptLinkAsync" />
+}
+
+@if (_slashBlockId is not null)
+{
+    <Palette Items="BlockTypeItems()"
+             Placeholder="Turn into…"
+             InputId="slash-menu"
+             EmptyText="No block type matches"
+             OnClose="CloseSlashAsync" />
+}
+
+@code {
+    private static readonly TimeSpan SaveDelay = TimeSpan.FromMilliseconds(350);
+
+    private readonly Dictionary<string, string> _pendingText = new(StringComparer.Ordinal);
+    private ObjectSnapshot _snapshot = new() { Id = string.Empty };
+    private List<Backlink> _backlinks = [];
+    private PageRef? _page;
+    private Timer? _saveTimer;
+    private string? _titleDraft;
+    private string? _pendingTitle;
+    private string? _slashBlockId;
+    private string _saveHint = "Saved";
+    private (string BlockId, int Caret)? _focusRequest;
+    private string? _loadedPageId;
+
+    [Parameter]
+    public string? PageId { get; set; }
+
+    public bool Reading => State.ReadingMode;
+
+    protected override void OnInitialized()
+    {
+        State.Changed += Refresh;
+        State.Workspace.Changed += Refresh;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (PageId is { Length: > 0 })
+            State.Open(PageId);
+
+        await SyncFromStateAsync();
+    }
+
+    private void Refresh() => InvokeAsync(async () =>
+    {
+        await SyncFromStateAsync();
+        StateHasChanged();
+    });
+
+    private async Task SyncFromStateAsync()
+    {
+        var pageId = State.CurrentPageId ?? State.Workspace.Pages.FirstOrDefault()?.Id;
+        if (pageId is null)
+        {
+            _page = null;
+            return;
+        }
+
+        if (State.CurrentPageId != pageId)
+            State.Open(pageId);
+
+        _page = State.Workspace.Page(pageId);
+        _snapshot = State.Workspace.Open(pageId);
+
+        if (_loadedPageId != pageId)
+        {
+            _loadedPageId = pageId;
+            _titleDraft = _snapshot.Title;
+            _backlinks = await State.Workspace.BacklinksAsync(pageId);
+        }
+        else if (_pendingTitle is null)
+        {
+            _titleDraft = _snapshot.Title;
+        }
+
+        if (State.FocusBlockId is { } requested)
+        {
+            _focusRequest = (requested, State.FocusCaret);
+            State.ClearFocusRequest();
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusRequest is { } request)
+        {
+            _focusRequest = null;
+            await Js.InvokeVoidAsync("syncly.focusBlock", $"blk-{request.BlockId}", request.Caret);
+        }
+    }
+
+    // ------------------------------------------------------------ block host
+
+    public async Task TextChangedAsync(string blockId, string text, int caret)
+    {
+        if (ShortcutFor(blockId, text) is { } shortcut)
+        {
+            await ApplyShortcutAsync(blockId, text, shortcut);
+            return;
+        }
+
+        _pendingText[blockId] = text;
+        Touch();
+        await UpdateLinkPickerAsync(blockId, text, caret);
+    }
+
+    public async Task CommitTextAsync(string blockId, string text)
+    {
+        _pendingText[blockId] = text;
+        await FlushAsync();
+    }
+
+    public async Task BlurAsync(string blockId, string text)
+    {
+        _pendingText[blockId] = text;
+        await CloseLinkPickerAsync();
+        await FlushAsync();
+    }
+
+    public Task FocusAsync(string blockId) => Task.CompletedTask;
+
+    public async Task SplitAsync(string blockId, string text, int caret)
+    {
+        _pendingText[blockId] = text;
+        await FlushAsync();
+
+        var newId = await State.Workspace.SplitBlockAsync(PageIdOrThrow, blockId, caret);
+        await FocusBlockAsync(newId, 0);
+    }
+
+    public async Task MergeBackwardAsync(string blockId)
+    {
+        await FlushAsync();
+
+        if (await State.Workspace.MergeBackwardAsync(PageIdOrThrow, blockId) is { } target)
+            await FocusBlockAsync(target.BlockId, target.Caret);
+    }
+
+    public async Task MergeForwardAsync(string blockId)
+    {
+        await FlushAsync();
+
+        var tree = State.Workspace.Tree(PageIdOrThrow);
+        var block = tree.Find(blockId);
+        if (block is null || tree.Next(block) is not { } next)
+            return;
+
+        var caret = block.Text.Length;
+        if (await State.Workspace.MergeBackwardAsync(PageIdOrThrow, next.Id) is not null)
+            await FocusBlockAsync(blockId, caret);
+    }
+
+    public async Task IndentAsync(string blockId, bool indent)
+    {
+        var caret = await CaretAsync(blockId);
+        await FlushAsync();
+
+        if (indent)
+            await State.Workspace.IndentAsync(PageIdOrThrow, blockId);
+        else
+            await State.Workspace.OutdentAsync(PageIdOrThrow, blockId);
+
+        await FocusBlockAsync(blockId, caret);
+    }
+
+    public async Task MoveAsync(string blockId, bool up)
+    {
+        var caret = await CaretAsync(blockId);
+        await FlushAsync();
+        await State.Workspace.MoveBlockAsync(PageIdOrThrow, blockId, up);
+        await FocusBlockAsync(blockId, caret);
+    }
+
+    public async Task StepAsync(string blockId, bool down, int caret)
+    {
+        var tree = State.Workspace.Tree(PageIdOrThrow);
+        var block = tree.Find(blockId);
+        if (block is null)
+            return;
+
+        var target = down ? tree.Next(block) : tree.Previous(block);
+        while (target is not null && !target.Kind.IsText())
+            target = down ? tree.Next(target) : tree.Previous(target);
+
+        if (target is not null)
+            await FocusBlockAsync(target.Id, down ? 0 : -1);
+    }
+
+    public async Task MarkAsync(string blockId, string shortcut, string text, int start, int end)
+    {
+        var marker = shortcut switch
+        {
+            "b" => InlineMarkup.Bold,
+            "i" => InlineMarkup.Italic,
+            "u" => InlineMarkup.Underline,
+            _ => null,
+        };
+
+        if (marker is null)
+            return;
+
+        var (updated, from, _) = InlineMarkup.ToggleMark(text, start, end, marker);
+        await State.Workspace.SetBlockTextAsync(PageIdOrThrow, blockId, updated);
+        await Js.InvokeVoidAsync("syncly.setText", $"blk-{blockId}", updated, from);
+    }
+
+    public async Task SlashAsync(string blockId)
+    {
+        await FlushAsync();
+        _slashBlockId = blockId;
+        StateHasChanged();
+    }
+
+    public async Task MenuKeyAsync(string key)
+    {
+        if (_link is not { Options.Count: > 0 } link)
+            return;
+
+        switch (key)
+        {
+            case "ArrowDown":
+                link.Active = (link.Active + 1) % link.Options.Count;
+                break;
+
+            case "ArrowUp":
+                link.Active = (link.Active - 1 + link.Options.Count) % link.Options.Count;
+                break;
+
+            case "Enter" or "Tab":
+                await AcceptLinkAsync(link.Options[link.Active]);
+                return;
+
+            case "Escape":
+                await CloseLinkPickerAsync();
+                return;
+        }
+
+        StateHasChanged();
+    }
+
+    public async Task EscapeAsync()
+    {
+        await CloseLinkPickerAsync();
+        await CloseSlashAsync();
+    }
+
+    public Task ToggleTodoAsync(string blockId) =>
+        State.Workspace.ToggleTodoAsync(PageIdOrThrow, blockId);
+
+    public Task EditAtAsync(string blockId) => FocusBlockAsync(blockId, -1);
+
+    public string? ResolveLink(string title) => State.Workspace.ResolvePageByTitle(title);
+
+    // ---------------------------------------------------------------- saving
+
+    private void Touch()
+    {
+        _saveHint = "Saving…";
+        _saveTimer ??= new Timer(_ => _ = InvokeAsync(FlushAsync), null, Timeout.Infinite, Timeout.Infinite);
+        _saveTimer.Change(SaveDelay, Timeout.InfiniteTimeSpan);
+    }
+
+    /// <summary>
+    /// Writes the buffered keystrokes into the CRDT. Everything structural flushes first, so ops
+    /// are always authored against the text the user actually sees.
+    /// </summary>
+    private async Task FlushAsync()
+    {
+        if (_page is null)
+            return;
+
+        var pageId = _page.Id;
+
+        if (_pendingTitle is { } title)
+        {
+            _pendingTitle = null;
+            await State.Workspace.RenamePageAsync(pageId, title);
+        }
+
+        if (_pendingText.Count > 0)
+        {
+            var edits = _pendingText.ToList();
+            _pendingText.Clear();
+
+            foreach (var (blockId, text) in edits)
+                await State.Workspace.SetBlockTextAsync(pageId, blockId, text);
+        }
+
+        _saveHint = "Saved";
+        StateHasChanged();
+    }
+
+    private void OnTitleInput(ChangeEventArgs args)
+    {
+        _titleDraft = args.Value?.ToString() ?? string.Empty;
+        _pendingTitle = _titleDraft;
+        Touch();
+    }
+
+    // ------------------------------------------------------------ wikilinks
+
+    /// <summary>
+    /// State of the <c>[[</c> autocomplete: where the link starts, what has been typed since, and
+    /// where to draw the list. The block keeps keyboard focus, so typing keeps filtering.
+    /// </summary>
+    private sealed record LinkPicker(string BlockId, int Start, int Caret, double Left, double Top)
+    {
+        public int Active { get; set; }
+
+        public List<Components.LinkPicker.Option> Options { get; set; } = [];
+    }
+
+    private LinkPicker? _link;
+
+    /// <summary>Finds an unclosed <c>[[</c> to the left of the caret.</summary>
+    private static (int Start, string Query)? OpenWikilink(string text, int caret)
+    {
+        caret = Math.Clamp(caret, 0, text.Length);
+        var start = text.LastIndexOf("[[", Math.Max(caret - 1, 0), StringComparison.Ordinal);
+        if (start < 0)
+            return null;
+
+        var query = text[(start + 2)..caret];
+        return query.Contains(']') || query.Contains('\n') ? null : (start, query);
+    }
+
+    private async Task UpdateLinkPickerAsync(string blockId, string text, int caret)
+    {
+        if (OpenWikilink(text, caret) is not { } open)
+        {
+            await CloseLinkPickerAsync();
+            return;
+        }
+
+        if (_link is null || _link.BlockId != blockId)
+        {
+            var anchor = await Js.InvokeAsync<Anchor?>("syncly.anchorOf", $"blk-{blockId}");
+            _link = new LinkPicker(blockId, open.Start, caret, anchor?.Left ?? 40, anchor?.Top ?? 200);
+            await Js.InvokeVoidAsync("syncly.setMenuOpen", true);
+        }
+        else
+        {
+            _link = _link with { Start = open.Start, Caret = caret };
+        }
+
+        _link.Options = Suggestions(open.Query);
+        _link.Active = 0;
+        StateHasChanged();
+    }
+
+    private List<Components.LinkPicker.Option> Suggestions(string query)
+    {
+        var trimmed = query.Trim();
+
+        var matches = State.Workspace.Pages
+            .Where(p => p.Id != _page?.Id)
+            .Where(p => trimmed.Length == 0
+                        || p.DisplayTitle.Contains(trimmed, StringComparison.OrdinalIgnoreCase))
+            .Take(6)
+            .Select(p => new Components.LinkPicker.Option(p.DisplayTitle, false))
+            .ToList();
+
+        var exact = matches.Any(m => string.Equals(m.Title, trimmed, StringComparison.OrdinalIgnoreCase));
+        if (trimmed.Length > 0 && !exact)
+            matches.Add(new Components.LinkPicker.Option(trimmed, true));
+
+        return matches;
+    }
+
+    private async Task AcceptLinkAsync(Components.LinkPicker.Option option)
+    {
+        if (_link is not { } link)
+            return;
+
+        var blockId = link.BlockId;
+        var text = _pendingText.TryGetValue(blockId, out var buffered)
+            ? buffered
+            : State.Workspace.Tree(PageIdOrThrow).Find(blockId)?.Text ?? string.Empty;
+
+        var caret = Math.Clamp(link.Caret, link.Start, text.Length);
+        var updated = $"{text[..link.Start]}[[{option.Title}]]{text[caret..]}";
+
+        await CloseLinkPickerAsync();
+
+        if (option.Create)
+            await State.Workspace.EnsurePageByTitleAsync(option.Title);
+
+        _pendingText[blockId] = updated;
+        await FlushAsync();
+        await Js.InvokeVoidAsync(
+            "syncly.setText", $"blk-{blockId}", updated, link.Start + option.Title.Length + 4);
+    }
+
+    private async Task CloseLinkPickerAsync()
+    {
+        if (_link is null)
+            return;
+
+        _link = null;
+        await Js.InvokeVoidAsync("syncly.setMenuOpen", false);
+        StateHasChanged();
+    }
+
+    private sealed record Anchor(double Left, double Top);
+
+    // ------------------------------------------------------------- shortcuts
+
+    private (BlockKind Kind, int Consumed)? ShortcutFor(string blockId, string text)
+    {
+        if (State.Workspace.Tree(PageIdOrThrow).Find(blockId)?.Kind != BlockKind.Paragraph)
+            return null;
+
+        return InlineMarkup.MatchShortcut(text);
+    }
+
+    private async Task ApplyShortcutAsync(string blockId, string text, (BlockKind Kind, int Consumed) shortcut)
+    {
+        _pendingText.Remove(blockId);
+        var rest = text[shortcut.Consumed..];
+
+        await State.Workspace.SetBlockKindAsync(PageIdOrThrow, blockId, shortcut.Kind);
+        await State.Workspace.SetBlockTextAsync(PageIdOrThrow, blockId, rest);
+        await Js.InvokeVoidAsync("syncly.setText", $"blk-{blockId}", rest, 0);
+
+        if (shortcut.Kind == BlockKind.Divider)
+        {
+            var next = await State.Workspace.SplitBlockAsync(PageIdOrThrow, blockId, 0);
+            await FocusBlockAsync(next, 0);
+        }
+    }
+
+    private IReadOnlyList<Palette.PaletteItem> BlockTypeItems()
+    {
+        var blockId = _slashBlockId;
+        if (blockId is null)
+            return [];
+
+        BlockKind[] kinds =
+        [
+            BlockKind.Paragraph, BlockKind.Heading1, BlockKind.Heading2, BlockKind.Heading3,
+            BlockKind.Bullet, BlockKind.Numbered, BlockKind.Todo, BlockKind.Quote,
+            BlockKind.Code, BlockKind.Divider,
+        ];
+
+        return kinds.Select(kind => new Palette.PaletteItem(
+            Glyph(kind),
+            kind.Label(),
+            null,
+            () => TurnIntoAsync(blockId, kind))).ToList();
+    }
+
+    private static string Glyph(BlockKind kind) => kind switch
+    {
+        BlockKind.Heading1 => "H1",
+        BlockKind.Heading2 => "H2",
+        BlockKind.Heading3 => "H3",
+        BlockKind.Bullet => "•",
+        BlockKind.Numbered => "1.",
+        BlockKind.Todo => "☐",
+        BlockKind.Quote => "❝",
+        BlockKind.Code => "{}",
+        BlockKind.Divider => "—",
+        _ => "¶",
+    };
+
+    private async Task TurnIntoAsync(string blockId, BlockKind kind)
+    {
+        // The "/" keystroke reaches the buffer after the menu opens, so the buffer is the
+        // freshest text here.
+        var text = _pendingText.TryGetValue(blockId, out var buffered)
+            ? buffered
+            : State.Workspace.Tree(PageIdOrThrow).Find(blockId)?.Text ?? string.Empty;
+
+        _pendingText.Remove(blockId);
+        var cleaned = text.EndsWith('/') ? text[..^1] : text;
+
+        await State.Workspace.SetBlockKindAsync(PageIdOrThrow, blockId, kind);
+        await State.Workspace.SetBlockTextAsync(PageIdOrThrow, blockId, cleaned);
+        await Js.InvokeVoidAsync("syncly.setText", $"blk-{blockId}", cleaned, cleaned.Length);
+
+        _slashBlockId = null;
+
+        if (kind == BlockKind.Divider)
+        {
+            var next = await State.Workspace.SplitBlockAsync(PageIdOrThrow, blockId, cleaned.Length);
+            await FocusBlockAsync(next, 0);
+            return;
+        }
+
+        await FocusBlockAsync(blockId, -1);
+    }
+
+    private Task CloseSlashAsync()
+    {
+        _slashBlockId = null;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    // ----------------------------------------------------------------- pages
+
+    private string PageIdOrThrow =>
+        _page?.Id ?? throw new InvalidOperationException("No page is open.");
+
+    private IReadOnlyList<PageRef> Breadcrumbs()
+    {
+        var crumbs = new List<PageRef>();
+        var cursor = _page?.ParentId;
+
+        while (cursor is not null && State.Workspace.Page(cursor) is { } parent)
+        {
+            crumbs.Insert(0, parent);
+            cursor = parent.ParentId;
+        }
+
+        return crumbs;
+    }
+
+    private IReadOnlyList<BlockNode> Outline() =>
+        _snapshot.Flatten().Where(b => b.Kind.IsHeading() && b.Text.Length > 0).ToList();
+
+    private async Task CreateFirstPageAsync()
+    {
+        var pageId = await State.Workspace.CreatePageAsync(null, "Welcome");
+        State.Open(pageId);
+        State.SetReadingMode(false);
+    }
+
+    private async Task NewSubPageAsync()
+    {
+        var pageId = await State.Workspace.CreatePageAsync(PageIdOrThrow);
+        State.Open(pageId);
+        State.SetReadingMode(false);
+    }
+
+    private async Task DeletePageAsync()
+    {
+        var pageId = PageIdOrThrow;
+        await State.Workspace.DeletePageAsync(pageId);
+
+        _loadedPageId = null;
+        _page = null;
+        State.Back();
+        await SyncFromStateAsync();
+    }
+
+    private async Task AppendBlockAsync()
+    {
+        await FlushAsync();
+        var blockId = await State.Workspace.AppendBlockAsync(PageIdOrThrow);
+        await FocusBlockAsync(blockId, 0);
+    }
+
+    private async Task StopEditingAsync()
+    {
+        await FlushAsync();
+        State.SetReadingMode(true);
+    }
+
+    private async Task FocusBlockAsync(string blockId, int caret)
+    {
+        State.SetReadingMode(false);
+        _focusRequest = (blockId, caret);
+        StateHasChanged();
+        await Task.Yield();
+    }
+
+    private async Task<int> CaretAsync(string blockId)
+    {
+        try
+        {
+            return await Js.InvokeAsync<int>("syncly.getCaret", $"blk-{blockId}");
+        }
+        catch (JSException)
+        {
+            return 0;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        State.Changed -= Refresh;
+        State.Workspace.Changed -= Refresh;
+
+        if (_saveTimer is not null)
+            await _saveTimer.DisposeAsync();
+    }
+}

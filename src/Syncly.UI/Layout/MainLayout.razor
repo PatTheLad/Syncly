@@ -1,40 +1,258 @@
 @namespace Syncly.UI.Layout
 @inherits LayoutComponentBase
-@inject Syncly.UI.Services.AppState State
 @implements IDisposable
+@inject EditorState State
+@inject SynclyApp App
+@inject NavigationManager Nav
+@inject IJSRuntime Js
 
-<div class="shell">
-    @if (State.Pairing.PendingRemote is { } pending)
-    {
-        <div class="trust-banner">
-            <div>
-                Trust <strong>@pending.DisplayName</strong>?
-                <span class="fingerprint">@pending.PublicKeyFingerprint</span>
-            </div>
-            <div class="row" style="gap:0.4rem">
-                <button @onclick="() => State.Pairing.Respond(true)">Trust</button>
-                <button class="danger" @onclick="() => State.Pairing.Respond(false)">Reject</button>
-            </div>
-        </div>
-    }
+<div class="shell @(State.SidebarOpen ? null : "no-sidebar")">
+    <nav class="rail">
+        <div class="rail-brand" title="@App.Identity.DisplayName">S</div>
 
-    <nav class="rail" aria-label="Primary">
-        <NavLink class="rail-brand" href="" Match="NavLinkMatch.All" title="Syncly">S</NavLink>
-        <NavLink href="" Match="NavLinkMatch.All" title="Notes">✎</NavLink>
-        <NavLink href="devices" title="Devices">◉</NavLink>
-        <NavLink href="sync" title="Sync">↻</NavLink>
-        <NavLink href="pairing" title="Pairing">☍</NavLink>
+        <button class="rail-item @(IsAt("") ? "active" : null)" title="Notes (Ctrl+K to jump)"
+                @onclick='() => Go("")'>✎</button>
+        <button class="rail-item @(IsAt("devices") ? "active" : null)" title="Devices"
+                @onclick='() => Go("devices")'>⇄</button>
+        <button class="rail-item @(IsAt("settings") ? "active" : null)" title="Settings"
+                @onclick='() => Go("settings")'>⚙</button>
+
         <div class="rail-spacer"></div>
-        <NavLink href="settings" title="Settings">⚙</NavLink>
+
+        <div class="rail-dot @(IsLive ? "live" : null)" title="@SyncSummary"></div>
+        <button class="rail-item" title="Toggle sidebar" @onclick="State.ToggleSidebar">☰</button>
     </nav>
 
-    <div class="workspace">
-        @Body
-    </div>
+    <aside class="sidebar">
+        <div class="sidebar-head">
+            <span class="sidebar-title">Workspace</span>
+            <button class="chip" title="New page (Ctrl+N)" @onclick="() => NewPageAsync(null)">New</button>
+        </div>
+
+        <div class="sidebar-search">
+            <input placeholder="Search" value="@_query" @oninput="OnSearchAsync" />
+        </div>
+
+        @if (_hits is { Count: > 0 })
+        {
+            <div class="search-results">
+                @foreach (var hit in _hits)
+                {
+                    <button class="search-hit" @key="hit.ObjectId + hit.BlockId" @onclick="() => Open(hit.ObjectId)">
+                        <strong>@(string.IsNullOrWhiteSpace(hit.Title) ? "Untitled" : hit.Title)</strong>
+                        <span>@((MarkupString)hit.Snippet)</span>
+                    </button>
+                }
+            </div>
+        }
+        else if (_query.Length > 0)
+        {
+            <div class="tree-empty">Nothing matches “@_query”.</div>
+        }
+        else
+        {
+            <div class="tree">
+                @if (State.Workspace.Pages.Count == 0)
+                {
+                    <div class="tree-empty">No pages yet.</div>
+                }
+                else
+                {
+                    <PageTree Workspace="State.Workspace"
+                              SelectedId="State.CurrentPageId"
+                              OnSelect="Open"
+                              OnAddChild="NewPageAsync" />
+                }
+            </div>
+        }
+
+        <div class="sidebar-foot">
+            <div class="row">
+                <span class="status-dot @StatusClass"></span>
+                <span class="card-sub grow">@SyncSummary</span>
+                <button class="chip muted" title="Sync now (Ctrl+S)" @onclick="SyncNowAsync">↻</button>
+            </div>
+        </div>
+    </aside>
+
+    @Body
 </div>
 
+@if (App.Pairing.Pending is { } pending)
+{
+    <div class="banner">
+        <div>
+            <div class="who">@(pending.Inbound ? "Incoming from" : "Connecting to") @pending.DisplayName</div>
+            <div class="code">@pending.ComparisonCode</div>
+            <div class="who">Pair only if both screens show these digits.</div>
+        </div>
+        <div class="row">
+            <button class="chip primary" @onclick="App.Pairing.Approve">Pair</button>
+            <button class="chip danger" @onclick="App.Pairing.Reject">Ignore</button>
+        </div>
+    </div>
+}
+
+@if (State.PaletteOpen)
+{
+    <Palette Items="PaletteItems()"
+             Placeholder="Jump to a page or run a command"
+             InputId="command-palette"
+             OnClose="() => State.TogglePalette(false)" />
+}
+
 @code {
-    protected override void OnInitialized() => State.Changed += OnChanged;
-    private void OnChanged() => InvokeAsync(StateHasChanged);
-    public void Dispose() => State.Changed -= OnChanged;
+    private DotNetObjectReference<MainLayout>? _self;
+    private string _query = string.Empty;
+    private List<SearchHit>? _hits;
+
+    protected override void OnInitialized()
+    {
+        State.Changed += Refresh;
+        State.Workspace.Changed += Refresh;
+        App.Pairing.Changed += Refresh;
+        App.Sync.Changed += Refresh;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        _self = DotNetObjectReference.Create(this);
+        await Js.InvokeVoidAsync("syncly.attachShell", _self);
+        await State.Workspace.RefreshPagesAsync();
+    }
+
+    private void Refresh() => InvokeAsync(StateHasChanged);
+
+    private bool IsAt(string path) =>
+        Nav.ToBaseRelativePath(Nav.Uri).TrimEnd('/').Equals(path, StringComparison.OrdinalIgnoreCase);
+
+    private void Go(string path)
+    {
+        Nav.NavigateTo(path);
+        StateHasChanged();
+    }
+
+    private void Open(string pageId)
+    {
+        State.Open(pageId);
+        _query = string.Empty;
+        _hits = null;
+
+        if (!IsAt(""))
+            Nav.NavigateTo("");
+    }
+
+    private async Task NewPageAsync(string? parentId)
+    {
+        var pageId = await State.Workspace.CreatePageAsync(parentId);
+        Open(pageId);
+        State.SetReadingMode(false);
+    }
+
+    private async Task OnSearchAsync(ChangeEventArgs args)
+    {
+        _query = args.Value?.ToString() ?? string.Empty;
+        _hits = _query.Trim().Length == 0 ? null : await State.Workspace.SearchAsync(_query);
+    }
+
+    private Task SyncNowAsync() => App.Sync.SyncNowAsync();
+
+    private bool IsLive => App.Sync.Sessions.Any(s => s.Phase == SyncPhase.Live);
+
+    private string StatusClass => App.Sync.Sessions switch
+    {
+        var s when s.Any(x => x.Phase == SyncPhase.Live) => "live",
+        var s when s.Any(x => x.Phase == SyncPhase.Failed) => "failed",
+        var s when s.Count > 0 => "working",
+        _ => "",
+    };
+
+    private string SyncSummary
+    {
+        get
+        {
+            var sessions = App.Sync.Sessions;
+            var live = sessions.Count(s => s.Phase == SyncPhase.Live);
+            if (live > 0)
+                return live == 1 ? "Synced with 1 device" : $"Synced with {live} devices";
+
+            if (sessions.Count > 0)
+                return sessions[0].Detail ?? sessions[0].Phase.ToString();
+
+            var nearby = App.Sync.DiscoveredPeers.Count;
+            return nearby > 0 ? $"{nearby} device(s) nearby" : "No devices nearby";
+        }
+    }
+
+    private IReadOnlyList<Palette.PaletteItem> PaletteItems()
+    {
+        var items = new List<Palette.PaletteItem>
+        {
+            new("+", "New page", "Ctrl+N", () => NewPageAsync(null)),
+            new("↻", "Sync now", "Ctrl+S", SyncNowAsync),
+            new("👁", State.ReadingMode ? "Edit this page" : "Reading mode", "Ctrl+E", () =>
+            {
+                State.ToggleReadingMode();
+                return Task.CompletedTask;
+            }),
+            new("⇄", "Devices", null, () =>
+            {
+                Go("devices");
+                return Task.CompletedTask;
+            }),
+            new("⚙", "Settings", null, () =>
+            {
+                Go("settings");
+                return Task.CompletedTask;
+            }),
+        };
+
+        items.AddRange(State.Workspace.Pages.Select(page =>
+            new Palette.PaletteItem("◻", page.DisplayTitle, "Page", () =>
+            {
+                Open(page.Id);
+                return Task.CompletedTask;
+            })));
+
+        return items;
+    }
+
+    [JSInvokable]
+    public void OnPalette() => State.TogglePalette();
+
+    [JSInvokable]
+    public void OnToggleReading() => State.ToggleReadingMode();
+
+    [JSInvokable]
+    public Task OnNewPage() => NewPageAsync(null);
+
+    [JSInvokable]
+    public Task OnSyncNow() => SyncNowAsync();
+
+    [JSInvokable]
+    public void OnEscape() => State.TogglePalette(false);
+
+    [JSInvokable]
+    public async Task OnOpenLink(string title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            return;
+
+        var pageId = State.Workspace.ResolvePageByTitle(title)
+                     ?? await State.Workspace.EnsurePageByTitleAsync(title);
+
+        Open(pageId);
+    }
+
+    public void Dispose()
+    {
+        State.Changed -= Refresh;
+        State.Workspace.Changed -= Refresh;
+        App.Pairing.Changed -= Refresh;
+        App.Sync.Changed -= Refresh;
+        _self?.Dispose();
+    }
 }
