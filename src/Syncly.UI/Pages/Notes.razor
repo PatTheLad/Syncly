@@ -1,106 +1,456 @@
-@page "/notes"
+@page "/"
 @inject NotesService NotesApi
+@inject IJSRuntime Js
+@implements IAsyncDisposable
 
-<h1>Notes</h1>
-<p class="lede">Local notes stored in SQLite. Sync pushes and pulls missing objects between trusted peers.</p>
+<div class="workspace-fill">
+    <aside class="sidebar">
+        <div class="sidebar-head">
+            <div class="sidebar-title">
+                <span>Pages</span>
+                <button class="btn-icon" title="New page" @onclick="() => NewPageAsync(null)">+</button>
+            </div>
+            <input class="search" @bind="_query" @bind:event="oninput" @bind:after="OnSearchAsync" placeholder="Search pages…" />
+        </div>
+        <div class="note-list">
+            @if (_roots.Count == 0)
+            {
+                <p class="lede" style="padding:0.75rem;margin:0">No pages yet.</p>
+            }
+            else
+            {
+                @foreach (var node in _roots)
+                {
+                    @TreeNode(node)
+                }
+            }
+        </div>
+    </aside>
 
-<div class="panel">
-    <label>
-        Title
-        <input @bind="_title" placeholder="Untitled" />
-    </label>
-    <label>
-        Body
-        <textarea @bind="_body" placeholder="Write something…"></textarea>
-    </label>
-    <div class="row">
-        <button @onclick="SaveAsync" disabled="@_busy">@(_editingId is null ? "Create note" : "Save changes")</button>
-        @if (_editingId is not null)
+    <section class="editor-pane">
+        @if (_selected is null)
         {
-            <button class="secondary" @onclick="ClearEditor">Cancel</button>
-        }
-    </div>
-</div>
-
-<section class="panel">
-    @if (_notes.Count == 0)
-    {
-        <p class="lede">No notes yet.</p>
-    }
-    else
-    {
-        @foreach (var note in _notes)
-        {
-            <div class="note-item row" @onclick="() => Edit(note)">
+            <div class="empty-editor">
                 <div>
-                    <strong>@note.Title</strong>
-                    <div class="lede" style="margin:0">@note.UpdatedAt.LocalDateTime.ToString("g")</div>
+                    <h1>Pages</h1>
+                    <p>Nest pages under pages. Keep them read-only until you hit Edit.</p>
+                    <button @onclick="() => NewPageAsync(null)">New page</button>
                 </div>
-                <button class="danger" @onclick:stopPropagation="true" @onclick="() => DeleteAsync(note.Id)">Delete</button>
             </div>
         }
-    }
-</section>
+        else
+        {
+            <div class="editor-toolbar">
+                <div class="crumb">
+                    @foreach (var crumb in _breadcrumbs)
+                    {
+                        <button type="button" class="crumb-link" @onclick="() => SelectAsync(crumb.Id)">@crumb.Title</button>
+                        <span class="crumb-sep">/</span>
+                    }
+                    <span class="crumb-current">@_title</span>
+                </div>
+                <div class="actions">
+                    <span class="save-state @_saveClass">@_saveLabel</span>
+                    @if (_editing)
+                    {
+                        <div class="fmt-group">
+                            <button type="button" class="fmt" title="Bullet list" @onclick="InsertBullet">• List</button>
+                            <button type="button" class="fmt" title="Checkbox" @onclick="InsertCheckbox">☑ Task</button>
+                            <button type="button" class="fmt" title="Underline" @onclick="WrapUnderline"><span style="text-decoration:underline">U</span></button>
+                            <button type="button" class="fmt" title="Bold" @onclick="WrapBold"><strong>B</strong></button>
+                        </div>
+                        <button class="secondary" @onclick="DoneEditingAsync">Done</button>
+                    }
+                    else
+                    {
+                        <button @onclick="StartEditing">Edit</button>
+                    }
+                    <button class="secondary" title="New sub-page" @onclick="() => NewPageAsync(_selectedId)">+ Sub</button>
+                    <button class="danger" @onclick="DeleteSelectedAsync">Delete</button>
+                </div>
+            </div>
 
-@if (!string.IsNullOrEmpty(_error))
-{
-    <p style="color:var(--danger)">@_error</p>
-}
+            <div class="editor-body">
+                @if (_editing)
+                {
+                    <input class="editor-title"
+                           id="note-title"
+                           @bind="_title"
+                           @bind:event="oninput"
+                           @bind:after="QueueSaveAsync"
+                           placeholder="Untitled" />
+                    <div class="editor-meta">
+                        <span>Edited @Relative(_selected.UpdatedAt)</span>
+                        <span>@WordCount() words</span>
+                    </div>
+                    <textarea id="note-body"
+                              class="editor-content"
+                              @bind="_body"
+                              @bind:event="oninput"
+                              @bind:after="QueueSaveAsync"
+                              placeholder="Start writing… Use the toolbar for lists, tasks, and underline."></textarea>
+                }
+                else
+                {
+                    <h1 class="view-title">@_title</h1>
+                    <div class="editor-meta">
+                        <span>Edited @Relative(_selected.UpdatedAt)</span>
+                        <span>Created @_selected.CreatedAt.LocalDateTime.ToString("d")</span>
+                        <span>@WordCount() words</span>
+                    </div>
+                    <div class="view-content">
+                        @foreach (var block in NoteBlocks.Parse(_body))
+                        {
+                            @if (block is ParagraphBlock p)
+                            {
+                                <p>@((MarkupString)InlineHtml(p.Text))</p>
+                            }
+                            else if (block is BulletBlock b)
+                            {
+                                <ul>
+                                    @foreach (var item in b.Items)
+                                    {
+                                        <li>@((MarkupString)InlineHtml(item))</li>
+                                    }
+                                </ul>
+                            }
+                            else if (block is TaskBlock t)
+                            {
+                                <ul class="task-list">
+                                    @foreach (var item in t.Items)
+                                    {
+                                        <li class="task @(item.Done ? "done" : null)">
+                                            <label>
+                                                <input type="checkbox" checked="@item.Done" @onchange="() => ToggleTaskAsync(item.LineIndex)" />
+                                                <span>@((MarkupString)InlineHtml(item.Text))</span>
+                                            </label>
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        }
+                        @if (string.IsNullOrWhiteSpace(_body))
+                        {
+                            <p class="muted">Empty page — press Edit to write.</p>
+                        }
+                    </div>
+
+                    @if (ChildrenOf(_selectedId!).Count > 0)
+                    {
+                        <div class="child-pages">
+                            <h2>Sub-pages</h2>
+                            @foreach (var child in ChildrenOf(_selectedId!))
+                            {
+                                <button type="button" class="child-link" @onclick="() => SelectAsync(child.Id)">@child.Title</button>
+                            }
+                        </div>
+                    }
+                }
+            </div>
+        }
+    </section>
+</div>
 
 @code {
     private List<Note> _notes = new();
+    private List<TreeItem> _roots = new();
+    private string _query = "";
+    private string? _selectedId;
+    private Note? _selected;
     private string _title = "";
     private string _body = "";
-    private string? _editingId;
-    private bool _busy;
-    private string? _error;
+    private string _saveLabel = "";
+    private string _saveClass = "";
+    private CancellationTokenSource? _saveCts;
+    private bool _dirty;
+    private bool _editing;
+    private List<Note> _breadcrumbs = new();
+    private HashSet<string> _expanded = new(StringComparer.Ordinal);
 
-    protected override async Task OnInitializedAsync() => await ReloadAsync();
+    private sealed record TreeItem(Note Note, List<TreeItem> Children, int Depth);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadAsync();
+        if (_notes.Count > 0)
+            await SelectAsync(_notes.First(n => n.ParentId is null || _notes.All(p => p.Id != n.ParentId)).Id);
+    }
+
+    private RenderFragment TreeNode(TreeItem node) => __builder =>
+    {
+        var note = node.Note;
+        var hasChildren = node.Children.Count > 0;
+        var expanded = _expanded.Contains(note.Id) || !string.IsNullOrEmpty(_query);
+
+        <div class="tree-row" style="padding-left: @(0.55 + node.Depth * 0.85)rem">
+            @if (hasChildren)
+            {
+                <button type="button" class="tree-twist" @onclick="() => ToggleExpand(note.Id)">@(expanded ? "▾" : "▸")</button>
+            }
+            else
+            {
+                <span class="tree-twist spacer"></span>
+            }
+            <button type="button" class="note-row nest @(_selectedId == note.Id ? "active" : null)" @onclick="() => SelectAsync(note.Id)">
+                <span class="note-row-title">@note.Title</span>
+            </button>
+            <button type="button" class="tree-add" title="Add sub-page" @onclick="() => NewPageAsync(note.Id)">+</button>
+        </div>
+        @if (hasChildren && expanded)
+        {
+            foreach (var child in node.Children)
+            {
+                @TreeNode(child)
+            }
+        }
+    };
+
+    private void ToggleExpand(string id)
+    {
+        if (!_expanded.Add(id))
+            _expanded.Remove(id);
+    }
 
     private async Task ReloadAsync()
     {
         _notes = (await NotesApi.ListAsync()).ToList();
+        BuildTree();
     }
 
-    private void Edit(Note note)
+    private async Task OnSearchAsync()
     {
-        _editingId = note.Id;
-        _title = note.Title;
-        _body = note.Body;
+        BuildTree();
+        await Task.CompletedTask;
     }
 
-    private void ClearEditor()
+    private void BuildTree()
     {
-        _editingId = null;
-        _title = "";
-        _body = "";
+        IEnumerable<Note> source = _notes;
+        if (!string.IsNullOrWhiteSpace(_query))
+        {
+            var q = _query.Trim();
+            var matched = _notes.Where(n =>
+                n.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                n.Body.Contains(q, StringComparison.OrdinalIgnoreCase)).ToHashSet();
+            // include ancestors of matches
+            var withAncestors = new HashSet<Note>(matched);
+            foreach (var m in matched.ToList())
+            {
+                var parentId = m.ParentId;
+                while (parentId is not null)
+                {
+                    var parent = _notes.FirstOrDefault(n => n.Id == parentId);
+                    if (parent is null) break;
+                    withAncestors.Add(parent);
+                    parentId = parent.ParentId;
+                }
+            }
+            source = withAncestors;
+        }
+
+        var byParent = source.GroupBy(n => n.ParentId ?? "")
+            .ToDictionary(g => g.Key, g => g.OrderBy(n => n.Title, StringComparer.OrdinalIgnoreCase).ToList());
+
+        List<TreeItem> Build(string? parentId, int depth)
+        {
+            var key = parentId ?? "";
+            if (!byParent.TryGetValue(key, out var kids))
+                return new();
+            // Avoid orphans pointing at missing parents: also show at root if parent missing
+            return kids.Select(n => new TreeItem(n, Build(n.Id, depth + 1), depth)).ToList();
+        }
+
+        _roots = Build(null, 0);
+        // Orphaned nodes (parent missing) appear at root
+        var known = source.Select(n => n.Id).ToHashSet();
+        foreach (var orphan in source.Where(n => n.ParentId is not null && !known.Contains(n.ParentId!)))
+        {
+            if (_roots.All(r => r.Note.Id != orphan.Id))
+                _roots.Add(new TreeItem(orphan, Build(orphan.Id, 1), 0));
+        }
+    }
+
+    private List<Note> ChildrenOf(string id) =>
+        _notes.Where(n => n.ParentId == id).OrderBy(n => n.Title, StringComparer.OrdinalIgnoreCase).ToList();
+
+    private async Task NewPageAsync(string? parentId)
+    {
+        await FlushSaveAsync();
+        var note = await NotesApi.CreateAsync(parentId: parentId);
+        if (parentId is not null)
+            _expanded.Add(parentId);
+        await ReloadAsync();
+        await SelectAsync(note.Id);
+        _editing = true;
+    }
+
+    private async Task SelectAsync(string id)
+    {
+        await FlushSaveAsync();
+        _editing = false;
+        _selectedId = id;
+        _selected = await NotesApi.GetAsync(id);
+        if (_selected is null)
+        {
+            _selectedId = null;
+            return;
+        }
+
+        _title = _selected.Title;
+        _body = _selected.Body;
+        _dirty = false;
+        _saveLabel = "";
+        _saveClass = "";
+        BuildBreadcrumbs();
+        // expand ancestors
+        for (var p = _selected.ParentId; p is not null;)
+        {
+            _expanded.Add(p);
+            p = _notes.FirstOrDefault(n => n.Id == p)?.ParentId;
+        }
+    }
+
+    private void BuildBreadcrumbs()
+    {
+        _breadcrumbs = new();
+        if (_selected is null) return;
+        var chain = new List<Note>();
+        var parentId = _selected.ParentId;
+        while (parentId is not null)
+        {
+            var parent = _notes.FirstOrDefault(n => n.Id == parentId);
+            if (parent is null) break;
+            chain.Add(parent);
+            parentId = parent.ParentId;
+        }
+        chain.Reverse();
+        _breadcrumbs = chain;
+    }
+
+    private void StartEditing() => _editing = true;
+
+    private async Task DoneEditingAsync()
+    {
+        await FlushSaveAsync();
+        _editing = false;
+    }
+
+    private async Task QueueSaveAsync()
+    {
+        if (!_editing) return;
+        _dirty = true;
+        _saveLabel = "Saving…";
+        _saveClass = "dirty";
+        _saveCts?.Cancel();
+        _saveCts?.Dispose();
+        _saveCts = new CancellationTokenSource();
+        var token = _saveCts.Token;
+        try
+        {
+            await Task.Delay(400, token);
+            await SaveAsync();
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    private async Task FlushSaveAsync()
+    {
+        if (!_dirty || _selectedId is null) return;
+        _saveCts?.Cancel();
+        await SaveAsync();
     }
 
     private async Task SaveAsync()
     {
-        _busy = true;
-        _error = null;
-        try
-        {
-            if (string.IsNullOrWhiteSpace(_title))
-                _title = "Untitled";
-
-            if (_editingId is null)
-                await NotesApi.CreateAsync(_title.Trim(), _body);
-            else
-                await NotesApi.UpdateAsync(_editingId, _title.Trim(), _body);
-
-            ClearEditor();
-            await ReloadAsync();
-        }
-        catch (Exception ex) { _error = ex.Message; }
-        finally { _busy = false; }
+        if (_selectedId is null) return;
+        var updated = await NotesApi.UpdateAsync(_selectedId, _title, _body);
+        _selected = updated;
+        _dirty = false;
+        _saveLabel = "Saved";
+        _saveClass = "saved";
+        await ReloadAsync();
+        BuildBreadcrumbs();
+        StateHasChanged();
     }
 
-    private async Task DeleteAsync(string id)
+    private async Task ToggleTaskAsync(int lineIndex)
     {
+        _body = NoteMarkup.ToggleCheckbox(_body, lineIndex);
+        _dirty = true;
+        await SaveAsync();
+    }
+
+    private async Task DeleteSelectedAsync()
+    {
+        if (_selectedId is null) return;
+        var id = _selectedId;
+        var parentId = _selected?.ParentId;
+        _selectedId = null;
+        _selected = null;
+        _dirty = false;
+        _editing = false;
         await NotesApi.DeleteAsync(id);
-        if (_editingId == id) ClearEditor();
         await ReloadAsync();
+        if (parentId is not null && _notes.Any(n => n.Id == parentId))
+            await SelectAsync(parentId);
+        else if (_notes.Count > 0)
+            await SelectAsync(_roots[0].Note.Id);
+    }
+
+    private async Task InsertBullet()
+    {
+        _body = await Js.InvokeAsync<string>("synclyEditor.insertLinePrefix", "note-body", "- ");
+        await QueueSaveAsync();
+    }
+
+    private async Task InsertCheckbox()
+    {
+        _body = await Js.InvokeAsync<string>("synclyEditor.insertLinePrefix", "note-body", "- [ ] ");
+        await QueueSaveAsync();
+    }
+
+    private async Task WrapUnderline()
+    {
+        _body = await Js.InvokeAsync<string>("synclyEditor.wrapSelection", "note-body", "<u>", "</u>");
+        await QueueSaveAsync();
+    }
+
+    private async Task WrapBold()
+    {
+        _body = await Js.InvokeAsync<string>("synclyEditor.wrapSelection", "note-body", "**", "**");
+        await QueueSaveAsync();
+    }
+
+    private static string InlineHtml(string text) =>
+        // Reuse markup helpers by wrapping a one-line document.
+        System.Text.RegularExpressions.Regex.Replace(
+            System.Text.RegularExpressions.Regex.Replace(
+                System.Text.RegularExpressions.Regex.Replace(
+                    System.Net.WebUtility.HtmlEncode(text),
+                    @"&lt;u&gt;(.+?)&lt;/u&gt;",
+                    "<u>$1</u>",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase),
+                @"\*\*(.+?)\*\*",
+                "<strong>$1</strong>"),
+            @"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)",
+            "<em>$1</em>");
+
+    private static string Relative(DateTimeOffset when)
+    {
+        var span = DateTimeOffset.Now - when.ToLocalTime();
+        if (span.TotalMinutes < 1) return "just now";
+        if (span.TotalHours < 1) return $"{(int)span.TotalMinutes}m ago";
+        if (span.TotalDays < 1) return $"{(int)span.TotalHours}h ago";
+        if (span.TotalDays < 7) return $"{(int)span.TotalDays}d ago";
+        return when.LocalDateTime.ToString("MMM d");
+    }
+
+    private int WordCount() =>
+        string.IsNullOrWhiteSpace(_body) ? 0 : _body.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
+
+    public async ValueTask DisposeAsync()
+    {
+        await FlushSaveAsync();
+        _saveCts?.Dispose();
     }
 }

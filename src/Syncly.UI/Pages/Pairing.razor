@@ -4,52 +4,50 @@
 @inject ITrustStore Trust
 @implements IDisposable
 
-<h1>Pairing</h1>
-<p class="lede">Wi-Fi / LAN discovery only proves a Syncly app is nearby. Confirm fingerprints before trusting a device.</p>
+<div class="page">
+    <h1>Pairing</h1>
+    <p class="lede">Nearby discovery only proves a Syncly app is present. Confirm fingerprints before trusting a device.</p>
 
-<div class="panel">
-    <h2 style="font-family:var(--font-display);font-weight:560;margin:0 0 0.5rem">This device</h2>
-    <p>@Identity.Current.DisplayName</p>
-    <p class="fingerprint">@Identity.Current.PublicKeyFingerprint</p>
-</div>
-
-@if (State.Pairing.PendingRemote is { } pending)
-{
     <div class="panel">
-        <h2 style="font-family:var(--font-display);font-weight:560;margin:0 0 0.5rem">Trust request</h2>
-        <p>@pending.DisplayName wants to sync.</p>
-        <p class="fingerprint">@pending.PublicKeyFingerprint</p>
-        <div class="row">
-            <button @onclick="() => Respond(true)">Trust</button>
-            <button class="danger" @onclick="() => Respond(false)">Reject</button>
-        </div>
+        <h2 style="font-family:var(--font-note);font-weight:600;margin:0 0 0.45rem;font-size:1.15rem">This device</h2>
+        <p>@Identity.Current.DisplayName</p>
+        <p class="fingerprint">@Identity.Current.PublicKeyFingerprint</p>
     </div>
-}
-else
-{
-    <p class="lede">No pending pairing requests.</p>
-}
 
-<section class="panel">
-    <h2 style="font-family:var(--font-display);font-weight:560;margin:0 0 0.75rem">Trusted peers</h2>
-    @if (_trusted.Count == 0)
+    @if (State.Pairing.PendingRemote is { } pending)
     {
-        <p class="lede">None yet.</p>
-    }
-    else
-    {
-        @foreach (var peer in _trusted)
-        {
-            <div class="peer row">
-                <div>
-                    <strong>@peer.DisplayName</strong>
-                    <span class="fingerprint">@peer.Fingerprint</span>
-                </div>
-                <button class="danger" @onclick="() => RevokeAsync(peer.DeviceId)">Revoke</button>
+        <div class="panel">
+            <h2 style="font-family:var(--font-note);font-weight:600;margin:0 0 0.45rem;font-size:1.15rem">Trust request</h2>
+            <p>@pending.DisplayName wants to sync.</p>
+            <p class="fingerprint">@pending.PublicKeyFingerprint</p>
+            <div class="row">
+                <button @onclick="() => Respond(true)">Trust</button>
+                <button class="danger" @onclick="() => Respond(false)">Reject</button>
             </div>
-        }
+        </div>
     }
-</section>
+
+    <section class="panel">
+        <h2 style="font-family:var(--font-note);font-weight:600;margin:0 0 0.75rem;font-size:1.15rem">Trusted peers</h2>
+        @if (_trusted.Count == 0)
+        {
+            <p class="lede">None yet.</p>
+        }
+        else
+        {
+            @foreach (var peer in _trusted)
+            {
+                <div class="peer row">
+                    <div>
+                        <strong>@peer.DisplayName</strong>
+                        <span class="fingerprint">@peer.Fingerprint</span>
+                    </div>
+                    <button class="danger" @onclick="() => RevokeAsync(peer.DeviceId)">Revoke</button>
+                </div>
+            }
+        }
+    </section>
+</div>
 
 @code {
     private List<TrustedPeer> _trusted = new();
@@ -67,11 +65,7 @@ else
     }
 
     private async Task ReloadAsync() => _trusted = (await Trust.ListAsync()).ToList();
-
-    private void Respond(bool accept)
-    {
-        State.Pairing.Respond(accept);
-    }
+    private void Respond(bool accept) => State.Pairing.Respond(accept);
 
     private async Task RevokeAsync(string id)
     {

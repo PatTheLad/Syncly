@@ -2,29 +2,27 @@
 @inject AppState State
 @implements IDisposable
 
-<h1>Sync</h1>
-<p class="lede">Detected → Authenticate → Sync changes → Up to date.</p>
+<div class="page">
+    <h1>Sync</h1>
+    <p class="lede">Detected → Authenticate → Sync changes → Up to date.</p>
 
-@{
-    var phase = State.Host.LastProgress.Phase;
-}
+    <div class="flow">
+        <div class="flow-step @StepClass(SyncPhase.Discovering, SyncPhase.Connecting)">Detected</div>
+        <div class="flow-step @StepClass(SyncPhase.Authenticating, SyncPhase.AwaitingTrust)">Authenticate</div>
+        <div class="flow-step @StepClass(SyncPhase.Syncing)">Sync changes…</div>
+        <div class="flow-step @StepClass(SyncPhase.UpToDate)">Up to date</div>
+    </div>
 
-<div class="flow">
-    <div class="flow-step @StepClass(SyncPhase.Discovering, SyncPhase.Connecting)">Detected</div>
-    <div class="flow-step @StepClass(SyncPhase.Authenticating, SyncPhase.AwaitingTrust)">Authenticate</div>
-    <div class="flow-step @StepClass(SyncPhase.Syncing)">Sync changes…</div>
-    <div class="flow-step @StepClass(SyncPhase.UpToDate)">Up to date</div>
-</div>
-
-<div class="panel">
-    <p>
-        <strong>Status:</strong> @phase
-        @if (!string.IsNullOrEmpty(State.Host.LastProgress.PeerName))
-        {
-            <span>· @State.Host.LastProgress.PeerName</span>
-        }
-    </p>
-    <p class="lede">@State.Host.LastProgress.Message</p>
+    <div class="panel">
+        <p>
+            <strong>Status:</strong> @State.Host.LastProgress.Phase
+            @if (!string.IsNullOrEmpty(State.Host.LastProgress.PeerName))
+            {
+                <span>· @State.Host.LastProgress.PeerName</span>
+            }
+        </p>
+        <p class="lede">@State.Host.LastProgress.Message</p>
+    </div>
 </div>
 
 @code {
@@ -37,8 +35,6 @@
         var current = State.Host.LastProgress.Phase;
         if (current == SyncPhase.Failed) return "";
         if (phases.Contains(current)) return "active";
-        if (current == SyncPhase.UpToDate) return "done";
-        // mark earlier steps done
         var order = new[]
         {
             SyncPhase.Idle, SyncPhase.Discovering, SyncPhase.Connecting,

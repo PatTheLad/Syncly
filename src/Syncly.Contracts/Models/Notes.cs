@@ -5,6 +5,7 @@ public sealed class Note
     public required string Id { get; init; }
     public required string Title { get; set; }
     public required string Body { get; set; }
+    public string? ParentId { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public bool IsDeleted { get; set; }

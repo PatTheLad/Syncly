@@ -1,41 +1,39 @@
 @page "/settings"
-@inject AppState State
 @inject IDeviceIdentity Identity
 @inject Syncly.Core.Identity.DeviceIdentityService IdentityService
 
-<h1>Settings</h1>
-<p class="lede">Device identity and discoverability.</p>
+<div class="page">
+    <h1>Settings</h1>
+    <p class="lede">Identity and local preferences for this vault.</p>
 
-<div class="panel">
-    <label>
-        Device name
-        <input @bind="_name" />
-    </label>
-    <button @onclick="SaveName" disabled="@_busy">Save name</button>
+    <div class="panel">
+        <label>
+            Device name
+            <input @bind="_name" />
+        </label>
+        <button @onclick="SaveName" disabled="@_busy">Save name</button>
+    </div>
+
+    <div class="panel">
+        <p><strong>Device ID</strong></p>
+        <p class="fingerprint">@Identity.Current.DeviceId</p>
+        <p><strong>Fingerprint</strong></p>
+        <p class="fingerprint">@Identity.Current.PublicKeyFingerprint</p>
+        <p class="lede" style="margin-top:0.75rem">Transport: LAN/TCP. Wi-Fi Direct hooks are ready per platform.</p>
+    </div>
+
+    @if (!string.IsNullOrEmpty(_message))
+    {
+        <p>@_message</p>
+    }
 </div>
-
-<div class="panel">
-    <p><strong>Device ID</strong></p>
-    <p class="fingerprint">@Identity.Current.DeviceId</p>
-    <p><strong>Fingerprint</strong></p>
-    <p class="fingerprint">@Identity.Current.PublicKeyFingerprint</p>
-    <p class="lede">Transport: LAN/TCP (Wi-Fi Direct stubs available per platform).</p>
-</div>
-
-@if (!string.IsNullOrEmpty(_message))
-{
-    <p>@_message</p>
-}
 
 @code {
     private string _name = "";
     private bool _busy;
     private string? _message;
 
-    protected override void OnInitialized()
-    {
-        _name = Identity.Current.DisplayName;
-    }
+    protected override void OnInitialized() => _name = Identity.Current.DisplayName;
 
     private void SaveName()
     {
@@ -45,10 +43,7 @@
             IdentityService.UpdateDisplayName(_name);
             _message = "Saved.";
         }
-        catch (Exception ex)
-        {
-            _message = ex.Message;
-        }
+        catch (Exception ex) { _message = ex.Message; }
         finally { _busy = false; }
     }
 }

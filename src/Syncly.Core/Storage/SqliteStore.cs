@@ -80,23 +80,13 @@ public sealed class SqliteStore : INoteStore, ITrustStore, IAsyncDisposable
         var cmd = conn.CreateCommand();
         cmd.CommandText =
             """
-            SELECT id, title, body, created_at, updated_at, is_deleted
+            SELECT payload
             FROM notes WHERE is_deleted = 0 ORDER BY updated_at DESC
             """;
         var list = new List<Note>();
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
-        {
-            list.Add(new Note
-            {
-                Id = reader.GetString(0),
-                Title = reader.GetString(1),
-                Body = reader.GetString(2),
-                CreatedAt = DateTimeOffset.Parse(reader.GetString(3)),
-                UpdatedAt = DateTimeOffset.Parse(reader.GetString(4)),
-                IsDeleted = reader.GetInt64(5) != 0
-            });
-        }
+            list.Add(DecodeNote((byte[])reader[0]));
         return list;
     }
 
@@ -110,22 +100,14 @@ public sealed class SqliteStore : INoteStore, ITrustStore, IAsyncDisposable
         var cmd = conn.CreateCommand();
         cmd.CommandText =
             """
-            SELECT id, title, body, created_at, updated_at, is_deleted
-            FROM notes WHERE id = $id
+            SELECT payload
+            FROM notes WHERE id = $id AND is_deleted = 0
             """;
         cmd.Parameters.AddWithValue("$id", id);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
             return null;
-        return new Note
-        {
-            Id = reader.GetString(0),
-            Title = reader.GetString(1),
-            Body = reader.GetString(2),
-            CreatedAt = DateTimeOffset.Parse(reader.GetString(3)),
-            UpdatedAt = DateTimeOffset.Parse(reader.GetString(4)),
-            IsDeleted = reader.GetInt64(5) != 0
-        };
+        return DecodeNote((byte[])reader[0]);
     }
 
     public async Task<Note> UpsertAsync(Note note, CancellationToken cancellationToken = default)
@@ -164,6 +146,16 @@ public sealed class SqliteStore : INoteStore, ITrustStore, IAsyncDisposable
         var existing = await GetAsync(id, cancellationToken);
         if (existing is null)
             return;
+
+        // Reparent children to this note's parent so the tree stays intact.
+        var all = await ListNotesAsync(cancellationToken);
+        foreach (var child in all.Where(n => n.ParentId == id))
+        {
+            child.ParentId = existing.ParentId;
+            child.UpdatedAt = DateTimeOffset.UtcNow;
+            await UpsertAsync(child, cancellationToken);
+        }
+
         existing.IsDeleted = true;
         existing.UpdatedAt = DateTimeOffset.UtcNow;
         await UpsertAsync(existing, cancellationToken);

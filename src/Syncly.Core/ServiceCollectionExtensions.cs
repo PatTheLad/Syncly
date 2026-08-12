@@ -90,40 +90,6 @@ public sealed class InteractivePairingPrompter : IPairingPrompter
     }
 }
 
-public sealed class NotesService
-{
-    private readonly INoteStore _store;
-
-    public NotesService(INoteStore store) => _store = store;
-
-    public Task<IReadOnlyList<Contracts.Models.Note>> ListAsync(CancellationToken ct = default) => _store.ListAsync(ct);
-
-    public async Task<Contracts.Models.Note> CreateAsync(string title, string body, CancellationToken ct = default)
-    {
-        var now = DateTimeOffset.UtcNow;
-        var note = new Contracts.Models.Note
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            Title = title,
-            Body = body,
-            CreatedAt = now,
-            UpdatedAt = now
-        };
-        return await _store.UpsertAsync(note, ct);
-    }
-
-    public async Task<Contracts.Models.Note> UpdateAsync(string id, string title, string body, CancellationToken ct = default)
-    {
-        var existing = await _store.GetAsync(id, ct) ?? throw new InvalidOperationException("Note not found.");
-        existing.Title = title;
-        existing.Body = body;
-        existing.UpdatedAt = DateTimeOffset.UtcNow;
-        return await _store.UpsertAsync(existing, ct);
-    }
-
-    public Task DeleteAsync(string id, CancellationToken ct = default) => _store.DeleteAsync(id, ct);
-}
-
 /// <summary>Boots identity/store, advertising, discovery, and inbound TCP sync.</summary>
 public sealed class SyncHostService : IAsyncDisposable
 {
