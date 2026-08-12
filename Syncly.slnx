@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Syncly.App.Linux/Syncly.App.Linux.csproj" />
+    <Project Path="src/Syncly.Contracts/Syncly.Contracts.csproj" />
+    <Project Path="src/Syncly.Core/Syncly.Core.csproj" />
+    <Project Path="src/Syncly.Platform.Abstractions/Syncly.Platform.Abstractions.csproj" />
+    <Project Path="src/Syncly.Platform.Android/Syncly.Platform.Android.csproj" />
+    <Project Path="src/Syncly.Platform.Lan/Syncly.Platform.Lan.csproj" />
+    <Project Path="src/Syncly.Platform.Linux/Syncly.Platform.Linux.csproj" />
+    <Project Path="src/Syncly.Platform.Windows/Syncly.Platform.Windows.csproj" />
+    <Project Path="src/Syncly.UI/Syncly.UI.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Syncly.Core.Tests/Syncly.Core.Tests.csproj" />
+  </Folder>
+</Solution>

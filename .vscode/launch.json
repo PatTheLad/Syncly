@@ -1,0 +1,69 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Syncly (Linux)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Syncly.App.Linux/bin/Debug/net10.0/Syncly.App.Linux.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}/src/Syncly.App.Linux",
+      "console": "integratedTerminal",
+      "stopAtEntry": false,
+      "env": {
+        "SYNCLY_DATA_DIR": "${workspaceFolder}/.local/syncly",
+        "SYNCLY_PORT": "45678"
+      }
+    },
+    {
+      "name": "Syncly (peer A)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Syncly.App.Linux/bin/Debug/net10.0/Syncly.App.Linux.dll",
+      "args": ["--port", "45678"],
+      "cwd": "${workspaceFolder}/src/Syncly.App.Linux",
+      "console": "integratedTerminal",
+      "stopAtEntry": false,
+      "env": {
+        "SYNCLY_DATA_DIR": "${workspaceFolder}/.local/syncly-a",
+        "SYNCLY_PORT": "45678"
+      }
+    },
+    {
+      "name": "Syncly (peer B)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build",
+      "program": "${workspaceFolder}/src/Syncly.App.Linux/bin/Debug/net10.0/Syncly.App.Linux.dll",
+      "args": ["--port", "45688"],
+      "cwd": "${workspaceFolder}/src/Syncly.App.Linux",
+      "console": "integratedTerminal",
+      "stopAtEntry": false,
+      "env": {
+        "SYNCLY_DATA_DIR": "${workspaceFolder}/.local/syncly-b",
+        "SYNCLY_PORT": "45688"
+      }
+    },
+    {
+      "name": "Syncly.Core.Tests",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build-tests",
+      "program": "${workspaceFolder}/tests/Syncly.Core.Tests/bin/Debug/net10.0/Syncly.Core.Tests.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}/tests/Syncly.Core.Tests",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Syncly (both peers)",
+      "configurations": ["Syncly (peer A)", "Syncly (peer B)"],
+      "stopAll": true,
+      "preLaunchTask": "build"
+    }
+  ]
+}

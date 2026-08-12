@@ -1,0 +1,38 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
+    <PackageReference Include="Photino.Blazor" Version="4.0.13" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Syncly.UI\Syncly.UI.csproj" />
+    <ProjectReference Include="..\Syncly.Core\Syncly.Core.csproj" />
+    <ProjectReference Include="..\Syncly.Contracts\Syncly.Contracts.csproj" />
+    <ProjectReference Include="..\Syncly.Platform.Lan\Syncly.Platform.Lan.csproj" />
+    <ProjectReference Include="..\Syncly.Platform.Linux\Syncly.Platform.Linux.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="wwwroot\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!-- Photino serves UI static assets; also copy shared UI wwwroot -->
+  <Target Name="CopyUiWwwroot" AfterTargets="Build">
+    <ItemGroup>
+      <_UiWww Include="..\Syncly.UI\wwwroot\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_UiWww)" DestinationFiles="@(_UiWww->'$(OutputPath)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

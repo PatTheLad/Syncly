@@ -1,0 +1,71 @@
+@page "/"
+@inject AppState State
+@inject IDeviceIdentity Identity
+@implements IDisposable
+
+<h1>Devices</h1>
+<p class="lede">Nearby Syncly peers over LAN. Discovery is not authentication — pairing happens next.</p>
+
+<div class="panel row">
+    <div>
+        <span class="status-dot @(State.Host.IsDiscoverable ? "" : "off")"></span>
+        @(State.Host.IsDiscoverable ? "Discoverable" : "Hidden")
+        <div class="lede" style="margin:0.35rem 0 0">Device: @Identity.Current.DisplayName</div>
+    </div>
+    <button @onclick="ToggleDiscoverable" disabled="@_busy">
+        @(State.Host.IsDiscoverable ? "Go hidden" : "Become discoverable")
+    </button>
+</div>
+
+<section class="panel">
+    <h2 style="font-family:var(--font-display);font-weight:560;margin:0 0 0.75rem">Nearby Syncly devices</h2>
+    @if (!State.Host.NearbyPeers.Any())
+    {
+        <p class="lede">No peers yet. Enable discoverable on another device on the same network.</p>
+    }
+    else
+    {
+        @foreach (var peer in State.Host.NearbyPeers)
+        {
+            <div class="peer row">
+                <div>
+                    <strong><span class="status-dot"></span>@peer.DisplayName</strong>
+                    <span>@peer.Endpoint.Host:@peer.Endpoint.Port · @peer.Endpoint.TransportKind</span>
+                </div>
+                <button @onclick="() => SyncAsync(peer)" disabled="@_busy">Sync</button>
+            </div>
+        }
+    }
+</section>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <p style="color:var(--danger)">@_error</p>
+}
+
+@code {
+    private bool _busy;
+    private string? _error;
+
+    protected override void OnInitialized() => State.Changed += OnChanged;
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => State.Changed -= OnChanged;
+
+    private async Task ToggleDiscoverable()
+    {
+        _busy = true;
+        _error = null;
+        try { await State.Host.SetDiscoverableAsync(!State.Host.IsDiscoverable); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task SyncAsync(Peer peer)
+    {
+        _busy = true;
+        _error = null;
+        try { await State.Host.SyncWithAsync(peer); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+}

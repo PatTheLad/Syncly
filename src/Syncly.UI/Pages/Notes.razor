@@ -1,0 +1,106 @@
+@page "/notes"
+@inject NotesService NotesApi
+
+<h1>Notes</h1>
+<p class="lede">Local notes stored in SQLite. Sync pushes and pulls missing objects between trusted peers.</p>
+
+<div class="panel">
+    <label>
+        Title
+        <input @bind="_title" placeholder="Untitled" />
+    </label>
+    <label>
+        Body
+        <textarea @bind="_body" placeholder="Write something…"></textarea>
+    </label>
+    <div class="row">
+        <button @onclick="SaveAsync" disabled="@_busy">@(_editingId is null ? "Create note" : "Save changes")</button>
+        @if (_editingId is not null)
+        {
+            <button class="secondary" @onclick="ClearEditor">Cancel</button>
+        }
+    </div>
+</div>
+
+<section class="panel">
+    @if (_notes.Count == 0)
+    {
+        <p class="lede">No notes yet.</p>
+    }
+    else
+    {
+        @foreach (var note in _notes)
+        {
+            <div class="note-item row" @onclick="() => Edit(note)">
+                <div>
+                    <strong>@note.Title</strong>
+                    <div class="lede" style="margin:0">@note.UpdatedAt.LocalDateTime.ToString("g")</div>
+                </div>
+                <button class="danger" @onclick:stopPropagation="true" @onclick="() => DeleteAsync(note.Id)">Delete</button>
+            </div>
+        }
+    }
+</section>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <p style="color:var(--danger)">@_error</p>
+}
+
+@code {
+    private List<Note> _notes = new();
+    private string _title = "";
+    private string _body = "";
+    private string? _editingId;
+    private bool _busy;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        _notes = (await NotesApi.ListAsync()).ToList();
+    }
+
+    private void Edit(Note note)
+    {
+        _editingId = note.Id;
+        _title = note.Title;
+        _body = note.Body;
+    }
+
+    private void ClearEditor()
+    {
+        _editingId = null;
+        _title = "";
+        _body = "";
+    }
+
+    private async Task SaveAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_title))
+                _title = "Untitled";
+
+            if (_editingId is null)
+                await NotesApi.CreateAsync(_title.Trim(), _body);
+            else
+                await NotesApi.UpdateAsync(_editingId, _title.Trim(), _body);
+
+            ClearEditor();
+            await ReloadAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task DeleteAsync(string id)
+    {
+        await NotesApi.DeleteAsync(id);
+        if (_editingId == id) ClearEditor();
+        await ReloadAsync();
+    }
+}
