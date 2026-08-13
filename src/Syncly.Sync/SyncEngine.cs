@@ -60,6 +60,12 @@ public sealed class SyncEngine : IAsyncDisposable
             .Where(p => p.DeviceId != _context.Identity.DeviceId)
             .ToList();
 
+    public IReadOnlyList<(string Name, bool Available)> Discoveries =>
+        _discoveries.Select(d => (d.Name, d.IsAvailable)).ToList();
+
+    public string NearbyStatus =>
+        string.Join(" · ", _discoveries.Select(d => d.Status).Where(s => !string.IsNullOrWhiteSpace(s)));
+
     public IReadOnlyList<string> TransportNames => _transports.Select(t => t.Name).ToList();
 
     public async Task StartAsync(CancellationToken ct = default)
@@ -146,12 +152,57 @@ public sealed class SyncEngine : IAsyncDisposable
         if (peer.DeviceId == _context.Identity.DeviceId || _sessions.ContainsKey(peer.DeviceId))
             return;
 
+        if (!PeerEndpoints.IsRoutable(peer.Address))
+        {
+            _ = InviteIfTrustedAsync(peer);
+            return;
+        }
+
         _ = DialAsync(peer.Address, peer.Port, peer.DeviceId);
     }
 
     /// <summary>Manual connect, for when discovery is blocked but you know the address.</summary>
     public Task ConnectAsync(string address, int port, CancellationToken ct = default) =>
         DialAsync(address, port, null, ct);
+
+    /// <summary>Tap-to-pair from the Devices screen. LAN peers are dialed immediately; Wi-Fi Direct peers
+    /// are invited into a P2P group first, then TCP starts once an IP exists.
+    /// </summary>
+    public async Task ConnectToPeerAsync(DiscoveredPeer peer, CancellationToken ct = default)
+    {
+        if (PeerEndpoints.IsRoutable(peer.Address))
+        {
+            await DialAsync(peer.Address, peer.Port, peer.DeviceId, ct);
+            return;
+        }
+
+        foreach (var discovery in _discoveries)
+            await discovery.InviteAsync(peer, ct);
+    }
+
+    public async Task RequestNearbyAccessAsync(CancellationToken ct = default)
+    {
+        foreach (var discovery in _discoveries)
+            await discovery.RequestAccessAsync(ct);
+
+        Changed?.Invoke();
+    }
+
+    private async Task InviteIfTrustedAsync(DiscoveredPeer peer)
+    {
+        try
+        {
+            if (await _context.Peers.FindAsync(peer.DeviceId) is null)
+                return;
+
+            foreach (var discovery in _discoveries)
+                await discovery.InviteAsync(peer);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not auto-invite {Peer}.", peer.DisplayName);
+        }
+    }
 
     private async Task DialAsync(
         string address,

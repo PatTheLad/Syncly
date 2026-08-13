@@ -23,15 +23,18 @@ public sealed class ProjectionStore(SynclyDatabase database)
                 upsert.Transaction = tx;
                 upsert.CommandText =
                     """
-                    INSERT INTO objects (id, title, icon, parent_id, deleted, created_at, updated_at)
-                    VALUES ($id, $title, $icon, $parent, $deleted, $created, $updated)
+                    INSERT INTO objects (id, title, icon, parent_id, deleted, created_at, updated_at, type, space_id, color)
+                    VALUES ($id, $title, $icon, $parent, $deleted, $created, $updated, $type, $space, $color)
                     ON CONFLICT(id) DO UPDATE SET
                         title = excluded.title,
                         icon = excluded.icon,
                         parent_id = excluded.parent_id,
                         deleted = excluded.deleted,
                         created_at = excluded.created_at,
-                        updated_at = excluded.updated_at
+                        updated_at = excluded.updated_at,
+                        type = excluded.type,
+                        space_id = excluded.space_id,
+                        color = excluded.color
                     """;
                 upsert.Parameters.AddWithValue("$id", snapshot.Id);
                 upsert.Parameters.AddWithValue("$title", snapshot.Title);
@@ -40,6 +43,9 @@ public sealed class ProjectionStore(SynclyDatabase database)
                 upsert.Parameters.AddWithValue("$deleted", snapshot.IsDeleted ? 1 : 0);
                 upsert.Parameters.AddWithValue("$created", snapshot.CreatedAt.ToUnixTimeMilliseconds());
                 upsert.Parameters.AddWithValue("$updated", snapshot.UpdatedAt.ToUnixTimeMilliseconds());
+                upsert.Parameters.AddWithValue("$type", snapshot.Type);
+                upsert.Parameters.AddWithValue("$space", (object?)snapshot.SpaceId ?? DBNull.Value);
+                upsert.Parameters.AddWithValue("$color", (object?)snapshot.Color ?? DBNull.Value);
                 await upsert.ExecuteNonQueryAsync(ct);
             }
 
@@ -151,7 +157,10 @@ public sealed class ProjectionStore(SynclyDatabase database)
         {
             await using var command = connection.CreateCommand();
             command.CommandText =
-                "SELECT id, title, icon, parent_id FROM objects WHERE deleted = 0 ORDER BY title";
+                """
+                SELECT id, title, icon, parent_id, space_id, type, color
+                FROM objects WHERE deleted = 0 ORDER BY title
+                """;
 
             var pages = new List<PageRef>();
             await using var reader = await command.ExecuteReaderAsync(ct);
@@ -160,7 +169,10 @@ public sealed class ProjectionStore(SynclyDatabase database)
                     reader.GetString(0),
                     reader.GetString(1),
                     reader.IsDBNull(2) ? null : reader.GetString(2),
-                    reader.IsDBNull(3) ? null : reader.GetString(3)));
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.IsDBNull(5) ? ObjectTypes.Page : reader.GetString(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6)));
 
             return pages;
         }, ct);

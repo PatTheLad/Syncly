@@ -41,6 +41,8 @@ public sealed class LanDiscovery(ILogger<LanDiscovery>? logger = null) : IPeerDi
 
     public bool IsAvailable => _socket is not null;
 
+    public string Status => _socket is not null ? "Same Wi-Fi" : "";
+
     public IReadOnlyList<DiscoveredPeer> Peers => _peers.Values.ToList();
 
     public event Action<DiscoveredPeer>? PeerAppeared;

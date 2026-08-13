@@ -8,7 +8,13 @@
 
 <div class="shell @(State.SidebarOpen ? null : "no-sidebar")">
     <nav class="rail">
-        <div class="rail-brand" title="@App.Identity.DisplayName">S</div>
+        <button type="button"
+                class="rail-brand space-avatar"
+                style="background: @(State.CurrentSpace?.Accent ?? SpaceColors.Default)"
+                title="@(State.CurrentSpace?.DisplayTitle ?? "Spaces")"
+                @onclick="() => State.ToggleSpaceSwitcher(true)">
+            @(State.CurrentSpace?.Initial ?? "S")
+        </button>
 
         <button class="rail-item @(IsAt("") ? "active" : null)" title="Notes (Ctrl+K to jump)"
                 @onclick='() => Go("")'>✎</button>
@@ -20,12 +26,18 @@
         <div class="rail-spacer"></div>
 
         <div class="rail-dot @(IsLive ? "live" : null)" title="@SyncSummary"></div>
-        <button class="rail-item" title="Toggle sidebar" @onclick="State.ToggleSidebar">☰</button>
+        <button type="button" class="rail-item" title="Toggle sidebar" @onclick="State.ToggleSidebar">☰</button>
     </nav>
 
     <aside class="sidebar">
         <div class="sidebar-head">
-            <span class="sidebar-title">Workspace</span>
+            <button type="button" class="sidebar-space" title="Switch space" @onclick="() => State.ToggleSpaceSwitcher(true)">
+                <span class="space-avatar sm" style="background: @(State.CurrentSpace?.Accent ?? SpaceColors.Default)">
+                    @(State.CurrentSpace?.Initial ?? "S")
+                </span>
+                <span class="sidebar-title">@(State.CurrentSpace?.DisplayTitle ?? "Space")</span>
+                <span class="sidebar-caret">▾</span>
+            </button>
             <button class="chip" title="New page (Ctrl+N)" @onclick="() => NewPageAsync(null)">New</button>
         </div>
 
@@ -52,7 +64,7 @@
         else
         {
             <div class="tree">
-                @if (State.Workspace.Pages.Count == 0)
+                @if (State.Workspace.PagesIn(State.CurrentSpaceId).Count == 0)
                 {
                     <div class="tree-empty">No pages yet.</div>
                 }
@@ -75,7 +87,14 @@
         </div>
     </aside>
 
-    @Body
+    @if (State.SidebarOpen)
+    {
+        <button type="button" class="sidebar-scrim" title="Close workspace" @onclick="() => State.SetSidebar(false)"></button>
+    }
+
+    <div class="shell-main">
+        @Body
+    </div>
 </div>
 
 @if (App.Pairing.Pending is { } pending)
@@ -101,6 +120,11 @@
              OnClose="() => State.TogglePalette(false)" />
 }
 
+@if (State.SpaceSwitcherOpen)
+{
+    <SpaceSwitcher OnClose="() => State.ToggleSpaceSwitcher(false)" />
+}
+
 @code {
     private DotNetObjectReference<MainLayout>? _self;
     private string _query = string.Empty;
@@ -122,6 +146,9 @@
         _self = DotNetObjectReference.Create(this);
         await Js.InvokeVoidAsync("syncly.attachShell", _self);
         await State.Workspace.RefreshPagesAsync();
+
+        if (await Js.InvokeAsync<bool>("syncly.isNarrow"))
+            State.SetSidebar(false);
     }
 
     private void Refresh() => InvokeAsync(StateHasChanged);
@@ -132,6 +159,7 @@
     private void Go(string path)
     {
         Nav.NavigateTo(path);
+        _ = CloseSidebarIfNarrowAsync();
         StateHasChanged();
     }
 
@@ -143,10 +171,21 @@
 
         if (!IsAt(""))
             Nav.NavigateTo("");
+
+        _ = CloseSidebarIfNarrowAsync();
+    }
+
+    private async Task CloseSidebarIfNarrowAsync()
+    {
+        if (await Js.InvokeAsync<bool>("syncly.isNarrow"))
+            State.SetSidebar(false);
     }
 
     private async Task NewPageAsync(string? parentId)
     {
+        if (parentId is not null)
+            State.ExpandPage(parentId);
+
         var pageId = await State.Workspace.CreatePageAsync(parentId);
         Open(pageId);
         State.SetReadingMode(false);
@@ -155,7 +194,11 @@
     private async Task OnSearchAsync(ChangeEventArgs args)
     {
         _query = args.Value?.ToString() ?? string.Empty;
-        _hits = _query.Trim().Length == 0 ? null : await State.Workspace.SearchAsync(_query);
+        _hits = _query.Trim().Length == 0
+            ? null
+            : (await State.Workspace.SearchAsync(_query))
+                .Where(h => State.Workspace.PagesIn(State.CurrentSpaceId).Any(p => p.Id == h.ObjectId))
+                .ToList();
     }
 
     private Task SyncNowAsync() => App.Sync.SyncNowAsync();
@@ -192,6 +235,11 @@
         var items = new List<Palette.PaletteItem>
         {
             new("+", "New page", "Ctrl+N", () => NewPageAsync(null)),
+            new("▣", "New space", null, () =>
+            {
+                State.ToggleSpaceSwitcher(true);
+                return Task.CompletedTask;
+            }),
             new("↻", "Sync now", "Ctrl+S", SyncNowAsync),
             new("👁", State.ReadingMode ? "Edit this page" : "Reading mode", "Ctrl+E", () =>
             {
@@ -210,7 +258,7 @@
             }),
         };
 
-        items.AddRange(State.Workspace.Pages.Select(page =>
+        items.AddRange(State.Workspace.PagesIn(State.CurrentSpaceId).Select(page =>
             new Palette.PaletteItem("◻", page.DisplayTitle, "Page", () =>
             {
                 Open(page.Id);
@@ -233,7 +281,11 @@
     public Task OnSyncNow() => SyncNowAsync();
 
     [JSInvokable]
-    public void OnEscape() => State.TogglePalette(false);
+    public void OnEscape()
+    {
+        State.TogglePalette(false);
+        State.ToggleSpaceSwitcher(false);
+    }
 
     [JSInvokable]
     public async Task OnOpenLink(string title)

@@ -49,9 +49,12 @@
             @if (_page is null)
             {
                 <div class="empty-state">
-                    <h2>Nothing open</h2>
-                    <p>Create a page to start writing. Everything you write syncs to your other devices.</p>
-                    <button class="chip primary" @onclick="() => CreateFirstPageAsync()">New page</button>
+                    <h2>@(State.CurrentSpace?.DisplayTitle ?? "This space")</h2>
+                    <p>Create a page to start writing. Nearby devices pick it up over Wi-Fi Direct — no shared network needed.</p>
+                    <div class="row">
+                        <button class="chip primary" @onclick="() => CreateFirstPageAsync()">New page</button>
+                        <button class="chip" @onclick="() => State.ToggleSpaceSwitcher(true)">Switch space</button>
+                    </div>
                 </div>
             }
             else
@@ -673,6 +676,7 @@
 
     private async Task NewSubPageAsync()
     {
+        State.ExpandPage(PageIdOrThrow);
         var pageId = await State.Workspace.CreatePageAsync(PageIdOrThrow);
         State.Open(pageId);
         State.SetReadingMode(false);

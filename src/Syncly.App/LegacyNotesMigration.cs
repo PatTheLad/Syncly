@@ -19,7 +19,7 @@ public static class LegacyNotesMigration
 
         foreach (var note in notes.OrderBy(n => n.CreatedAt))
         {
-            var pageId = await workspace.CreatePageAsync(null, note.Title, ct);
+            var pageId = await workspace.CreatePageAsync(null, note.Title, ct: ct);
             created[note.Id] = pageId;
 
             var tree = workspace.Tree(pageId);

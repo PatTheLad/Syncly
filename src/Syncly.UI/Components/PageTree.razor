@@ -1,41 +1,33 @@
 @namespace Syncly.UI.Components
+@inject EditorState State
 
-@foreach (var page in Workspace.ChildrenOf(ParentId))
+@foreach (var (page, depth, childCount) in VisibleRows())
 {
-    var children = Workspace.ChildrenOf(page.Id);
-    var expanded = _open.Contains(page.Id);
+    var id = page.Id;
+    var expanded = State.IsPageExpanded(id);
 
-    <div @key="page.Id">
-        <div class="tree-row @(page.Id == SelectedId ? "selected" : null)"
-             @onclick="() => OnSelect.InvokeAsync(page.Id)">
-            <span class="tree-twisty @(expanded ? "open" : null)"
-                  @onclick:stopPropagation="true"
-                  @onclick="() => Toggle(page.Id)">
-                @(children.Count > 0 ? "▶" : "")
-            </span>
-            <span class="tree-label">@Label(page)</span>
-            <button class="tree-add"
-                    title="New sub-page"
-                    @onclick:stopPropagation="true"
-                    @onclick="() => AddChildAsync(page.Id)">+</button>
-        </div>
-
-        @if (expanded && children.Count > 0)
-        {
-            <div style="margin-left:14px">
-                <PageTree Workspace="Workspace"
-                          ParentId="page.Id"
-                          SelectedId="SelectedId"
-                          OnSelect="OnSelect"
-                          OnAddChild="OnAddChild" />
-            </div>
-        }
+    <div @key="id"
+         class="tree-row @(id == SelectedId ? "selected" : null)"
+         style="padding-left: @(6 + depth * 14)px"
+         @onclick="() => OnSelect.InvokeAsync(id)">
+        <button type="button"
+                class="tree-twisty @(expanded ? "open" : null)"
+                disabled="@(childCount == 0)"
+                title="@(expanded ? "Collapse" : "Expand")"
+                @onclick:stopPropagation="true"
+                @onclick="() => State.TogglePageExpanded(id)">
+            @(childCount > 0 ? "▶" : "")
+        </button>
+        <span class="tree-label">@Label(page)</span>
+        <button type="button"
+                class="tree-add"
+                title="New sub-page"
+                @onclick:stopPropagation="true"
+                @onclick="() => AddChildAsync(id)">+</button>
     </div>
 }
 
 @code {
-    private readonly HashSet<string> _open = new(StringComparer.Ordinal);
-
     [Parameter, EditorRequired]
     public required Workspace Workspace { get; set; }
 
@@ -54,15 +46,29 @@
     private static string Label(PageRef page) =>
         page.Icon is { Length: > 0 } icon ? $"{icon} {page.DisplayTitle}" : page.DisplayTitle;
 
-    private void Toggle(string pageId)
+    private IEnumerable<(PageRef Page, int Depth, int ChildCount)> VisibleRows()
     {
-        if (!_open.Remove(pageId))
-            _open.Add(pageId);
+        return Walk(ParentId, 0);
+
+        IEnumerable<(PageRef, int, int)> Walk(string? parent, int depth)
+        {
+            foreach (var page in Workspace.ChildrenOf(parent, State.CurrentSpaceId))
+            {
+                var childCount = Workspace.ChildrenOf(page.Id).Count;
+                yield return (page, depth, childCount);
+
+                if (childCount > 0 && State.IsPageExpanded(page.Id))
+                {
+                    foreach (var nested in Walk(page.Id, depth + 1))
+                        yield return nested;
+                }
+            }
+        }
     }
 
     private async Task AddChildAsync(string pageId)
     {
-        _open.Add(pageId);
+        State.ExpandPage(pageId);
         await OnAddChild.InvokeAsync(pageId);
     }
 }

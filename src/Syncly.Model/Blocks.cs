@@ -52,6 +52,15 @@ public static class PropKeys
     public const string Language = "language";
     public const string Target = "target";
     public const string CreatedAt = "createdAt";
+    public const string Type = "type";
+    public const string Space = "space";
+    public const string Color = "color";
+}
+
+public static class ObjectTypes
+{
+    public const string Page = "page";
+    public const string Space = "space";
 }
 
 /// <summary>A materialized block, ready for rendering. Children are already ordered.</summary>
@@ -89,6 +98,9 @@ public sealed class ObjectSnapshot
     public string Title { get; init; } = string.Empty;
     public string? Icon { get; init; }
     public string? ParentId { get; init; }
+    public string? SpaceId { get; init; }
+    public string Type { get; init; } = ObjectTypes.Page;
+    public string? Color { get; init; }
     public bool IsDeleted { get; init; }
     public DateTimeOffset UpdatedAt { get; init; }
     public DateTimeOffset CreatedAt { get; init; }
@@ -100,8 +112,59 @@ public sealed class ObjectSnapshot
         string.Join('\n', Flatten().Where(b => b.Kind.IsText()).Select(b => b.Text));
 }
 
-/// <summary>Lightweight page entry for trees, search results and link pickers.</summary>
-public sealed record PageRef(string Id, string Title, string? Icon, string? ParentId)
+/// <summary>Lightweight page or space entry for trees, switchers and search.</summary>
+public sealed record PageRef(
+    string Id,
+    string Title,
+    string? Icon,
+    string? ParentId,
+    string? SpaceId = null,
+    string Type = ObjectTypes.Page,
+    string? Color = null)
 {
-    public string DisplayTitle => string.IsNullOrWhiteSpace(Title) ? "Untitled" : Title;
+    public string DisplayTitle => string.IsNullOrWhiteSpace(Title)
+        ? (Type == ObjectTypes.Space ? "Untitled space" : "Untitled")
+        : Title;
+
+    public bool IsSpace => Type == ObjectTypes.Space;
+
+    public string Initial => DisplayTitle.Length == 0
+        ? "?"
+        : char.ToUpperInvariant(DisplayTitle.Trim()[0]).ToString();
+
+    public string Accent => string.IsNullOrWhiteSpace(Color)
+        ? SpaceColors.ForId(Id)
+        : Color;
+}
+
+/// <summary>Anytype-style space accents. One of these is stored on each space object.</summary>
+public static class SpaceColors
+{
+    public static readonly string[] All =
+    [
+        "#e4c184",
+        "#ef8a6a",
+        "#e06c8a",
+        "#9b7ee8",
+        "#5b8def",
+        "#4db6ac",
+        "#8bc34a",
+        "#ffa726",
+    ];
+
+    public const string Default = "#e4c184";
+
+    public static string ForId(string id)
+    {
+        if (string.IsNullOrEmpty(id))
+            return Default;
+
+        var hash = 0;
+        foreach (var c in id)
+            hash = (hash * 31) + c;
+
+        return All[Math.Abs(hash) % All.Length];
+    }
+
+    public static string Next(int existingCount) => All[Math.Abs(existingCount) % All.Length];
 }

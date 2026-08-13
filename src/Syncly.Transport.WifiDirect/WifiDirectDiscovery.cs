@@ -4,13 +4,11 @@ using Syncly.Sync;
 namespace Syncly.Transport.WifiDirect;
 
 /// <summary>
-/// Wi-Fi Direct placeholder.
+/// Desktop / non-Android placeholder. Android implements discovery in the MAUI host
+/// (<c>AndroidWifiDirectDiscovery</c>) because WifiP2pManager is a platform API.
 ///
-/// The sync engine is transport-independent, so bringing Wi-Fi Direct online means implementing
-/// <see cref="IPeerDiscovery"/> here per platform and registering it; nothing above this layer
-/// changes. Android uses WifiP2pManager, Windows uses WiFiDirectAdvertisementPublisher, and Linux
-/// uses wpa_supplicant P2P through NetworkManager. Once a group is formed the peer is reachable
-/// over IP, so <see cref="Lan"/>-style TCP carries the session.
+/// Once a P2P group has an IP, <see cref="Lan"/>-style TCP carries the session — the sync
+/// engine never needs a second protocol.
 /// </summary>
 public sealed class WifiDirectDiscovery(string platform) : IPeerDiscovery
 {

@@ -25,6 +25,23 @@ public sealed record DiscoveredPeer(
     public string Endpoint => $"{Address}:{Port}";
 }
 
+public static class PeerEndpoints
+{
+    public static bool IsRoutable(string address)
+    {
+        if (!System.Net.IPAddress.TryParse(address, out var ip))
+            return false;
+
+        if (ip.AddressFamily is not (System.Net.Sockets.AddressFamily.InterNetwork
+            or System.Net.Sockets.AddressFamily.InterNetworkV6))
+            return false;
+
+        return !System.Net.IPAddress.Any.Equals(ip)
+               && !System.Net.IPAddress.IPv6Any.Equals(ip)
+               && !System.Net.IPAddress.None.Equals(ip);
+    }
+}
+
 public sealed record TrustedDevice(
     string DeviceId,
     string DisplayName,

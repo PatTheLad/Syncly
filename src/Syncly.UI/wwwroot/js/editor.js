@@ -86,9 +86,16 @@
     if (!el || attached.get(el) === blockId) return;
     attached.set(el, blockId);
 
-    el.addEventListener('input', () => {
+    const report = () => {
       dotnet.invokeMethodAsync('OnInput', el.textContent ?? '', caretOffset(el));
+    };
+
+    el.addEventListener('input', (event) => {
+      if (event.isComposing) return;
+      report();
     });
+
+    el.addEventListener('compositionend', report);
 
     el.addEventListener('focus', () => {
       dotnet.invokeMethodAsync('OnFocus');
@@ -302,6 +309,10 @@
     if (select && el.select) el.select();
   }
 
+  function isNarrow() {
+    return window.matchMedia('(max-width: 720px)').matches;
+  }
+
   window.syncly = {
     attachBlock,
     attachShell,
@@ -313,5 +324,6 @@
     anchorOf,
     setMenuOpen,
     setPaletteOpen,
+    isNarrow,
   };
 })();

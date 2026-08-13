@@ -156,6 +156,25 @@ public sealed class SynclyDatabase : IAsyncDisposable
                 tokenize = 'unicode61 remove_diacritics 2'
             );
             """, ct);
+
+        await EnsureColumnAsync("objects", "type", "TEXT NOT NULL DEFAULT 'page'", ct);
+        await EnsureColumnAsync("objects", "space_id", "TEXT NULL", ct);
+        await EnsureColumnAsync("objects", "color", "TEXT NULL", ct);
+        await ExecuteAsync("CREATE INDEX IF NOT EXISTS ix_objects_space ON objects (space_id);", ct);
+    }
+
+    private async Task EnsureColumnAsync(string table, string column, string definition, CancellationToken ct)
+    {
+        await using var command = _connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({table})";
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                return;
+        }
+
+        await ExecuteAsync($"ALTER TABLE {table} ADD COLUMN {column} {definition}", ct);
     }
 
     private async Task ExecuteAsync(string sql, CancellationToken ct)

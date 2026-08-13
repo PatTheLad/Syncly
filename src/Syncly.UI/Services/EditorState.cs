@@ -10,6 +10,7 @@ namespace Syncly.UI.Services;
 public sealed class EditorState(SynclyApp app)
 {
     private readonly List<string> _history = [];
+    private readonly HashSet<string> _expandedPages = new(StringComparer.Ordinal);
 
     public SynclyApp App { get; } = app;
 
@@ -22,13 +23,19 @@ public sealed class EditorState(SynclyApp app)
 
     public bool PaletteOpen { get; private set; }
 
-    public bool SidebarOpen { get; private set; } = true;
+    public bool SidebarOpen { get; private set; } = !OperatingSystem.IsAndroid();
 
     public string? FocusBlockId { get; private set; }
 
     public int FocusCaret { get; private set; }
 
     public event Action? Changed;
+
+    public string CurrentSpaceId => Workspace.CurrentSpaceId;
+
+    public PageRef? CurrentSpace => Workspace.CurrentSpace;
+
+    public bool SpaceSwitcherOpen { get; private set; }
 
     public void Open(string pageId)
     {
@@ -41,6 +48,11 @@ public sealed class EditorState(SynclyApp app)
         CurrentPageId = pageId;
         ReadingMode = true;
         FocusBlockId = null;
+
+        var page = Workspace.Page(pageId);
+        if (page is { SpaceId: { Length: > 0 } space } && space != CurrentSpaceId)
+            _ = Workspace.SelectSpaceAsync(space);
+
         Changed?.Invoke();
     }
 
@@ -73,10 +85,31 @@ public sealed class EditorState(SynclyApp app)
         Changed?.Invoke();
     }
 
-    public void ToggleSidebar()
+    public void ToggleSidebar() => SetSidebar(!SidebarOpen);
+
+    public void SetSidebar(bool open)
     {
-        SidebarOpen = !SidebarOpen;
+        if (SidebarOpen == open)
+            return;
+
+        SidebarOpen = open;
         Changed?.Invoke();
+    }
+
+    public bool IsPageExpanded(string pageId) => _expandedPages.Contains(pageId);
+
+    public void TogglePageExpanded(string pageId)
+    {
+        if (!_expandedPages.Remove(pageId))
+            _expandedPages.Add(pageId);
+
+        Changed?.Invoke();
+    }
+
+    public void ExpandPage(string pageId)
+    {
+        if (_expandedPages.Add(pageId))
+            Changed?.Invoke();
     }
 
     /// <summary>Asks the editor to put the caret in a specific block after the next render.</summary>
@@ -90,5 +123,39 @@ public sealed class EditorState(SynclyApp app)
 
     public void ClearFocusRequest() => FocusBlockId = null;
 
-    public IReadOnlyList<PageRef> Roots => Workspace.ChildrenOf(null);
+    public void ToggleSpaceSwitcher(bool? open = null)
+    {
+        SpaceSwitcherOpen = open ?? !SpaceSwitcherOpen;
+        Changed?.Invoke();
+    }
+
+    public async Task SwitchSpaceAsync(string spaceId)
+    {
+        await Workspace.SelectSpaceAsync(spaceId);
+        SpaceSwitcherOpen = false;
+
+        if (CurrentPageId is { } pageId)
+        {
+            var page = Workspace.Page(pageId);
+            if (page is null || (page.SpaceId is { } space && space != spaceId))
+            {
+                CurrentPageId = Workspace.ChildrenOf(null, spaceId).FirstOrDefault()?.Id;
+                ReadingMode = true;
+            }
+        }
+
+        Changed?.Invoke();
+    }
+
+    public async Task CreateSpaceAsync(string title, string? color = null)
+    {
+        var spaceId = await Workspace.CreateSpaceAsync(title, color);
+        CurrentPageId = null;
+        ReadingMode = true;
+        SpaceSwitcherOpen = false;
+        Changed?.Invoke();
+        _ = spaceId;
+    }
+
+    public IReadOnlyList<PageRef> Roots => Workspace.ChildrenOf(null, CurrentSpaceId);
 }

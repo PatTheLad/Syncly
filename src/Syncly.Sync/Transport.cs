@@ -30,6 +30,20 @@ public interface IPeerDiscovery : IAsyncDisposable
     Task StartAsync(DeviceDescriptor self, int listenPort, CancellationToken ct = default);
 
     Task StopAsync(CancellationToken ct = default);
+
+    /// <summary>Short human-readable state for the Devices screen.</summary>
+    string Status => IsAvailable ? "On" : "Off";
+
+    /// <summary>
+    /// Ask for nearby/Wi-Fi permissions and kick discovery. LAN discovery ignores this.
+    /// </summary>
+    Task RequestAccessAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+    /// <summary>
+    /// Form a link to a discovered peer that is not yet reachable over IP (Wi-Fi Direct).
+    /// LAN discovery has nothing to do here; the engine dials as soon as a beacon arrives.
+    /// </summary>
+    Task InviteAsync(DiscoveredPeer peer, CancellationToken ct = default) => Task.CompletedTask;
 }
 
 /// <summary>How bytes actually move once a peer has been found.</summary>

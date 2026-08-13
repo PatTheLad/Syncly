@@ -1,0 +1,93 @@
+@namespace Syncly.UI.Components
+@inject EditorState State
+
+<div class="overlay space-overlay" @onclick="Close">
+    <div class="space-switcher" @onclick:stopPropagation="true">
+        <div class="space-switcher-head">
+            <div>
+                <div class="space-switcher-kicker">Spaces</div>
+                <div class="space-switcher-title">Where you work</div>
+            </div>
+            <button class="chip muted" @onclick="Close">Close</button>
+        </div>
+
+        <div class="space-grid">
+            @foreach (var space in State.Workspace.Spaces)
+            {
+                <button type="button"
+                        class="space-card @(space.Id == State.CurrentSpaceId ? "active" : null)"
+                        @key="space.Id"
+                        @onclick="() => SwitchAsync(space.Id)">
+                    <span class="space-avatar lg" style="background: @space.Accent">@space.Initial</span>
+                    <span class="space-card-name">@space.DisplayTitle</span>
+                    <span class="space-card-meta">@CountLabel(space.Id)</span>
+                </button>
+            }
+
+            <button type="button" class="space-card create" @onclick="() => _creating = true">
+                <span class="space-avatar lg ghost">+</span>
+                <span class="space-card-name">New space</span>
+                <span class="space-card-meta">A separate set of pages</span>
+            </button>
+        </div>
+
+        @if (_creating)
+        {
+            <div class="space-create">
+                <input placeholder="Space name"
+                       value="@_name"
+                       @oninput="e => _name = e.Value?.ToString() ?? string.Empty"
+                       @onkeydown="OnKeyDown" />
+                <div class="space-colors">
+                    @foreach (var color in SpaceColors.All)
+                    {
+                        <button type="button"
+                                class="space-swatch @(_color == color ? "picked" : null)"
+                                style="background: @color"
+                                title="@color"
+                                @onclick="() => _color = color"></button>
+                    }
+                </div>
+                <div class="row">
+                    <button class="chip" @onclick="() => _creating = false">Cancel</button>
+                    <button class="chip primary" @onclick="CreateAsync">Create</button>
+                </div>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private bool _creating;
+    private string _name = string.Empty;
+    private string _color = SpaceColors.Default;
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    private Task Close() => OnClose.InvokeAsync();
+
+    private async Task SwitchAsync(string spaceId)
+    {
+        await State.SwitchSpaceAsync(spaceId);
+        await Close();
+    }
+
+    private async Task CreateAsync()
+    {
+        var title = string.IsNullOrWhiteSpace(_name) ? "Untitled space" : _name.Trim();
+        await State.CreateSpaceAsync(title, _color);
+        _name = string.Empty;
+        _creating = false;
+        await Close();
+    }
+
+    private Task OnKeyDown(KeyboardEventArgs args) =>
+        args.Key == "Enter" ? CreateAsync() : args.Key == "Escape" ? Close() : Task.CompletedTask;
+
+    private string CountLabel(string spaceId)
+    {
+        var count = State.Workspace.PagesIn(spaceId).Count;
+        return count == 1 ? "1 page" : $"{count} pages";
+    }
+}

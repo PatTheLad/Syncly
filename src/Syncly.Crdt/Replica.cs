@@ -306,13 +306,24 @@ public sealed class Replica
             return op;
         }
 
-        public void CreateObject(string objectId, string title, string? parentId = null)
+        public void CreateObject(
+            string objectId,
+            string title,
+            string? parentId = null,
+            string type = ObjectTypes.Page,
+            string? spaceId = null,
+            string? color = null)
         {
             SetProp(objectId, objectId, PropKeys.Title, title);
+            SetProp(objectId, objectId, PropKeys.Type, type);
             SetProp(objectId, objectId, PropKeys.CreatedAt,
                 DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString());
             if (parentId is not null)
                 SetProp(objectId, objectId, PropKeys.Parent, parentId);
+            if (spaceId is not null)
+                SetProp(objectId, objectId, PropKeys.Space, spaceId);
+            if (color is not null)
+                SetProp(objectId, objectId, PropKeys.Color, color);
         }
 
         public void SetProp(string objectId, string targetId, string key, string? value) =>

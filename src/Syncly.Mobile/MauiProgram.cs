@@ -1,7 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Syncly.App;
 using Syncly.Transport.Lan;
-using Syncly.Transport.WifiDirect;
 using Syncly.UI.Services;
 
 namespace Syncly.Mobile;
@@ -27,8 +26,8 @@ public static class MauiProgram
                 {
                     DataDirectory = FileSystem.AppDataDirectory,
                     DisplayName = DeviceInfo.Name,
-                    Transports = () => [new LanTcpTransport()],
-                    Discoveries = () => [new LanDiscovery(), new WifiDirectDiscovery("Android")],
+                    Transports = () => [new P2pBoundTcpTransport()],
+                    Discoveries = () => [new LanDiscovery(), new AndroidWifiDirectDiscovery()],
                 })
             .GetAwaiter()
             .GetResult();

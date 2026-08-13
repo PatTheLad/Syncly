@@ -126,7 +126,7 @@ public sealed class LanTcpTransport(ILogger<LanTcpTransport>? logger = null) : I
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(TimeSpan.FromSeconds(8));
+            timeout.CancelAfter(TimeSpan.FromSeconds(12));
             await client.ConnectAsync(address, port, timeout.Token);
             return new TcpChannel(client, PeerTransport.Lan);
         }

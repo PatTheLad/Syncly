@@ -16,6 +16,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <MauiIcon Include="Resources\AppIcon\appicon.svg" Color="#08080a" />
+    <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#08080a" BaseSize="128,128" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.Maui.Controls" Version="10.0.11" />
     <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Maui" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="10.0.11" />
@@ -23,14 +28,18 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Syncly.App\Syncly.App.csproj" />
+    <ProjectReference Include="..\Syncly.Model\Syncly.Model.csproj" />
+    <ProjectReference Include="..\Syncly.Sync\Syncly.Sync.csproj" />
     <ProjectReference Include="..\Syncly.Transport.Lan\Syncly.Transport.Lan.csproj" />
     <ProjectReference Include="..\Syncly.Transport.WifiDirect\Syncly.Transport.WifiDirect.csproj" />
     <ProjectReference Include="..\Syncly.UI\Syncly.UI.csproj" />
   </ItemGroup>
 
-  <!-- The UI assets live once, in Syncly.UI, and are pulled in as MAUI raw assets. -->
+  <!-- CSS/JS live in Syncly.UI. index.html is local so Android can set autostart="false". -->
   <ItemGroup>
-    <MauiAsset Include="..\Syncly.UI\wwwroot\**\*" LogicalName="wwwroot\%(RecursiveDir)%(Filename)%(Extension)" />
+    <MauiAsset Include="..\Syncly.UI\wwwroot\**\*"
+               Exclude="..\Syncly.UI\wwwroot\index.html"
+               LogicalName="wwwroot\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

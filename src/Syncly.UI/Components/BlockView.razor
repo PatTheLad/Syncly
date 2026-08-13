@@ -44,7 +44,7 @@
              class="block-text @(Block.Checked ? "done" : null)"
              contenteditable="true"
              spellcheck="true"
-             data-placeholder="@Placeholder">@Block.Text</div>
+             data-placeholder="@Placeholder"></div>
     }
 </div>
 
@@ -63,6 +63,7 @@
     private ElementReference _element;
     private DotNetObjectReference<BlockView>? _self;
     private string? _echo;
+    private string _pushed = "";
     private bool _attached;
     private bool _wasReading;
 
@@ -99,27 +100,14 @@
         _ => "Type '/' for commands",
     };
 
-    /// <summary>
-    /// Suppresses the re-render caused by our own keystroke coming back through the CRDT. A change
-    /// from a peer has different text, so it still lands and the caret is restored afterwards.
-    /// </summary>
-    protected override bool ShouldRender()
-    {
-        if (_echo is not null && string.Equals(_echo, Block.Text, StringComparison.Ordinal))
-        {
-            _echo = null;
-            return false;
-        }
-
-        return true;
-    }
-
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (Host.Reading)
         {
             _attached = false;
             _wasReading = true;
+            _pushed = Block.Text;
+            _echo = null;
             return;
         }
 
@@ -127,8 +115,29 @@
         {
             _self ??= DotNetObjectReference.Create(this);
             await Js.InvokeVoidAsync("syncly.attachBlock", _element, _self, Block.Id);
+            await Js.InvokeVoidAsync("syncly.setText", ElementId, Block.Text, -1);
+            _pushed = Block.Text;
+            _echo = null;
             _attached = true;
             _wasReading = false;
+            return;
+        }
+
+        // Keystrokes live in the DOM. Do not push stale CRDT text back until it has caught up.
+        if (_echo is not null)
+        {
+            if (!string.Equals(_echo, Block.Text, StringComparison.Ordinal))
+                return;
+
+            _echo = null;
+            _pushed = Block.Text;
+            return;
+        }
+
+        if (!string.Equals(_pushed, Block.Text, StringComparison.Ordinal))
+        {
+            await Js.InvokeVoidAsync("syncly.setText", ElementId, Block.Text, -1);
+            _pushed = Block.Text;
         }
     }
 

@@ -127,7 +127,8 @@ public sealed class SynclyApp : IAsyncDisposable
         var replica = new Replica(identity.DeviceId);
         var dirty = await RestoreAsync(replica, opLog, snapshots, database, logger, ct);
 
-        var workspace = new Workspace(replica, opLog, projection, loggerFactory.CreateLogger<Workspace>());
+        var workspace = new Workspace(
+            replica, opLog, projection, database, loggerFactory.CreateLogger<Workspace>());
 
         if (await LegacyImport.IsPendingAsync(database, ct))
         {
@@ -137,6 +138,7 @@ public sealed class SynclyApp : IAsyncDisposable
         }
 
         await workspace.ProjectAsync(dirty, ct);
+        await workspace.EnsureSpacesAsync(ct);
         await database.SetMetaAsync(ProjectionVersionKey, VersionVectorText.Format(replica.Version), ct);
 
         var pairing = new PairingBroker();

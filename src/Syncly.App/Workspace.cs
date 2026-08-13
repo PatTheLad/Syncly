@@ -15,22 +15,37 @@ public sealed class Workspace(
     Replica replica,
     OpLogStore opLog,
     ProjectionStore projection,
+    SynclyDatabase database,
     ILogger<Workspace>? logger = null)
 {
+    public const string DefaultSpaceId = "spc_default";
+    private const string CurrentSpaceMetaKey = "ui.space";
+
     private readonly ILogger _logger = logger ?? NullLogger<Workspace>.Instance;
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private List<PageRef> _pages = [];
+    private List<PageRef> _objects = [];
 
     public Replica Replica => replica;
 
-    public IReadOnlyList<PageRef> Pages => _pages;
+    /// <summary>Pages in every space. Spaces themselves are <see cref="Spaces"/>.</summary>
+    public IReadOnlyList<PageRef> Pages => _objects.Where(o => !o.IsSpace).ToList();
+
+    public IReadOnlyList<PageRef> Spaces =>
+        _objects.Where(o => o.IsSpace)
+            .OrderBy(s => s.Id == DefaultSpaceId ? 0 : 1)
+            .ThenBy(s => s.DisplayTitle, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    public string CurrentSpaceId { get; private set; } = DefaultSpaceId;
+
+    public PageRef? CurrentSpace => Space(CurrentSpaceId) ?? Spaces.FirstOrDefault();
 
     /// <summary>Raised whenever pages or blocks changed, from either a local edit or a peer.</summary>
     public event Action? Changed;
 
     public async Task RefreshPagesAsync(CancellationToken ct = default)
     {
-        _pages = await projection.ListPagesAsync(ct);
+        _objects = await projection.ListPagesAsync(ct);
         Changed?.Invoke();
     }
 
@@ -38,29 +53,125 @@ public sealed class Workspace(
 
     public BlockTree Tree(string pageId) => new(replica.Snapshot(pageId));
 
-    public PageRef? Page(string pageId) => _pages.FirstOrDefault(p => p.Id == pageId);
+    public PageRef? Page(string pageId) => _objects.FirstOrDefault(p => p.Id == pageId);
 
-    public IReadOnlyList<PageRef> ChildrenOf(string? parentId) =>
-        _pages.Where(p => p.ParentId == parentId)
+    public PageRef? Space(string spaceId) =>
+        _objects.FirstOrDefault(p => p.IsSpace && p.Id == spaceId);
+
+    public IReadOnlyList<PageRef> PagesIn(string spaceId) =>
+        Pages.Where(p => p.SpaceId == spaceId || (p.SpaceId is null && spaceId == DefaultSpaceId))
+            .ToList();
+
+    public IReadOnlyList<PageRef> ChildrenOf(string? parentId, string? spaceId = null)
+    {
+        spaceId ??= CurrentSpaceId;
+        return Pages
+            .Where(p => p.ParentId == parentId && BelongsTo(p, spaceId))
             .OrderBy(p => p.DisplayTitle, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static bool BelongsTo(PageRef page, string spaceId) =>
+        page.SpaceId == spaceId || (page.SpaceId is null && spaceId == DefaultSpaceId);
 
     // ------------------------------------------------------------------ pages
 
     public async Task<string> CreatePageAsync(
         string? parentId = null,
         string title = "",
+        string? spaceId = null,
         CancellationToken ct = default)
     {
         var pageId = NewId("pg");
+        var space = spaceId
+                    ?? (parentId is not null ? Page(parentId)?.SpaceId : null)
+                    ?? CurrentSpaceId
+                    ?? DefaultSpaceId;
 
         await CommitAsync(a =>
         {
-            a.CreateObject(pageId, title, parentId);
+            a.CreateObject(pageId, title, parentId, ObjectTypes.Page, space);
             a.UpsertBlock(pageId, NewId("bl"), null, FracIndex.Middle, BlockKind.Paragraph);
         }, pageId, ct);
 
         return pageId;
+    }
+
+    public async Task<string> CreateSpaceAsync(
+        string title,
+        string? color = null,
+        CancellationToken ct = default)
+    {
+        var spaceId = NewId("spc");
+        var accent = color ?? SpaceColors.Next(Spaces.Count);
+
+        await CommitAsync(
+            a => a.CreateObject(spaceId, title.Trim(), parentId: null, ObjectTypes.Space, spaceId: null, accent),
+            spaceId,
+            ct);
+
+        await SelectSpaceAsync(spaceId, ct);
+        return spaceId;
+    }
+
+    public async Task RenameSpaceAsync(string spaceId, string title, CancellationToken ct = default) =>
+        await RenamePageAsync(spaceId, title, ct);
+
+    public async Task SelectSpaceAsync(string spaceId, CancellationToken ct = default)
+    {
+        if (Space(spaceId) is null && spaceId != DefaultSpaceId)
+            return;
+
+        if (CurrentSpaceId == spaceId)
+            return;
+
+        CurrentSpaceId = spaceId;
+        await database.SetMetaAsync(CurrentSpaceMetaKey, spaceId, ct);
+        Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// Makes sure a Private space exists and every page belongs to one. Uses a stable id so two
+    /// devices that both boot empty still converge on the same space after they pair.
+    /// </summary>
+    public async Task EnsureSpacesAsync(CancellationToken ct = default)
+    {
+        await RefreshPagesAsync(ct);
+
+        var dirty = new List<string>();
+        if (Space(DefaultSpaceId) is null)
+        {
+            await CommitAsync(
+                a => a.CreateObject(
+                    DefaultSpaceId,
+                    "Private",
+                    parentId: null,
+                    ObjectTypes.Space,
+                    spaceId: null,
+                    SpaceColors.Default),
+                DefaultSpaceId,
+                ct);
+            dirty.Add(DefaultSpaceId);
+        }
+
+        var orphans = Pages.Where(p => string.IsNullOrEmpty(p.SpaceId)).ToList();
+        if (orphans.Count > 0)
+        {
+            await CommitAsync(a =>
+            {
+                foreach (var page in orphans)
+                    a.SetProp(page.Id, page.Id, PropKeys.Space, DefaultSpaceId);
+            }, orphans.Select(p => p.Id).ToList(), ct);
+        }
+
+        var stored = await database.GetMetaAsync(CurrentSpaceMetaKey, ct);
+        if (stored is { Length: > 0 } && Space(stored) is not null)
+            CurrentSpaceId = stored;
+        else
+            CurrentSpaceId = DefaultSpaceId;
+
+        if (dirty.Count > 0 || orphans.Count > 0)
+            await RefreshPagesAsync(ct);
     }
 
     public Task RenamePageAsync(string pageId, string title, CancellationToken ct = default) =>
@@ -94,17 +205,20 @@ public sealed class Workspace(
     public async Task<string> EnsurePageByTitleAsync(string title, CancellationToken ct = default)
     {
         var key = Wikilinks.Key(title);
-        var existing = _pages.FirstOrDefault(p => Wikilinks.Key(p.Title) == key);
+        var existing = Pages.FirstOrDefault(p =>
+            Wikilinks.Key(p.Title) == key && BelongsTo(p, CurrentSpaceId));
+        existing ??= Pages.FirstOrDefault(p => Wikilinks.Key(p.Title) == key);
         if (existing is not null)
             return existing.Id;
 
-        return await CreatePageAsync(null, title.Trim(), ct);
+        return await CreatePageAsync(null, title.Trim(), CurrentSpaceId, ct);
     }
 
     public string? ResolvePageByTitle(string title)
     {
         var key = Wikilinks.Key(title);
-        return _pages.FirstOrDefault(p => Wikilinks.Key(p.Title) == key)?.Id;
+        return Pages.FirstOrDefault(p => Wikilinks.Key(p.Title) == key && BelongsTo(p, CurrentSpaceId))?.Id
+               ?? Pages.FirstOrDefault(p => Wikilinks.Key(p.Title) == key)?.Id;
     }
 
     // ----------------------------------------------------------------- blocks
@@ -371,7 +485,7 @@ public sealed class Workspace(
             foreach (var objectId in objectIds.Distinct(StringComparer.Ordinal))
                 await projection.WriteAsync(replica.Snapshot(objectId), ct);
 
-            _pages = await projection.ListPagesAsync(ct);
+            _objects = await projection.ListPagesAsync(ct);
         }
         catch (Exception ex)
         {

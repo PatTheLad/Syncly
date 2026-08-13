@@ -7,7 +7,7 @@
     <div class="topbar">
         <div class="crumbs"><span class="crumb-current">Devices</span></div>
         <div class="topbar-actions">
-            <span class="chip muted">@string.Join(" · ", App.Sync.TransportNames)</span>
+            <span class="chip muted">@DiscoveryHint</span>
             <button class="chip primary" @onclick="() => App.Sync.SyncNowAsync()">Sync now</button>
         </div>
     </div>
@@ -17,10 +17,56 @@
             <section>
                 <h2>This device</h2>
                 <div class="card">
-                    <div class="card-title">@App.Identity.DisplayName</div>
-                    <div class="card-sub">@App.Identity.DeviceId</div>
-                    <div class="card-sub">Listening for peers on the local network.</div>
+                    <div class="row">
+                        <span class="nearby-avatar self">@Initial(App.Identity.DisplayName)</span>
+                        <div class="grow">
+                            <div class="card-title">@App.Identity.DisplayName</div>
+                            <div class="card-sub">Visible to nearby Syncly devices over Wi-Fi Direct and the local network.</div>
+                        </div>
+                    </div>
                 </div>
+            </section>
+
+            <section>
+                <h2>Nearby</h2>
+                <p class="lede nearby-lede">
+                    Bring another phone close and tap it — you do not need the same Wi-Fi.
+                    On the other phone, accept the Wi-Fi Direct popup if Android shows one.
+                </p>
+                <div class="card-sub nearby-status">@App.Sync.NearbyStatus</div>
+                @if (NeedsNearbyPermission)
+                {
+                    <button class="chip primary" @onclick="EnableNearbyAsync">Enable nearby</button>
+                }
+                @if (App.Sync.DiscoveredPeers.Count == 0)
+                {
+                    <div class="nearby-empty">
+                        <div class="nearby-pulse"></div>
+                        <div class="panel-empty">Looking for devices… keep Syncly open on both.</div>
+                    </div>
+                }
+                else
+                {
+                    <div class="nearby-grid">
+                        @foreach (var peer in App.Sync.DiscoveredPeers)
+                        {
+                            <button type="button"
+                                    class="nearby-card"
+                                    @key="peer.DeviceId + peer.Endpoint"
+                                    @onclick="() => ConnectPeerAsync(peer)">
+                                <span class="nearby-avatar" style="background: @SpaceColors.ForId(peer.DeviceId)">
+                                    @Initial(peer.DisplayName)
+                                </span>
+                                <span class="nearby-name">@peer.DisplayName</span>
+                                <span class="nearby-meta">@TransportLabel(peer.Transport)</span>
+                            </button>
+                        }
+                    </div>
+                }
+                @if (_error is { Length: > 0 })
+                {
+                    <div class="card-sub error">@_error</div>
+                }
             </section>
 
             <section>
@@ -48,43 +94,14 @@
             </section>
 
             <section>
-                <h2>Nearby</h2>
-                @if (App.Sync.DiscoveredPeers.Count == 0)
-                {
-                    <div class="panel-empty">
-                        No devices found yet. Both devices must be on the same network with Syncly open.
-                    </div>
-                }
-                else
-                {
-                    @foreach (var peer in App.Sync.DiscoveredPeers)
-                    {
-                        <div class="card" @key="peer.DeviceId + peer.Endpoint">
-                            <div class="row">
-                                <span class="card-title grow">@peer.DisplayName</span>
-                                <span class="chip muted">@peer.Transport</span>
-                                <button class="chip" @onclick="() => ConnectAsync(peer.Address, peer.Port)">
-                                    Connect
-                                </button>
-                            </div>
-                            <div class="card-sub">@peer.Endpoint · seen @peer.SeenAt.ToLocalTime().ToString("t")</div>
-                        </div>
-                    }
-                }
-            </section>
-
-            <section>
-                <h2>Connect manually</h2>
+                <h2>Connect with an address</h2>
                 <div class="card">
                     <div class="row">
                         <input class="field grow" placeholder="192.168.1.42" @bind="_address" />
                         <input class="field port" type="number" @bind="_port" />
                         <button class="chip primary" @onclick="() => ConnectAsync(_address, _port)">Connect</button>
                     </div>
-                    @if (_error is { Length: > 0 })
-                    {
-                        <div class="card-sub error">@_error</div>
-                    }
+                    <div class="card-sub">Only needed when both devices are on the same network and nearby discovery is blocked.</div>
                 </div>
             </section>
 
@@ -92,7 +109,7 @@
                 <h2>Paired devices</h2>
                 @if (_trusted.Count == 0)
                 {
-                    <div class="panel-empty">Nothing paired yet.</div>
+                    <div class="panel-empty">Nothing paired yet. Tap a nearby device, then confirm the six-digit code on both screens.</div>
                 }
                 else
                 {
@@ -100,13 +117,16 @@
                     {
                         <div class="card" @key="device.DeviceId">
                             <div class="row">
+                                <span class="nearby-avatar sm" style="background: @SpaceColors.ForId(device.DeviceId)">
+                                    @Initial(device.DisplayName)
+                                </span>
                                 <span class="card-title grow">@device.DisplayName</span>
                                 <button class="chip danger" @onclick="() => RevokeAsync(device.DeviceId)">
                                     Unpair
                                 </button>
                             </div>
                             <div class="card-sub">
-                                @device.DeviceId · paired @device.TrustedAt.ToLocalTime().ToString("g")
+                                Paired @device.TrustedAt.ToLocalTime().ToString("g")
                             </div>
                         </div>
                     }
@@ -122,15 +142,50 @@
     private int _port = 45_654;
     private string? _error;
 
+    private string DiscoveryHint
+    {
+        get
+        {
+            var wifi = App.Sync.Discoveries.Any(d =>
+                d.Name.Contains("Wi-Fi Direct", StringComparison.OrdinalIgnoreCase) && d.Available);
+            return wifi ? "Nearby + LAN" : string.Join(" · ", App.Sync.TransportNames);
+        }
+    }
+
+    private bool NeedsNearbyPermission =>
+        App.Sync.NearbyStatus.Contains("allow", StringComparison.OrdinalIgnoreCase)
+        || App.Sync.NearbyStatus.Contains("Open Devices", StringComparison.OrdinalIgnoreCase);
+
     protected override async Task OnInitializedAsync()
     {
         App.Sync.Changed += Refresh;
+        await App.Sync.RequestNearbyAccessAsync();
+        await LoadAsync();
+    }
+
+    private async Task EnableNearbyAsync()
+    {
+        await App.Sync.RequestNearbyAccessAsync();
         await LoadAsync();
     }
 
     private void Refresh() => InvokeAsync(StateHasChanged);
 
     private async Task LoadAsync() => _trusted = await App.Peers.ListAsync();
+
+    private async Task ConnectPeerAsync(DiscoveredPeer peer)
+    {
+        _error = null;
+        try
+        {
+            await App.Sync.ConnectToPeerAsync(peer);
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
 
     private async Task ConnectAsync(string address, int port)
     {
@@ -158,6 +213,19 @@
         await App.Peers.RevokeAsync(deviceId);
         await LoadAsync();
     }
+
+    private static string Initial(string name)
+    {
+        var trimmed = name.Trim();
+        return trimmed.Length == 0 ? "?" : char.ToUpperInvariant(trimmed[0]).ToString();
+    }
+
+    private static string TransportLabel(PeerTransport transport) => transport switch
+    {
+        PeerTransport.WifiDirect => "Nearby",
+        PeerTransport.Lan => "Same Wi-Fi",
+        _ => "Address",
+    };
 
     private static string PhaseClass(SyncPhase phase) => phase switch
     {

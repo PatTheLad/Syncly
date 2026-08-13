@@ -199,6 +199,9 @@ public sealed class DocumentState(string objectId)
             Title = Prop(ObjectId, PropKeys.Title) ?? string.Empty,
             Icon = Prop(ObjectId, PropKeys.Icon),
             ParentId = Prop(ObjectId, PropKeys.Parent),
+            SpaceId = Prop(ObjectId, PropKeys.Space),
+            Type = Prop(ObjectId, PropKeys.Type) ?? ObjectTypes.Page,
+            Color = Prop(ObjectId, PropKeys.Color),
             IsDeleted = IsDeleted(ObjectId),
             CreatedAt = createdAt is not null && long.TryParse(createdAt, out var ms)
                 ? DateTimeOffset.FromUnixTimeMilliseconds(ms)
