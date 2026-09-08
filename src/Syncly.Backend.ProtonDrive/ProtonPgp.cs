@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Org.BouncyCastle.Bcpg;
 using Org.BouncyCastle.Bcpg.OpenPgp;
-using Org.BouncyCastle.Bcpg.Sig;
+using Org.BouncyCastle.Crypto;
 using Org.BouncyCastle.Crypto.Agreement;
 using Org.BouncyCastle.Crypto.Generators;
 using Org.BouncyCastle.Crypto.Parameters;
@@ -98,9 +98,12 @@ internal static class ProtonPgp
     public static (string Armored, ProtonKeySet Keys) GenerateNodeKey(byte[] passphrase)
     {
         var random = new SecureRandom();
-        var ed = new Ed25519KeyPairGenerator();
-        ed.Init(new Ed25519KeyGenerationParameters(random));
-        var signPair = new PgpKeyPair(PublicKeyAlgorithmTag.EdDsa_Legacy, ed.GenerateKeyPair(), DateTime.UtcNow);
+        // RSA primary: gopenpgp verifies those binding signatures. BC EdDSA
+        // (alg 22) bindings are often dropped, which leaves no encryption key
+        // and Proton returns 200501 on ContentKeyPacket.
+        var rsa = new RsaKeyPairGenerator();
+        rsa.Init(new KeyGenerationParameters(random, 2048));
+        var signPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaSign, rsa.GenerateKeyPair(), DateTime.UtcNow);
 
         var x25519 = new X25519KeyPairGenerator();
         x25519.Init(new X25519KeyGenerationParameters(random));
@@ -108,13 +111,8 @@ internal static class ProtonPgp
 
         var primaryHashed = new PgpSignatureSubpacketGenerator();
         primaryHashed.SetKeyFlags(false, PgpKeyFlags.CanCertify | PgpKeyFlags.CanSign);
-        primaryHashed.SetFeature(false, Features.FEATURE_MODIFICATION_DETECTION);
-        primaryHashed.SetFeature(false, Features.FEATURE_AEAD_ENCRYPTED_DATA);
-
         var subHashed = new PgpSignatureSubpacketGenerator();
         subHashed.SetKeyFlags(false, 0x04 | 0x08);
-        subHashed.SetFeature(false, Features.FEATURE_MODIFICATION_DETECTION);
-        subHashed.SetFeature(false, Features.FEATURE_AEAD_ENCRYPTED_DATA);
 
         var generator = new PgpKeyRingGenerator(
             PgpSignature.PositiveCertification,
@@ -383,18 +381,15 @@ internal static class ProtonPgp
         var mpi = new MPInteger(new BigInteger(1, point)).GetEncoded();
 
         var shared = AgreeX25519((X25519PrivateKeyParameters)eph.Private, recipient);
-        // v6 PKESK wraps key‖checksum only — no algorithm byte (RFC 9580). Proton's
-        // current web client writes v4 node keys + v6 content-key packets.
         var wrapped = AesWrap(
             Rfc6637Kek(publicKey, shared),
-            PgpPad.PadSessionData(SessionInfoV6(sessionKey), false));
+            PgpPad.PadSessionData(SessionInfoV3(sessionKey), false));
 
-        var fingerprint = publicKey.GetFingerprint();
         using var body = new MemoryStream();
-        body.WriteByte(6);
-        body.WriteByte((byte)(1 + fingerprint.Length));
-        body.WriteByte((byte)publicKey.Version);
-        body.Write(fingerprint);
+        body.WriteByte(3);
+        Span<byte> keyId = stackalloc byte[8];
+        BinaryPrimitives.WriteInt64BigEndian(keyId, publicKey.KeyId);
+        body.Write(keyId);
         body.WriteByte((byte)PublicKeyAlgorithmTag.ECDH);
         body.Write(mpi);
         body.WriteByte((byte)wrapped.Length);
@@ -492,10 +487,11 @@ internal static class ProtonPgp
         return param.ToArray();
     }
 
-    private static byte[] SessionInfoV6(byte[] sessionKey)
+    private static byte[] SessionInfoV3(byte[] sessionKey)
     {
-        var info = new byte[sessionKey.Length + 2];
-        sessionKey.CopyTo(info, 0);
+        var info = new byte[sessionKey.Length + 3];
+        info[0] = (byte)SymmetricKeyAlgorithmTag.Aes256;
+        sessionKey.CopyTo(info, 1);
         var check = 0;
         for (var i = 0; i < sessionKey.Length; i++)
             check += sessionKey[i];
