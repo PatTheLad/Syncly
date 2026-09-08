@@ -24,8 +24,28 @@ public class SyncChainTests
     public void Rejects_a_typo_in_the_checksum()
     {
         var words = SyncChain.Create().Words.Split(' ');
-        words[23] = words[23] == "zoo" ? "zone" : "zoo";
-        Assert.Throws<FormatException>(() => Bip39.Decode(string.Join(' ', words)));
+        var original = words[^1];
+        // The last word carries only an 8-bit checksum, so a single fixed replacement
+        // (e.g. "zoo") is valid about once in 256 random phrases. Search for a typo
+        // that actually breaks validation.
+        string? broken = null;
+        foreach (var candidate in Bip39.WordList)
+        {
+            if (candidate == original)
+                continue;
+
+            words[^1] = candidate;
+            var phrase = string.Join(' ', words);
+            if (!Bip39.TryDecode(phrase, out _))
+            {
+                broken = phrase;
+                break;
+            }
+        }
+
+        Assert.NotNull(broken);
+        var ex = Assert.Throws<FormatException>(() => Bip39.Decode(broken));
+        Assert.Contains("checksum", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
