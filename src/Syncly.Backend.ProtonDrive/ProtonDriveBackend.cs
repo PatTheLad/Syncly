@@ -119,7 +119,8 @@ public sealed class ProtonDriveBackend : ISyncBackend, IAsyncDisposable
     private static void ApplyHeaders(HttpClient http)
     {
         http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        http.DefaultRequestHeaders.TryAddWithoutValidation("x-pm-appversion", "Other_1.0.0");
+        // Proton expects external clients as external-drive@version (see Drive API notes).
+        http.DefaultRequestHeaders.TryAddWithoutValidation("x-pm-appversion", "external-drive@2.0.0");
         http.DefaultRequestHeaders.TryAddWithoutValidation("x-pm-uid", "0");
     }
 
