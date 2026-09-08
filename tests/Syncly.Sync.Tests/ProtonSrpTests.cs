@@ -59,6 +59,26 @@ public class ProtonSrpTests
         Assert.Equal(256, proofs.ExpectedServer.Length);
     }
 
+    [Fact]
+    public void DeriveKeyPassphrase_is_the_31_char_bcrypt_suffix()
+    {
+        var salt = Enumerable.Range(1, 16).Select(i => (byte)i).ToArray();
+        var passphrase = ProtonSrp.DeriveKeyPassphrase("hunter2"u8.ToArray(), salt);
+        Assert.Equal(31, passphrase.Length);
+        Assert.Equal(passphrase, ProtonSrp.DeriveKeyPassphrase("hunter2"u8.ToArray(), salt));
+        Assert.NotEqual(passphrase, ProtonSrp.DeriveKeyPassphrase("hunter3"u8.ToArray(), salt));
+    }
+
+    [Fact]
+    public void Password_encrypted_payload_round_trips_with_derived_key()
+    {
+        var salt = Enumerable.Range(1, 16).Select(i => (byte)i).ToArray();
+        var key = ProtonSrp.DeriveKeyPassphrase("hunter2"u8.ToArray(), salt);
+        var armored = ProtonPgp.EncryptWithPassword("share-passphrase"u8.ToArray(), key);
+        var plain = ProtonPgp.DecryptWithPassword(armored, key);
+        Assert.Equal("share-passphrase"u8.ToArray(), plain);
+    }
+
     private static byte[] ToLe(BigInteger value)
     {
         var buf = new byte[ProtonSrp.ByteLength];

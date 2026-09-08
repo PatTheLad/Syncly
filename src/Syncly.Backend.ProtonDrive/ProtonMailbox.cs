@@ -28,20 +28,51 @@ internal sealed class ProtonMailbox
 
     public static ProtonMailbox Unlock(ProtonShareDto share, string urlPassword)
     {
-        var salt = Convert.FromBase64String(share.SharePasswordSalt);
-        var hashed = ComputeKeyPassword(urlPassword, salt);
-        byte[] passphrase;
+        if (string.IsNullOrWhiteSpace(share.SharePassphrase) || string.IsNullOrWhiteSpace(share.ShareKey))
+            throw new ProtonDriveException("Proton Drive did not return a share key for this link.");
+
+        byte[] salt;
         try
         {
-            passphrase = ProtonPgp.DecryptWithPassword(share.SharePassphrase, hashed);
+            salt = Convert.FromBase64String(share.SharePasswordSalt);
         }
-        catch (Exception ex) when (ex is not ProtonDriveException)
+        catch (FormatException ex)
         {
-            throw new ProtonDriveException("Could not decrypt the Proton Drive share passphrase.", ex);
+            throw new ProtonDriveException("Proton Drive share salt is not valid.", ex);
         }
 
-        var (privateKey, publicKey) = ProtonPgp.UnlockPrivateKey(share.ShareKey, passphrase);
-        return new ProtonMailbox(privateKey, publicKey);
+        var password = Encoding.UTF8.GetBytes(urlPassword);
+        var candidates = KeyPasswordCandidates(password, salt);
+
+        Exception? last = null;
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                var passphrase = ProtonPgp.DecryptWithPassword(share.SharePassphrase, candidate);
+                var (privateKey, publicKey) = ProtonPgp.UnlockPrivateKey(share.ShareKey, passphrase);
+                return new ProtonMailbox(privateKey, publicKey);
+            }
+            catch (Exception ex) when (ex is PgpException or ProtonDriveException or InvalidOperationException)
+            {
+                last = ex;
+            }
+        }
+
+        throw new ProtonDriveException(
+            "Could not decrypt the Proton Drive share passphrase. Check that the link still has Editor access.",
+            last);
+    }
+
+    internal static IEnumerable<byte[]> KeyPasswordCandidates(byte[] password, byte[] salt)
+    {
+        yield return ProtonSrp.DeriveKeyPassphrase(password, salt);
+
+        var salt16 = salt.Length == 16 ? salt : ProtonSrp.BcryptSalt16(salt);
+        var full = Org.BouncyCastle.Crypto.Generators.OpenBsdBCrypt.Generate(
+            "2y", Encoding.Latin1.GetChars(password), salt16, 10);
+        yield return Encoding.ASCII.GetBytes(full);
+        yield return password;
     }
 
     public void Bind(HttpClient http, string token, string uid, string accessToken, string volumeId, string linkId)
@@ -295,23 +326,6 @@ internal sealed class ProtonMailbox
         if (root.TryGetProperty("Link", out var single))
             yield return single;
     }
-
-    /// <summary>
-    /// Proton <c>computeKeyPassword</c>: bcrypt of the URL password with the share salt
-    /// (10 bytes plus the literal <c>proton</c> pad).
-    /// </summary>
-    internal static byte[] ComputeKeyPassword(string password, byte[] salt)
-    {
-        var hashed = Org.BouncyCastle.Crypto.Generators.OpenBsdBCrypt.Generate(
-            "2y",
-            password.ToCharArray(),
-            ProtonSrp.BcryptSalt16(salt),
-            10);
-        return Encoding.UTF8.GetBytes(hashed);
-    }
-
-    internal static byte[] MailboxHash(string password, byte[] salt) =>
-        ComputeKeyPassword(password, salt);
 
     private static bool LooksArmored(byte[] raw) =>
         raw.Length > 24 && Encoding.UTF8.GetString(raw.AsSpan(0, Math.Min(raw.Length, 40)))

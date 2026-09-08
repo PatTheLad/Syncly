@@ -186,6 +186,29 @@ internal static class ProtonSrp
         return ExpandHash(input);
     }
 
+    /// <summary>
+    /// Proton <c>computeKeyPassword</c> / <c>derive_key_passphrase</c>: bcrypt the
+    /// password with a 16-byte salt, then keep the trailing 31-character hash
+    /// (drop <c>$2y$10$</c> and the encoded salt). That 31-byte string is the OpenPGP passphrase.
+    /// </summary>
+    internal static byte[] DeriveKeyPassphrase(byte[] password, byte[] salt)
+    {
+        byte[] salt16;
+        if (salt.Length == 16)
+            salt16 = salt;
+        else if (salt.Length == 10)
+            salt16 = BcryptSalt16(salt);
+        else
+            throw new ProtonDriveException(
+                $"Proton Drive share salt is {salt.Length} bytes; expected 16.");
+
+        var full = OpenBsdBCrypt.Generate("2y", Encoding.Latin1.GetChars(password), salt16, 10);
+        if (full.Length < 60)
+            throw new ProtonDriveException("Proton Drive bcrypt hash was truncated.");
+
+        return Encoding.ASCII.GetBytes(full[29..]);
+    }
+
     internal static byte[] BcryptSalt16(byte[] salt)
     {
         var salt16 = new byte[16];

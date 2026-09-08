@@ -16,7 +16,7 @@ internal static class ProtonPgp
     {
         using var input = PgpUtilities.GetDecoderStream(new MemoryStream(Encoding.UTF8.GetBytes(armored)));
         var factory = new PgpObjectFactory(input);
-        var encrypted = RequireEncrypted(factory.NextPgpObject());
+        var encrypted = RequireEncrypted(factory);
         PgpPbeEncryptedData? pbe = null;
 
         foreach (PgpEncryptedData candidate in encrypted.GetEncryptedDataObjects())
@@ -32,7 +32,7 @@ internal static class ProtonPgp
             throw new ProtonDriveException("Proton Drive share passphrase is not password-encrypted.");
 
         using var clear = pbe.GetDataStream(ToChars(password));
-        return ReadLiteral(new PgpObjectFactory(clear).NextPgpObject());
+        return ReadLiteral(new PgpObjectFactory(clear));
     }
 
     public static (PgpPrivateKey Private, PgpPublicKey Public) UnlockPrivateKey(string armoredKey, byte[] passphrase)
@@ -64,7 +64,7 @@ internal static class ProtonPgp
     {
         using var input = PgpUtilities.GetDecoderStream(new MemoryStream(Encoding.UTF8.GetBytes(armored)));
         var factory = new PgpObjectFactory(input);
-        var encrypted = RequireEncrypted(factory.NextPgpObject());
+        var encrypted = RequireEncrypted(factory);
         PgpPublicKeyEncryptedData? pk = null;
 
         foreach (PgpEncryptedData candidate in encrypted.GetEncryptedDataObjects())
@@ -82,7 +82,7 @@ internal static class ProtonPgp
             throw new ProtonDriveException("Proton Drive message is not encrypted to the share key.");
 
         using var clear = pk.GetDataStream(key);
-        return ReadLiteral(new PgpObjectFactory(clear).NextPgpObject());
+        return ReadLiteral(new PgpObjectFactory(clear));
     }
 
     public static string EncryptWithPassword(byte[] plaintext, byte[] password)
@@ -117,26 +117,40 @@ internal static class ProtonPgp
         return Encoding.ASCII.GetString(outStream.ToArray());
     }
 
-    private static PgpEncryptedDataList RequireEncrypted(PgpObject obj)
+    private static PgpEncryptedDataList RequireEncrypted(PgpObjectFactory factory)
     {
-        if (obj is PgpEncryptedDataList list)
-            return list;
+        PgpObject? obj;
+        while ((obj = factory.NextPgpObject()) is not null)
+        {
+            if (obj is PgpMarker or PgpOnePassSignatureList or PgpSignatureList)
+                continue;
 
-        if (obj is PgpCompressedData compressed)
-            return RequireEncrypted(new PgpObjectFactory(compressed.GetDataStream()).NextPgpObject());
+            if (obj is PgpEncryptedDataList list)
+                return list;
+
+            if (obj is PgpCompressedData compressed)
+                return RequireEncrypted(new PgpObjectFactory(compressed.GetDataStream()));
+        }
 
         throw new ProtonDriveException("Expected an encrypted Proton Drive message.");
     }
 
-    private static byte[] ReadLiteral(PgpObject obj)
+    private static byte[] ReadLiteral(PgpObjectFactory factory)
     {
-        if (obj is PgpCompressedData compressed)
-            obj = new PgpObjectFactory(compressed.GetDataStream()).NextPgpObject();
-
-        if (obj is PgpLiteralData literal)
+        PgpObject? obj;
+        while ((obj = factory.NextPgpObject()) is not null)
         {
-            using var stream = literal.GetInputStream();
-            return Streams.ReadAll(stream);
+            if (obj is PgpMarker or PgpOnePassSignatureList or PgpSignatureList)
+                continue;
+
+            if (obj is PgpCompressedData compressed)
+                return ReadLiteral(new PgpObjectFactory(compressed.GetDataStream()));
+
+            if (obj is PgpLiteralData literal)
+            {
+                using var stream = literal.GetInputStream();
+                return Streams.ReadAll(stream);
+            }
         }
 
         throw new ProtonDriveException("Proton Drive payload was not literal data.");
