@@ -5,6 +5,8 @@
 @inject EditorState State
 @inject IJSRuntime Js
 @inject IAppUpdater Updater
+@inject IQrScanner QrScanner
+@inject IDeviceCamera Camera
 
 <div class="workspace">
     <div class="topbar">
@@ -45,11 +47,16 @@
                             <span class="card-sub">More providers later</span>
                         </div>
                         <div class="card-sub">
-                            In Proton Drive, share a folder → public link → <strong>Editor</strong>. Paste the full URL, including the part after #.
+                            In Proton Drive, share a folder → public link → <strong>Editor</strong>. Paste the full URL, including the part after # (usually 12 characters). If you turned on “Require password”, type that separate password below — not the # secret again.
                         </div>
                         <div class="row">
                             <input class="field grow" placeholder="https://drive.proton.me/urls/…#…"
                                    @bind="_prefs.ProtonShareUrl" @bind:event="oninput" />
+                        </div>
+                        <div class="row">
+                            <input class="field grow" type="password" autocomplete="off"
+                                   placeholder="Share password (optional)"
+                                   @bind="_prefs.ProtonSharePassword" @bind:event="oninput" />
                         </div>
                         <div class="row">
                             <button class="chip" @onclick="SaveMailboxAsync">Save</button>
@@ -67,6 +74,7 @@
                     <div class="card-title">Chain code</div>
                     <div class="card-sub">
                         Same idea as Brave Sync: 24 words (or a QR) are the encryption key. Anyone with the code can read this mailbox.
+                        When a Proton mailbox is saved, the QR also carries the share link and password so a phone can join in one scan.
                     </div>
 
                     @if (App.Sync.Chain is { } chain)
@@ -76,8 +84,8 @@
                                 @(_revealChain ? "Hide words" : "Show words")
                             </button>
                             <button class="chip" @onclick="() => CopyAsync(chain.Words)">Copy words</button>
-                            <button class="chip" @onclick="() => CopyAsync(chain.Uri)">Copy link</button>
-                            <button class="chip" @onclick="() => _showQr = !_showQr">
+                            <button class="chip" @onclick="() => CopyAsync(InvitePayload() ?? chain.Uri)">Copy invite</button>
+                            <button class="chip" @onclick="ToggleQrAsync">
                                 @(_showQr ? "Hide QR" : "Show QR")
                             </button>
                         </div>
@@ -90,14 +98,24 @@
                         @if (_showQr)
                         {
                             <div class="qr-wrap">
-                                <img class="qr" alt="Sync chain QR code" src="@QrDataUri(chain.Uri)" />
-                                <div class="card-sub">Scan this on the other device, or type the 24 words.</div>
+                                <img class="qr" alt="Sync invite QR code" src="@QrDataUri(InvitePayload() ?? chain.Uri)" />
+                                <div class="card-sub">
+                                    @if (App.Sync.Preferences.HasMailbox)
+                                    {
+                                        <text>Scan on another device after install — joins the chain and applies the mailbox (link + password).</text>
+                                    }
+                                    else
+                                    {
+                                        <text>Scan this on the other device, or type the 24 words. Save a mailbox first to include Proton settings in the QR.</text>
+                                    }
+                                </div>
                             </div>
                         }
 
                         <div class="card-sub">Chain @_shortId · rotating makes old cloud blobs unreadable.</div>
                         <div class="row wrap">
                             <button class="chip danger" @onclick="RotateAsync">Rotate chain</button>
+                            <button class="chip" @onclick="LeaveChainAsync">Leave chain</button>
                         </div>
                     }
                     else
@@ -112,7 +130,7 @@
                     @if (_joinOpen || App.Sync.Chain is null)
                     {
                         <textarea class="field chain-input" rows="3"
-                                  placeholder="24 words, or a syncly:sync:v1:… code"
+                                  placeholder="24 words, syncly:sync:…, or a syncly:invite:… QR payload"
                                   @bind="_joinText"></textarea>
                         <div class="row">
                             <button class="chip primary" @onclick="JoinAsync">Join</button>
@@ -263,6 +281,15 @@
 
     private void Refresh() => InvokeAsync(StateHasChanged);
 
+    private string? InvitePayload() => App.Sync.InviteUri();
+
+    private async Task ToggleQrAsync()
+    {
+        if (!_showQr)
+            await SaveMailboxAsync();
+        _showQr = !_showQr;
+    }
+
     private async Task SetBackendAsync(SyncBackendKind kind)
     {
         _prefs.Backend = kind;
@@ -309,7 +336,9 @@
             await App.Sync.CreateChainAsync();
             _revealChain = true;
             _showQr = true;
-            _chainMessage = "Share the words or QR with your other devices.";
+            _chainMessage = App.Sync.Preferences.HasMailbox
+                ? "Share the QR with your phone — it includes the chain and Proton mailbox."
+                : "Share the words or QR with your other devices.";
         }
         catch (Exception ex)
         {
@@ -324,9 +353,11 @@
         try
         {
             await App.Sync.JoinChainAsync(_joinText);
+            _prefs = App.Sync.Preferences;
             _joinText = string.Empty;
             _joinOpen = false;
-            _chainMessage = "Joined the chain. Sync now to pull from the mailbox.";
+            _chainMessage = "Joined. Sync now to pull from the mailbox.";
+            _ = App.Sync.SyncNowAsync();
         }
         catch (Exception ex)
         {
@@ -337,7 +368,7 @@
 
     private async Task RotateAsync()
     {
-            if (!await Js.InvokeAsync<bool>("syncly.confirm",
+        if (!await Js.InvokeAsync<bool>("syncly.confirm",
                 "Rotate the chain? Other devices must scan the new code, and old cloud files become unreadable."))
             return;
 
@@ -348,16 +379,47 @@
         _chainMessage = "New chain created. Update every other device.";
     }
 
+    private async Task LeaveChainAsync()
+    {
+        if (!await Js.InvokeAsync<bool>("syncly.confirm",
+                "Leave this chain? This device stops syncing until you create or join another. Your local notes stay. Mailbox settings are kept so you can join a new chain on the same share."))
+            return;
+
+        _chainError = false;
+        try
+        {
+            await App.Sync.ClearChainAsync();
+            _revealChain = false;
+            _showQr = false;
+            _joinOpen = true;
+            _joinText = string.Empty;
+            _chainMessage = "Left the chain. Create a new one or scan an invite to join another.";
+        }
+        catch (Exception ex)
+        {
+            _chainError = true;
+            _chainMessage = ex.Message;
+        }
+    }
+
     private async Task ScanQrAsync()
     {
         _chainError = false;
         try
         {
-            var value = await Js.InvokeAsync<string?>("syncly.scanQr");
+            if (!await Camera.EnsurePermissionAsync())
+            {
+                _joinOpen = true;
+                _chainError = true;
+                _chainMessage = "Camera permission is required to scan. Paste the invite or 24 words instead.";
+                return;
+            }
+
+            var value = await QrScanner.ScanAsync();
             if (string.IsNullOrWhiteSpace(value))
             {
                 _joinOpen = true;
-                _chainMessage = "Camera unavailable. Paste the 24 words instead.";
+                _chainMessage = "Scan cancelled. Paste the invite or 24 words instead.";
                 return;
             }
 
@@ -368,7 +430,7 @@
         {
             _joinOpen = true;
             _chainError = true;
-            _chainMessage = ex.Message + " Paste the 24 words instead.";
+            _chainMessage = ex.Message + " Paste the invite or 24 words instead.";
         }
     }
 
@@ -390,7 +452,11 @@
     private static string QrDataUri(string payload)
     {
         using var generator = new QRCoder.QRCodeGenerator();
-        using var data = generator.CreateQrCode(payload, QRCoder.QRCodeGenerator.ECCLevel.M);
+        // Invite payloads are larger — lower ECC keeps the QR readable on phones.
+        var ecc = payload.StartsWith("syncly:invite:", StringComparison.OrdinalIgnoreCase)
+            ? QRCoder.QRCodeGenerator.ECCLevel.L
+            : QRCoder.QRCodeGenerator.ECCLevel.M;
+        using var data = generator.CreateQrCode(payload, ecc);
         var png = new QRCoder.PngByteQRCode(data);
         return "data:image/png;base64," + Convert.ToBase64String(png.GetGraphic(6));
     }

@@ -31,9 +31,8 @@ public static class MauiProgram
         builder.Services.AddSingleton(syncly);
         builder.Services.AddSingleton(syncly.Workspace);
         builder.Services.AddScoped<EditorState>();
-#if DEBUG
-        builder.Services.AddSingleton<IAppUpdater, NoOpAppUpdater>();
-#else
+        builder.Services.AddSingleton<IDeviceCamera, MauiCameraPermission>();
+        builder.Services.AddSingleton<IQrScanner, AndroidQrScanner>();
         builder.Services.AddSingleton<IAppUpdater>(_ =>
         {
             var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
@@ -43,7 +42,6 @@ public static class MauiProgram
                 (path, ct) => new AndroidApkInstaller().InstallAsync(path, ct),
                 FileSystem.CacheDirectory);
         });
-#endif
 
         return builder.Build();
     }

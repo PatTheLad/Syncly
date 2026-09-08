@@ -24,9 +24,12 @@ words when they next sync.
 Pick a mailbox and a **chain code** in Settings.
 
 - **Local folder** — a directory both devices can see (USB, NAS, shared disk).
-- **Proton Drive** — paste a public folder link with **Editor** access, including the `#password`.
+- **Proton Drive** — paste a public folder link with **Editor** access, including the `#password`. If the share also has an extra password, enter that in Settings.
 - **Chain code** — 24 BIP39 words (or a QR / `syncly:sync:v1:…` URI), like Brave Sync. It is the
   AES-256-GCM key for every blob. Anyone with the words can read the mailbox; Proton cannot.
+  With a mailbox saved, **Show QR** encodes an invite (`syncly:invite:v1:…`) that also carries the
+  Proton link and share password so a phone can scan once after install. **Leave chain** drops the
+  local chain so you can join another without wiping notes.
 
 Each device writes `{deviceId}.syncly` and a plaintext `chain.json` that only stores a hash of the
 secret, so a device pointed at the wrong folder notices before it tries to decrypt. Sync is a

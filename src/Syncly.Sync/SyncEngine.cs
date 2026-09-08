@@ -47,6 +47,7 @@ public sealed class SyncEngine : IAsyncDisposable
     internal const string FolderVaultKey = "sync.folder.path";
     internal const string ProviderVaultKey = "sync.cloud.provider";
     internal const string ProtonVaultKey = "sync.cloud.proton.url";
+    internal const string ProtonPasswordVaultKey = "sync.cloud.proton.password";
     internal const string UploadedVaultKey = "sync.uploaded.version";
 
     private readonly SyncContext _context;
@@ -127,9 +128,34 @@ public sealed class SyncEngine : IAsyncDisposable
 
     public async Task<SyncChain> JoinChainAsync(string input, CancellationToken ct = default)
     {
+        if (SyncInvite.TryParse(input, out var invite))
+        {
+            var prefs = Clone(_preferences);
+            invite.ApplyTo(prefs);
+            await SavePreferencesAsync(prefs, ct);
+            var joined = SyncChain.Parse(invite.ChainUri);
+            await SetChainAsync(joined, ct);
+            return joined;
+        }
+
         var chain = SyncChain.Parse(input);
         await SetChainAsync(chain, ct);
         return chain;
+    }
+
+    /// <summary>
+    /// QR payload for another device: chain plus mailbox (Proton URL/password or folder) when configured.
+    /// Falls back to the chain-only URI when there is no mailbox yet.
+    /// </summary>
+    public string? InviteUri()
+    {
+        if (_chain is null)
+            return null;
+
+        if (!_preferences.HasMailbox)
+            return _chain.Uri;
+
+        return SyncInvite.From(_chain, _preferences).ToUri();
     }
 
     public async Task<SyncChain> RotateChainAsync(CancellationToken ct = default)
@@ -150,6 +176,7 @@ public sealed class SyncEngine : IAsyncDisposable
         await _context.Vault.WriteAsync(FolderVaultKey, _preferences.FolderPath ?? "", ct);
         await _context.Vault.WriteAsync(ProviderVaultKey, _preferences.Provider.ToString(), ct);
         await _context.Vault.WriteAsync(ProtonVaultKey, _preferences.ProtonShareUrl ?? "", ct);
+        await _context.Vault.WriteAsync(ProtonPasswordVaultKey, _preferences.ProtonSharePassword ?? "", ct);
         RebuildBackend();
         Changed?.Invoke();
     }
@@ -256,6 +283,7 @@ public sealed class SyncEngine : IAsyncDisposable
         };
         _preferences.FolderPath = EmptyToNull(await _context.Vault.ReadAsync(FolderVaultKey, ct));
         _preferences.ProtonShareUrl = EmptyToNull(await _context.Vault.ReadAsync(ProtonVaultKey, ct));
+        _preferences.ProtonSharePassword = EmptyToNull(await _context.Vault.ReadAsync(ProtonPasswordVaultKey, ct));
         _preferences.Provider = CloudProvider.ProtonDrive;
 
         var uploaded = await _context.Vault.ReadAsync(UploadedVaultKey, ct);
@@ -478,6 +506,7 @@ public sealed class SyncEngine : IAsyncDisposable
         FolderPath = source.FolderPath,
         Provider = source.Provider,
         ProtonShareUrl = source.ProtonShareUrl,
+        ProtonSharePassword = source.ProtonSharePassword,
     };
 
     private static string? EmptyToNull(string? value) =>

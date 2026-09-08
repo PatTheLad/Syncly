@@ -31,6 +31,8 @@ internal static class Program
         builder.Services.AddSingleton(syncly);
         builder.Services.AddSingleton(syncly.Workspace);
         builder.Services.AddSingleton<IAppUpdater>(new VelopackUpdater(loggerFactory));
+        builder.Services.AddSingleton<IDeviceCamera, AlwaysAllowedCamera>();
+        builder.Services.AddScoped<IQrScanner, JsQrScanner>();
         builder.Services.AddScoped<EditorState>();
 
         builder.RootComponents.Add<Syncly.UI.App>("#app");

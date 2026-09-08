@@ -44,8 +44,8 @@ public sealed class ProtonDriveBackend : ISyncBackend, IAsyncDisposable
     private readonly bool _ownsHttp;
     private ProtonSession? _session;
 
-    public ProtonDriveBackend(string shareUrl, HttpMessageHandler? handler = null)
-        : this(ProtonShareUrl.Parse(shareUrl), handler)
+    public ProtonDriveBackend(string shareUrl, string? customPassword = null, HttpMessageHandler? handler = null)
+        : this(ProtonShareUrl.Parse(shareUrl, customPassword), handler)
     {
     }
 
@@ -167,14 +167,17 @@ internal sealed class ProtonSession : IDisposable
         if (info.Code is not (0 or 1000))
             throw new ProtonDriveException(info.Error ?? "Proton Drive rejected this link.");
 
-        if ((info.Flags & (uint)ProtonLinkFlags.CustomPassword) != 0)
+        var needsCustom = (info.Flags & (uint)ProtonLinkFlags.CustomPassword) != 0;
+        if (url.RequiresCustomPassword(info.Flags))
             throw new ProtonDriveException(
-                "This Proton Drive link has an extra password. Create a share that only uses the secret in the URL.");
+                "This Proton Drive link has an extra password. Enter it in Settings under the share URL.");
+
+        var authPassword = url.ResolveAuthPassword(info.Flags);
 
         ProtonSrp.Proof auth;
         try
         {
-            auth = ProtonSrp.Prove(url.Password, info);
+            auth = ProtonSrp.Prove(authPassword, info);
         }
         catch (Exception ex) when (ex is not ProtonDriveException)
         {
@@ -191,13 +194,18 @@ internal sealed class ProtonSession : IDisposable
                    ?? throw new ProtonDriveException("Proton Drive authentication returned nothing.");
 
         if (!response.IsSuccessStatusCode || body.Code is not (0 or 1000))
-            throw new ProtonDriveException(body.Error ?? "Could not unlock this Proton Drive link. Check the password in the URL.");
+        {
+            var hint = needsCustom
+                ? "Check the share password in Settings and that the URL still includes the secret after #."
+                : "Check the password in the URL (the part after #).";
+            throw new ProtonDriveException(body.Error ?? $"Could not unlock this Proton Drive link. {hint}");
+        }
 
         if (!ProtonSrp.VerifyServer(auth, body.ServerProof))
             throw new ProtonDriveException("Proton Drive server proof did not match. The link may be forged.");
 
         var canEdit = body.Share.PublicPermissions >= (int)ProtonMemberRole.Editor;
-        var mailbox = ProtonMailbox.Unlock(body.Share, url.Password);
+        var mailbox = ProtonMailbox.Unlock(body.Share, authPassword);
         mailbox.Bind(http, url.Token, body.Uid, body.AccessToken, body.Share.VolumeId, body.Share.LinkId);
 
         var session = new ProtonSession(http, body.Uid, body.AccessToken, canEdit, mailbox);
@@ -236,7 +244,10 @@ internal sealed class ProtonInfoResponse
     public string Modulus { get; set; } = "";
     public string ServerEphemeral { get; set; } = "";
     public string UrlPasswordSalt { get; set; } = "";
+
+    [JsonPropertyName("SRPSession")]
     public string SrpSession { get; set; } = "";
+
     public uint Flags { get; set; }
 }
 

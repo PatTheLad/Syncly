@@ -34,6 +34,12 @@ public sealed class SyncPreferences
 
     public string? ProtonShareUrl { get; set; }
 
+    /// <summary>
+    /// Optional extra password set on the Proton Drive share. Combined with the
+    /// secret after <c>#</c> in the URL when unlocking the link.
+    /// </summary>
+    public string? ProtonSharePassword { get; set; }
+
     public bool HasMailbox => Backend switch
     {
         SyncBackendKind.Folder => !string.IsNullOrWhiteSpace(FolderPath),

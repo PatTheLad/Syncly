@@ -45,6 +45,42 @@ public class SyncChainTests
     }
 }
 
+public class SyncInviteTests
+{
+    [Fact]
+    public void Invite_round_trips_chain_and_proton_mailbox()
+    {
+        var chain = SyncChain.Create();
+        var prefs = new Syncly.Model.SyncPreferences
+        {
+            Backend = Syncly.Model.SyncBackendKind.Cloud,
+            ProtonShareUrl = "https://drive.proton.me/urls/TOKEN#secret12ab",
+            ProtonSharePassword = "extra-pass",
+        };
+
+        var uri = SyncInvite.From(chain, prefs).ToUri();
+        Assert.StartsWith(SyncInvite.UriPrefix, uri);
+
+        var parsed = SyncInvite.Parse(uri);
+        Assert.Equal(chain.Uri, parsed.ChainUri);
+        Assert.Equal(Syncly.Model.SyncBackendKind.Cloud, parsed.Backend);
+        Assert.Equal(prefs.ProtonShareUrl, parsed.ProtonShareUrl);
+        Assert.Equal(prefs.ProtonSharePassword, parsed.ProtonSharePassword);
+
+        var applied = new Syncly.Model.SyncPreferences();
+        parsed.ApplyTo(applied);
+        Assert.Equal(Syncly.Model.SyncBackendKind.Cloud, applied.Backend);
+        Assert.Equal(prefs.ProtonShareUrl, applied.ProtonShareUrl);
+        Assert.Equal(prefs.ProtonSharePassword, applied.ProtonSharePassword);
+    }
+
+    [Fact]
+    public void Chain_only_uri_is_not_an_invite()
+    {
+        Assert.False(SyncInvite.TryParse(SyncChain.Create().Uri, out _));
+    }
+}
+
 public class BlobCipherTests
 {
     [Fact]

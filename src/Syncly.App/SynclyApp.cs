@@ -165,7 +165,7 @@ public sealed class SynclyApp : IAsyncDisposable
                 new LocalFolderBackend(preferences.FolderPath),
             SyncBackendKind.Cloud when preferences.Provider == CloudProvider.ProtonDrive
                                       && !string.IsNullOrWhiteSpace(preferences.ProtonShareUrl) =>
-                new ProtonDriveBackend(preferences.ProtonShareUrl),
+                new ProtonDriveBackend(preferences.ProtonShareUrl, preferences.ProtonSharePassword),
             _ => null,
         };
     }
