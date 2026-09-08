@@ -110,12 +110,27 @@ jobs:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ]; then
+          set -euo pipefail
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ] || [ -z "${ANDROID_KEYSTORE_PASSWORD:-}" ]; then
             echo "::error::Add ANDROID_KEYSTORE_BASE64 and ANDROID_KEYSTORE_PASSWORD as repository secrets. Generating a new debug keystore per build makes Android reject in-place updates."
             exit 1
           fi
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/syncly-release.keystore"
+          # Strip whitespace/newlines from the pasted secret before decoding.
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '\r\n\t ' | base64 -d > "$RUNNER_TEMP/syncly-release.keystore"
           test -s "$RUNNER_TEMP/syncly-release.keystore"
+          # file: avoids MSBuild choking on special characters in env: passwords.
+          printf '%s' "$ANDROID_KEYSTORE_PASSWORD" > "$RUNNER_TEMP/syncly-keystore.pass"
+          # Fail early with a clear message if alias/password/base64 are wrong.
+          STORE_PASS=$(cat "$RUNNER_TEMP/syncly-keystore.pass")
+          if ! keytool -list \
+              -keystore "$RUNNER_TEMP/syncly-release.keystore" \
+              -storepass "$STORE_PASS" \
+              -alias syncly >/dev/null; then
+            echo "::error::Could not open the release keystore. Check ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, and that the key alias is exactly 'syncly'."
+            keytool -list -keystore "$RUNNER_TEMP/syncly-release.keystore" -storepass "$STORE_PASS" || true
+            exit 1
+          fi
+          unset STORE_PASS
       - run: >
           dotnet publish src/Syncly.Mobile/Syncly.Mobile.csproj
           -c Release -f net10.0-android
@@ -126,10 +141,8 @@ jobs:
           -p:AndroidKeyStore=true
           -p:AndroidSigningKeyStore=$RUNNER_TEMP/syncly-release.keystore
           -p:AndroidSigningKeyAlias=syncly
-          -p:AndroidSigningKeyPass=env:ANDROID_KEYSTORE_PASSWORD
-          -p:AndroidSigningStorePass=env:ANDROID_KEYSTORE_PASSWORD
-        env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          -p:AndroidSigningKeyPass=file:$RUNNER_TEMP/syncly-keystore.pass
+          -p:AndroidSigningStorePass=file:$RUNNER_TEMP/syncly-keystore.pass
       - name: Collect APK
         shell: bash
         run: |
