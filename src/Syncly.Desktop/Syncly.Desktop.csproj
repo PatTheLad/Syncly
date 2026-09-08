@@ -10,12 +10,11 @@
   <ItemGroup>
     <PackageReference Include="Photino.Blazor" Version="4.0.13" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
+    <PackageReference Include="Velopack" Version="1.2.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Syncly.App\Syncly.App.csproj" />
-    <ProjectReference Include="..\Syncly.Transport.Lan\Syncly.Transport.Lan.csproj" />
-    <ProjectReference Include="..\Syncly.Transport.WifiDirect\Syncly.Transport.WifiDirect.csproj" />
     <ProjectReference Include="..\Syncly.UI\Syncly.UI.csproj" />
   </ItemGroup>
 
@@ -30,9 +29,13 @@
     <ItemGroup>
       <_UiAssets Include="..\Syncly.UI\wwwroot\**\*" />
     </ItemGroup>
-    <Copy SourceFiles="@(_UiAssets)"
-          DestinationFiles="@(_UiAssets->'$(OutputPath)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_UiAssets)" DestinationFiles="@(_UiAssets->'$(OutputPath)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="CopyUiAssetsToPublish" AfterTargets="Publish" Condition="'$(PublishDir)' != ''">
+    <ItemGroup>
+      <_UiPublishAssets Include="..\Syncly.UI\wwwroot\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_UiPublishAssets)" DestinationFiles="@(_UiPublishAssets->'$(PublishDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>

@@ -1,115 +1,105 @@
-using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Syncly.Crdt;
 using Syncly.Model;
+using Syncly.Security;
 using Syncly.Storage;
 
 namespace Syncly.Sync;
 
+public sealed class SyncOptions
+{
+    public TimeSpan AutoSyncInterval { get; init; } = TimeSpan.FromSeconds(30);
+
+    public TimeSpan LocalChangeDebounce { get; init; } = TimeSpan.FromMilliseconds(400);
+}
+
+/// <summary>Everything the engine needs from the rest of the app.</summary>
+public sealed class SyncContext
+{
+    public required DeviceIdentity Identity { get; init; }
+
+    public required Replica Replica { get; init; }
+
+    public required OpLogStore OpLog { get; init; }
+
+    public required PeerStore Peers { get; init; }
+
+    public required IKeyVault Vault { get; init; }
+
+    public SyncOptions Options { get; init; } = new();
+
+    public Func<SyncPreferences, ISyncBackend?>? BackendFactory { get; init; }
+
+    /// <summary>Called after remote ops have been applied and durably stored.</summary>
+    public Func<IReadOnlyList<Op>, Task>? OnRemoteOps { get; init; }
+}
+
 /// <summary>
-/// Owns discovery, connections and the sync lifecycle.
-///
-/// Sync is triggered three ways: a peer appearing on the network, a local edit (debounced), and a
-/// slow safety-net timer. Connections are kept open afterwards so subsequent edits stream live
-/// instead of waiting for the next pass.
+/// Pushes this device's ops into a shared mailbox and pulls everyone else's. The mailbox is a
+/// folder or a cloud provider; the chain key is what keeps the contents private.
 /// </summary>
 public sealed class SyncEngine : IAsyncDisposable
 {
+    internal const string ChainVaultKey = "sync.chain.secret";
+    internal const string BackendVaultKey = "sync.backend";
+    internal const string FolderVaultKey = "sync.folder.path";
+    internal const string ProviderVaultKey = "sync.cloud.provider";
+    internal const string ProtonVaultKey = "sync.cloud.proton.url";
+    internal const string UploadedVaultKey = "sync.uploaded.version";
+
     private readonly SyncContext _context;
-    private readonly IReadOnlyList<ISyncTransport> _transports;
-    private readonly IReadOnlyList<IPeerDiscovery> _discoveries;
     private readonly SnapshotStore _snapshots;
     private readonly ILogger<SyncEngine> _logger;
-
-    private readonly ConcurrentDictionary<string, SyncSession> _sessions = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, SyncSession> _pending = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, int> _attempts = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, DateTimeOffset> _dialing = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim _gate = new(1, 1);
 
     private CancellationTokenSource? _lifetime;
     private Timer? _debounce;
     private Task? _maintenance;
     private long _pendingLocalOps;
+    private ISyncBackend? _backend;
+    private SyncChain? _chain;
+    private SyncPreferences _preferences = new();
+    private SyncStatus _status = new(SyncPhase.Disabled, "No sync configured", null, null, null, 0);
+    private VersionVector _uploaded = new();
 
     public SyncEngine(
         SyncContext context,
-        IEnumerable<ISyncTransport> transports,
-        IEnumerable<IPeerDiscovery> discoveries,
         SnapshotStore snapshots,
         ILogger<SyncEngine>? logger = null)
     {
         _context = context;
-        _transports = transports.ToList();
-        _discoveries = discoveries.ToList();
         _snapshots = snapshots;
         _logger = logger ?? NullLogger<SyncEngine>.Instance;
     }
 
     public event Action? Changed;
 
-    public bool IsRunning => _lifetime is { IsCancellationRequested: false };
+    public SyncStatus Status => _status;
 
-    public IReadOnlyList<SyncStatus> Sessions =>
-        _sessions.Values.Concat(_pending.Values).Select(s => s.Status).ToList();
+    public SyncPreferences Preferences => Clone(_preferences);
 
-    public IReadOnlyList<DiscoveredPeer> DiscoveredPeers =>
-        _discoveries.SelectMany(d => d.Peers)
-            .GroupBy(p => p.DeviceId, StringComparer.Ordinal)
-            .Select(g => g.OrderByDescending(p => p.SeenAt).First())
-            .Where(p => p.DeviceId != _context.Identity.DeviceId)
-            .ToList();
+    public SyncChain? Chain => _chain;
 
-    public IReadOnlyList<(string Name, bool Available)> Discoveries =>
-        _discoveries.Select(d => (d.Name, d.IsAvailable)).ToList();
+    public bool HasChain => _chain is not null;
 
-    public string NearbyStatus =>
-        string.Join(" · ", _discoveries.Select(d => d.Status).Where(s => !string.IsNullOrWhiteSpace(s)));
-
-    public IReadOnlyList<string> TransportNames => _transports.Select(t => t.Name).ToList();
+    public bool IsConfigured => _chain is not null && _backend is not null;
 
     public async Task StartAsync(CancellationToken ct = default)
     {
-        if (IsRunning)
+        if (_lifetime is { IsCancellationRequested: false })
             return;
 
+        await LoadAsync(ct);
+
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var token = _lifetime.Token;
-
         _context.Replica.Applied += OnReplicaApplied;
-
-        foreach (var transport in _transports)
-        {
-            try
-            {
-                await transport.StartListeningAsync(_context.Options.ListenPort, AcceptAsync, token);
-                _logger.LogInformation(
-                    "{Transport} listening on port {Port}.", transport.Name, transport.ListeningPort);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "{Transport} could not listen.", transport.Name);
-            }
-        }
-
-        var port = _transports.Select(t => t.ListeningPort).FirstOrDefault(p => p > 0);
-        foreach (var discovery in _discoveries)
-        {
-            discovery.PeerAppeared += OnPeerAppeared;
-            discovery.PeerDisappeared += _ => Changed?.Invoke();
-
-            try
-            {
-                await discovery.StartAsync(_context.Identity.Descriptor, port, token);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "{Discovery} could not start.", discovery.Name);
-            }
-        }
-
-        _maintenance = Task.Run(() => MaintenanceLoopAsync(token), CancellationToken.None);
+        _maintenance = Task.Run(() => MaintenanceLoopAsync(_lifetime.Token), CancellationToken.None);
         Changed?.Invoke();
+
+        if (IsConfigured)
+            _ = SyncNowAsync(_lifetime.Token);
     }
 
     public async Task StopAsync()
@@ -118,273 +108,327 @@ public sealed class SyncEngine : IAsyncDisposable
             return;
 
         _context.Replica.Applied -= OnReplicaApplied;
-
-        foreach (var discovery in _discoveries)
-            discovery.PeerAppeared -= OnPeerAppeared;
-
         await _lifetime.CancelAsync();
-
-        foreach (var session in _sessions.Values.Concat(_pending.Values))
-            await session.DisposeAsync();
-
-        _sessions.Clear();
-        _pending.Clear();
-
-        foreach (var transport in _transports)
-            await transport.StopListeningAsync();
-
-        foreach (var discovery in _discoveries)
-            await discovery.StopAsync();
 
         if (_maintenance is not null)
             await Task.WhenAny(_maintenance, Task.Delay(1_000));
 
         _lifetime.Dispose();
         _lifetime = null;
+        SetStatus(SyncPhase.Disabled, "Stopped", _status.Detail);
+    }
+
+    public async Task<SyncChain> CreateChainAsync(CancellationToken ct = default)
+    {
+        var chain = SyncChain.Create();
+        await SetChainAsync(chain, ct);
+        return chain;
+    }
+
+    public async Task<SyncChain> JoinChainAsync(string input, CancellationToken ct = default)
+    {
+        var chain = SyncChain.Parse(input);
+        await SetChainAsync(chain, ct);
+        return chain;
+    }
+
+    public async Task<SyncChain> RotateChainAsync(CancellationToken ct = default)
+    {
+        var chain = SyncChain.Create();
+        await SetChainAsync(chain, ct);
+        _uploaded = new VersionVector();
+        await _context.Vault.WriteAsync(UploadedVaultKey, "", ct);
+        return chain;
+    }
+
+    public Task ClearChainAsync(CancellationToken ct = default) => SetChainAsync(null, ct);
+
+    public async Task SavePreferencesAsync(SyncPreferences preferences, CancellationToken ct = default)
+    {
+        _preferences = Clone(preferences);
+        await _context.Vault.WriteAsync(BackendVaultKey, _preferences.Backend.ToString().ToLowerInvariant(), ct);
+        await _context.Vault.WriteAsync(FolderVaultKey, _preferences.FolderPath ?? "", ct);
+        await _context.Vault.WriteAsync(ProviderVaultKey, _preferences.Provider.ToString(), ct);
+        await _context.Vault.WriteAsync(ProtonVaultKey, _preferences.ProtonShareUrl ?? "", ct);
+        RebuildBackend();
         Changed?.Invoke();
     }
 
-    // ------------------------------------------------------------ connections
-
-    private void OnPeerAppeared(DiscoveredPeer peer)
+    public async Task TestBackendAsync(CancellationToken ct = default)
     {
-        Changed?.Invoke();
-        if (peer.DeviceId == _context.Identity.DeviceId || _sessions.ContainsKey(peer.DeviceId))
-            return;
+        var backend = CreateBackend(_preferences)
+                      ?? throw new InvalidOperationException("Choose a folder or paste a Proton Drive link first.");
 
-        if (!PeerEndpoints.IsRoutable(peer.Address))
-        {
-            _ = InviteIfTrustedAsync(peer);
-            return;
-        }
-
-        _ = DialAsync(peer.Address, peer.Port, peer.DeviceId);
+        await backend.TestAsync(ct);
     }
 
-    /// <summary>Manual connect, for when discovery is blocked but you know the address.</summary>
-    public Task ConnectAsync(string address, int port, CancellationToken ct = default) =>
-        DialAsync(address, port, null, ct);
-
-    /// <summary>Tap-to-pair from the Devices screen. LAN peers are dialed immediately; Wi-Fi Direct peers
-    /// are invited into a P2P group first, then TCP starts once an IP exists.
-    /// </summary>
-    public async Task ConnectToPeerAsync(DiscoveredPeer peer, CancellationToken ct = default)
+    /// <summary>Forces a push of our ops and a pull of everyone else's.</summary>
+    public async Task SyncNowAsync(CancellationToken ct = default)
     {
-        if (PeerEndpoints.IsRoutable(peer.Address))
-        {
-            await DialAsync(peer.Address, peer.Port, peer.DeviceId, ct);
-            return;
-        }
-
-        foreach (var discovery in _discoveries)
-            await discovery.InviteAsync(peer, ct);
-    }
-
-    public async Task RequestNearbyAccessAsync(CancellationToken ct = default)
-    {
-        foreach (var discovery in _discoveries)
-            await discovery.RequestAccessAsync(ct);
-
-        Changed?.Invoke();
-    }
-
-    private async Task InviteIfTrustedAsync(DiscoveredPeer peer)
-    {
+        await _gate.WaitAsync(ct);
         try
         {
-            if (await _context.Peers.FindAsync(peer.DeviceId) is null)
+            if (_chain is null)
+            {
+                SetStatus(SyncPhase.Disabled, "No sync chain", "Create or join a chain in Settings.");
                 return;
-
-            foreach (var discovery in _discoveries)
-                await discovery.InviteAsync(peer);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Could not auto-invite {Peer}.", peer.DisplayName);
-        }
-    }
-
-    private async Task DialAsync(
-        string address,
-        int port,
-        string? expectedDeviceId,
-        CancellationToken ct = default)
-    {
-        var key = expectedDeviceId ?? $"{address}:{port}";
-        if (!_dialing.TryAdd(key, DateTimeOffset.UtcNow))
-            return;
-
-        try
-        {
-            var token = _lifetime?.Token ?? ct;
-            var attempt = _attempts.GetValueOrDefault(key);
-            if (attempt > 0)
-            {
-                var delay = TimeSpan.FromSeconds(Math.Min(30, Math.Pow(2, Math.Min(attempt, 5))));
-                await Task.Delay(delay, token);
             }
 
-            foreach (var transport in _transports)
+            var backend = _backend;
+            if (backend is null)
             {
-                try
-                {
-                    var channel = await transport.ConnectAsync(address, port, token);
-                    _attempts.TryRemove(key, out _);
-                    await StartSessionAsync(channel, initiator: true, token);
-                    return;
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    _logger.LogDebug(ex, "{Transport} could not reach {Address}:{Port}.",
-                        transport.Name, address, port);
-                }
+                SetStatus(SyncPhase.Disabled, "No mailbox", "Choose a local folder or Proton Drive in Settings.");
+                return;
             }
 
-            _attempts[key] = attempt + 1;
+            SetStatus(SyncPhase.Syncing, $"Syncing via {backend.Name}", null);
+
+            await EnsureManifestAsync(backend, _chain, ct);
+            var remote = await PullAsync(backend, _chain, ct);
+            await PushAsync(backend, _chain, ct);
+
+            var summary = remote == 0
+                ? $"Synced via {backend.Name}"
+                : $"Synced via {backend.Name} · {remote} device(s)";
+
+            SetStatus(SyncPhase.Idle, summary, null, backend.Name, DateTimeOffset.UtcNow, remote, rememberRemote: false);
         }
         catch (OperationCanceledException)
         {
-            // Shutting down.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Sync failed.");
+            SetStatus(SyncPhase.Failed, "Sync failed", ex.Message);
         }
         finally
         {
-            _dialing.TryRemove(key, out _);
+            _gate.Release();
         }
     }
 
-    private Task AcceptAsync(ITransportChannel channel, CancellationToken ct) =>
-        StartSessionAsync(channel, initiator: false, ct);
-
-    private async Task StartSessionAsync(ITransportChannel channel, bool initiator, CancellationToken ct)
+    /// <summary>Snapshots the workspace. Tombstones wait until at least one other device has synced.</summary>
+    public async Task CollectAsync(CancellationToken ct = default)
     {
-        var session = new SyncSession(channel, initiator, _context, _logger);
-        var key = Guid.NewGuid().ToString("N");
-        _pending[key] = session;
-        session.Changed += _ => Changed?.Invoke();
-
-        _ = Task.Run(async () =>
+        var stable = await _context.Peers.StableVersionAsync(ct);
+        if (stable is not null)
         {
-            var run = session.RunAsync(ct);
+            var removed = _context.Replica.CollectTombstones(stable);
+            if (removed > 0)
+                _logger.LogInformation("Collected {Count} tombstones.", removed);
+        }
 
-            // Once the peer identifies itself, move the session into the keyed table and resolve
-            // the case where both devices dialled each other at the same moment.
-            _ = Task.Run(async () =>
-            {
-                while (!run.IsCompleted && session.Peer is null)
-                    await Task.Delay(50, CancellationToken.None);
-
-                if (session.Peer is { } peer && _pending.TryRemove(key, out _))
-                {
-                    if (_sessions.TryGetValue(peer.DeviceId, out var existing) && existing != session)
-                    {
-                        if (Preferred(existing, session) == existing)
-                        {
-                            await session.DisposeAsync();
-                            return;
-                        }
-
-                        _sessions[peer.DeviceId] = session;
-                        await existing.DisposeAsync();
-                    }
-                    else
-                    {
-                        _sessions[peer.DeviceId] = session;
-                    }
-
-                    Changed?.Invoke();
-                }
-            }, CancellationToken.None);
-
-            await run;
-
-            if (session.Peer is { } identified)
-                _sessions.TryRemove(new KeyValuePair<string, SyncSession>(identified.DeviceId, session));
-
-            _pending.TryRemove(key, out _);
-            await session.DisposeAsync();
-            Changed?.Invoke();
-        }, CancellationToken.None);
-
-        await Task.CompletedTask;
+        await _snapshots.WriteAsync(_context.Replica.Documents.ToList(), _context.Replica.Version, ct);
     }
 
-    /// <summary>
-    /// Both devices may dial at once. Both pick the same survivor: the one initiated by whichever
-    /// device id sorts first.
-    /// </summary>
-    private SyncSession Preferred(SyncSession a, SyncSession b)
+    public async ValueTask DisposeAsync()
     {
-        if (a.IsLive != b.IsLive)
-            return a.IsLive ? a : b;
+        await StopAsync();
 
-        var self = _context.Identity.DeviceId;
-        var peer = a.Peer?.DeviceId ?? b.Peer?.DeviceId ?? string.Empty;
-        var weShouldInitiate = string.CompareOrdinal(self, peer) < 0;
+        if (_debounce is not null)
+            await _debounce.DisposeAsync();
 
-        return a.IsOutbound == weShouldInitiate ? a : b;
+        _gate.Dispose();
     }
 
-    // ------------------------------------------------------------ triggers
+    private async Task LoadAsync(CancellationToken ct)
+    {
+        var secret = await _context.Vault.ReadAsync(ChainVaultKey, ct);
+        if (!string.IsNullOrWhiteSpace(secret))
+        {
+            try
+            {
+                _chain = SyncChain.FromVault(secret);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Stored sync chain could not be loaded.");
+            }
+        }
 
-    /// <summary>
-    /// Fires for local edits and for ops received from a peer. Both are forwarded, which is what
-    /// lets three devices converge when no single one of them talks to all the others.
-    /// </summary>
+        var backend = await _context.Vault.ReadAsync(BackendVaultKey, ct);
+        _preferences.Backend = backend?.ToLowerInvariant() switch
+        {
+            "folder" => SyncBackendKind.Folder,
+            "cloud" => SyncBackendKind.Cloud,
+            _ => SyncBackendKind.None,
+        };
+        _preferences.FolderPath = EmptyToNull(await _context.Vault.ReadAsync(FolderVaultKey, ct));
+        _preferences.ProtonShareUrl = EmptyToNull(await _context.Vault.ReadAsync(ProtonVaultKey, ct));
+        _preferences.Provider = CloudProvider.ProtonDrive;
+
+        var uploaded = await _context.Vault.ReadAsync(UploadedVaultKey, ct);
+        _uploaded = VersionVectorText.Parse(uploaded);
+
+        RebuildBackend();
+
+        if (_chain is null)
+            SetStatus(SyncPhase.Disabled, "No sync chain", "Create or join a chain in Settings.");
+        else if (_backend is null)
+            SetStatus(SyncPhase.Disabled, "No mailbox", "Choose a local folder or Proton Drive in Settings.");
+        else
+            SetStatus(SyncPhase.Idle, $"Ready · {_backend.Name}", null, _backend.Name, null, 0);
+    }
+
+    private async Task SetChainAsync(SyncChain? chain, CancellationToken ct)
+    {
+        _chain = chain;
+        await _context.Vault.WriteAsync(ChainVaultKey, chain?.ToVault() ?? "", ct);
+        Changed?.Invoke();
+
+        if (chain is null)
+            SetStatus(SyncPhase.Disabled, "No sync chain", "Create or join a chain in Settings.");
+        else if (_backend is null)
+            SetStatus(SyncPhase.Disabled, "No mailbox", "Choose a local folder or Proton Drive in Settings.");
+        else
+            SetStatus(SyncPhase.Idle, $"Ready · {_backend.Name}", null, _backend.Name, _status.LastSuccessAt, _status.RemoteDevices);
+    }
+
+    private void RebuildBackend()
+    {
+        try
+        {
+            _backend = CreateBackend(_preferences);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not open the sync mailbox.");
+            _backend = null;
+            SetStatus(SyncPhase.Failed, "Mailbox error", ex.Message);
+        }
+    }
+
+    private ISyncBackend? CreateBackend(SyncPreferences preferences)
+    {
+        if (_context.BackendFactory is { } factory)
+            return factory(preferences);
+
+        if (preferences.Backend == SyncBackendKind.Folder
+            && !string.IsNullOrWhiteSpace(preferences.FolderPath))
+            return new LocalFolderBackend(preferences.FolderPath);
+
+        return null;
+    }
+
+    private async Task EnsureManifestAsync(ISyncBackend backend, SyncChain chain, CancellationToken ct)
+    {
+        var existing = await backend.ReadAsync(MailboxFiles.ChainManifest, ct);
+        if (existing is { Length: > 0 })
+        {
+            var id = DevicePackCodec.ReadChainId(existing);
+            if (!string.Equals(id, chain.ChainId, StringComparison.Ordinal))
+                throw new ChainMismatchException(
+                    "This mailbox already belongs to a different sync chain. Join that chain, or pick another folder.");
+
+            return;
+        }
+
+        await backend.WriteAsync(MailboxFiles.ChainManifest, DevicePackCodec.Manifest(chain), ct);
+    }
+
+    private async Task<int> PullAsync(ISyncBackend backend, SyncChain chain, CancellationToken ct)
+    {
+        var names = await backend.ListAsync(ct);
+        var remote = 0;
+
+        foreach (var name in names)
+        {
+            var deviceId = MailboxFiles.DeviceIdOf(name);
+            if (deviceId is null || deviceId == _context.Identity.DeviceId)
+                continue;
+
+            var blob = await backend.ReadAsync(name, ct);
+            if (blob is null || blob.Length == 0)
+                continue;
+
+            DevicePack pack;
+            try
+            {
+                pack = DevicePackCodec.Open(blob, chain);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not decrypt {File}.", name);
+                throw new CryptographicException(
+                    "Could not decrypt a pack in the mailbox. Check that both devices use the same chain code.");
+            }
+
+            remote++;
+            await ApplyPackAsync(pack, ct);
+        }
+
+        return remote;
+    }
+
+    private async Task ApplyPackAsync(DevicePack pack, CancellationToken ct)
+    {
+        if (pack.Ops.Count > 0)
+        {
+            var result = _context.Replica.Apply(pack.Ops);
+            if (result.Applied.Count > 0)
+            {
+                await _context.OpLog.AppendAsync(result.Applied, ct);
+                if (_context.OnRemoteOps is { } callback)
+                    await callback(result.Applied);
+            }
+        }
+
+        var theirs = VersionVectorText.Parse(pack.Version);
+        await _context.Peers.TrustAsync(
+            new TrustedDevice(pack.DeviceId, pack.DisplayName, "", DateTimeOffset.UtcNow), ct);
+        await _context.Peers.SaveStateAsync(
+            new PeerSyncState(pack.DeviceId, theirs, theirs, DateTimeOffset.UtcNow), ct);
+    }
+
+    private async Task PushAsync(ISyncBackend backend, SyncChain chain, CancellationToken ct)
+    {
+        var self = _context.Identity.DeviceId;
+        var current = _context.Replica.Version;
+        if (current.Next(self) <= _uploaded.Next(self) && _uploaded.Count > 0)
+        {
+            var existing = await backend.ReadAsync(MailboxFiles.PackName(self), ct);
+            if (existing is { Length: > 0 })
+                return;
+        }
+
+        var mine = (await _context.OpLog.ReadSinceAsync(new VersionVector(), ct))
+            .Where(op => op.Actor == self)
+            .ToList();
+
+        var pack = new DevicePack(
+            self,
+            _context.Identity.DisplayName,
+            VersionVectorText.Format(current),
+            mine);
+
+        await backend.WriteAsync(MailboxFiles.PackName(self), DevicePackCodec.Seal(pack, chain), ct);
+        _uploaded = current.Clone();
+        await _context.Vault.WriteAsync(UploadedVaultKey, VersionVectorText.Format(_uploaded), ct);
+    }
+
     private void OnReplicaApplied(IReadOnlyList<Op> ops, bool local)
     {
-        if (ops.Count == 0)
+        if (!local || ops.Count == 0)
             return;
 
         Interlocked.Add(ref _pendingLocalOps, ops.Count);
-
         _debounce ??= new Timer(_ => _ = FlushLocalAsync(), null, Timeout.Infinite, Timeout.Infinite);
         _debounce.Change(_context.Options.LocalChangeDebounce, Timeout.InfiniteTimeSpan);
     }
 
     private async Task FlushLocalAsync()
     {
-        var count = Interlocked.Exchange(ref _pendingLocalOps, 0);
-        if (count == 0)
+        if (Interlocked.Exchange(ref _pendingLocalOps, 0) == 0)
             return;
 
-        foreach (var session in _sessions.Values.Where(s => s.IsLive))
+        try
         {
-            try
-            {
-                await session.PushPendingAsync();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Could not stream ops to {Peer}.", session.PeerId);
-            }
+            await SyncNowAsync();
         }
-    }
-
-    /// <summary>Forces a full anti-entropy pass with everyone we can reach right now.</summary>
-    public async Task SyncNowAsync(CancellationToken ct = default)
-    {
-        foreach (var session in _sessions.Values)
-            await session.ResyncAsync(ct);
-
-        foreach (var peer in DiscoveredPeers.Where(p => !_sessions.ContainsKey(p.DeviceId)))
-            _ = DialAsync(peer.Address, peer.Port, peer.DeviceId, ct);
-
-        await ReconnectKnownPeersAsync(ct);
-    }
-
-    private async Task ReconnectKnownPeersAsync(CancellationToken ct)
-    {
-        foreach (var address in await _context.Peers.KnownAddressesAsync(ct))
+        catch (Exception ex)
         {
-            var split = address.LastIndexOf(':');
-            if (split <= 0 || !int.TryParse(address.AsSpan(split + 1), out var port))
-                continue;
-
-            var host = address[..split];
-            if (_sessions.Values.Any(s => s.IsLive))
-                continue;
-
-            _ = DialAsync(host, port, null, ct);
+            _logger.LogDebug(ex, "Debounced sync failed.");
         }
     }
 
@@ -409,34 +453,33 @@ public sealed class SyncEngine : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Snapshots the workspace and drops tombstones every trusted peer has already acknowledged.
-    /// Anything newer is left alone, because a peer might still need it.
-    /// </summary>
-    public async Task CollectAsync(CancellationToken ct = default)
+    private void SetStatus(
+        SyncPhase phase,
+        string summary,
+        string? detail,
+        string? backend = null,
+        DateTimeOffset? lastSuccess = null,
+        int remoteDevices = 0,
+        bool rememberRemote = true)
     {
-        var stable = await _context.Peers.StableVersionAsync(ct);
-        if (stable is not null)
-        {
-            var removed = _context.Replica.CollectTombstones(stable);
-            if (removed > 0)
-                _logger.LogInformation("Collected {Count} tombstones.", removed);
-        }
-
-        await _snapshots.WriteAsync(_context.Replica.Documents.ToList(), _context.Replica.Version, ct);
+        _status = new SyncStatus(
+            phase,
+            summary,
+            detail,
+            backend ?? _backend?.Name,
+            lastSuccess ?? _status.LastSuccessAt,
+            rememberRemote && remoteDevices == 0 ? _status.RemoteDevices : remoteDevices);
+        Changed?.Invoke();
     }
 
-    public async ValueTask DisposeAsync()
+    private static SyncPreferences Clone(SyncPreferences source) => new()
     {
-        await StopAsync();
+        Backend = source.Backend,
+        FolderPath = source.FolderPath,
+        Provider = source.Provider,
+        ProtonShareUrl = source.ProtonShareUrl,
+    };
 
-        if (_debounce is not null)
-            await _debounce.DisposeAsync();
-
-        foreach (var transport in _transports)
-            await transport.DisposeAsync();
-
-        foreach (var discovery in _discoveries)
-            await discovery.DisposeAsync();
-    }
+    private static string? EmptyToNull(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
 }

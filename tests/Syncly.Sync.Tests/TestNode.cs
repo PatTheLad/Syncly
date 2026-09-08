@@ -6,21 +6,18 @@ using Syncly.Sync;
 
 namespace Syncly.Sync.Tests;
 
-public sealed class AlwaysPair : IPairingPrompter
+public sealed class MemoryVault : IKeyVault
 {
-    public List<PairingRequest> Seen { get; } = [];
+    private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);
 
-    public Task<bool> ConfirmAsync(PairingRequest request, CancellationToken ct = default)
+    public Task<string?> ReadAsync(string key, CancellationToken ct = default) =>
+        Task.FromResult(_values.TryGetValue(key, out var value) ? value : null);
+
+    public Task WriteAsync(string key, string value, CancellationToken ct = default)
     {
-        Seen.Add(request);
-        return Task.FromResult(true);
+        _values[key] = value;
+        return Task.CompletedTask;
     }
-}
-
-public sealed class NeverPair : IPairingPrompter
-{
-    public Task<bool> ConfirmAsync(PairingRequest request, CancellationToken ct = default) =>
-        Task.FromResult(false);
 }
 
 /// <summary>A complete device: database, replica, identity and engine, wired the same way the app wires them.</summary>
@@ -28,12 +25,13 @@ public sealed class TestNode : IAsyncDisposable
 {
     private readonly string _directory;
 
-    private TestNode(string name, string directory, SynclyDatabase database, DeviceIdentity identity)
+    private TestNode(string name, string directory, SynclyDatabase database, DeviceIdentity identity, MemoryVault vault)
     {
         Name = name;
         _directory = directory;
         Database = database;
         Identity = identity;
+        Vault = vault;
         Log = new OpLogStore(database);
         Peers = new PeerStore(database);
         Snapshots = new SnapshotStore(database);
@@ -46,6 +44,8 @@ public sealed class TestNode : IAsyncDisposable
 
     public DeviceIdentity Identity { get; }
 
+    public MemoryVault Vault { get; }
+
     public OpLogStore Log { get; }
 
     public PeerStore Peers { get; }
@@ -56,19 +56,15 @@ public sealed class TestNode : IAsyncDisposable
 
     public SyncEngine Engine { get; private set; } = null!;
 
-    public AlwaysPair Prompter { get; } = new();
-
-    public static async Task<TestNode> CreateAsync(
-        string name,
-        LoopbackSwitch network,
-        SyncOptions? options = null)
+    public static async Task<TestNode> CreateAsync(string name, SyncOptions? options = null)
     {
         var directory = Path.Combine(Path.GetTempPath(), "syncly-sync-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
 
         var database = await SynclyDatabase.OpenAsync(Path.Combine(directory, "syncly.db"));
         var identity = DeviceIdentity.CreateEphemeral(name);
-        var node = new TestNode(name, directory, database, identity);
+        var vault = new MemoryVault();
+        var node = new TestNode(name, directory, database, identity, vault);
 
         var context = new SyncContext
         {
@@ -76,23 +72,27 @@ public sealed class TestNode : IAsyncDisposable
             Replica = node.Replica,
             OpLog = node.Log,
             Peers = node.Peers,
-            Prompter = node.Prompter,
+            Vault = vault,
             Options = options ?? new SyncOptions
             {
                 LocalChangeDebounce = TimeSpan.FromMilliseconds(30),
-                AutoSyncInterval = TimeSpan.FromSeconds(30),
-                PingInterval = TimeSpan.FromSeconds(30),
+                AutoSyncInterval = TimeSpan.FromHours(1),
             },
         };
 
-        node.Engine = new SyncEngine(
-            context,
-            [new LoopbackTransport(network, name)],
-            [],
-            node.Snapshots);
-
+        node.Engine = new SyncEngine(context, node.Snapshots);
         await node.Engine.StartAsync();
         return node;
+    }
+
+    public async Task UseMailboxAsync(string folder, SyncChain chain)
+    {
+        await Engine.JoinChainAsync(chain.Words);
+        await Engine.SavePreferencesAsync(new SyncPreferences
+        {
+            Backend = SyncBackendKind.Folder,
+            FolderPath = folder,
+        });
     }
 
     /// <summary>Authors ops locally and persists them, exactly like the workspace service does.</summary>
@@ -101,8 +101,6 @@ public sealed class TestNode : IAsyncDisposable
         var ops = Replica.Author(build);
         await Log.AppendAsync(ops);
     }
-
-    public Task ConnectToAsync(TestNode other) => Engine.ConnectAsync(other.Name, 0);
 
     public async ValueTask DisposeAsync()
     {

@@ -1,11 +1,12 @@
 # Syncly
 
-A block-based notes app for **Linux**, **Windows**, and **Android** that syncs directly between your
-own devices. No account, no server, no cloud: two devices on the same network find each other, prove
-who they are with a 6-digit code, and merge their edits character by character.
+A block-based notes app for **Linux**, **Windows**, and **Android**. Each device keeps a local
+CRDT of your pages. Devices sync through a mailbox you pick in Settings: a folder on disk, a
+network share, or a Proton Drive folder opened from an Editor share link. The mailbox only ever
+sees ciphertext.
 
 ```
-Discover → Pair (6 digits) → Encrypted session → Anti-entropy sync → Live streaming
+Edit locally → encrypt with the chain code → write {deviceId}.syncly → other devices pull and merge
 ```
 
 ## What it is
@@ -14,44 +15,41 @@ Pages are trees of blocks — paragraphs, headings, bullets, to-dos, quotes, cod
 Obsidian and Anytype work. Pages nest, `[[wikilinks]]` connect them, and every page shows what links
 back to it.
 
-The interesting part is underneath. Syncly does not last-write-wins your notes. Every edit is a small
-operation in an append-only log, and the log is a CRDT, so two devices editing the same paragraph
-while offline both keep their words when they meet again.
+Syncly does not last-write-wins your notes. Every edit is a small operation in an append-only log,
+and the log is a CRDT, so two devices editing the same paragraph while offline both keep their
+words when they next sync.
 
 ## How sync works
 
-Each device keeps a version vector: the highest operation sequence it has seen from every device.
-When two devices connect they trade vectors, and each sends only what the other is missing.
+Pick a mailbox and a **chain code** in Settings.
 
-- A device that was offline for months catches up in a single pass.
-- Convergence is transitive, so three devices reconcile with no device acting as a hub.
-- The connection stays open after the first pass, so edits appear as you type them.
-- Batches are chunked, Brotli-compressed, and acked before peer state advances, so a dropped
-  connection resumes instead of restarting.
-- Tombstones are collected only once every paired device has acknowledged past them.
+- **Local folder** — a directory both devices can see (USB, NAS, shared disk).
+- **Proton Drive** — paste a public folder link with **Editor** access, including the `#password`.
+- **Chain code** — 24 BIP39 words (or a QR / `syncly:sync:v1:…` URI), like Brave Sync. It is the
+  AES-256-GCM key for every blob. Anyone with the words can read the mailbox; Proton cannot.
 
-Pairing is ECDH over P-256 with the signature covering the whole handshake transcript, then AES-GCM
-with strictly increasing counters. The 6-digit code is derived from that transcript, so if the digits
-match on both screens there is no one in the middle.
+Each device writes `{deviceId}.syncly` and a plaintext `chain.json` that only stores a hash of the
+secret, so a device pointed at the wrong folder notices before it tries to decrypt. Sync is a
+push of this device's ops plus a pull of everyone else's. The local SQLite database stays the
+source of truth.
 
 ## Layout
 
 ```
 src/
   Syncly.Crdt/                 HLC, op log, RGA text, fractional-index block tree, version vectors
-  Syncly.Model/                Blocks, pages, peers, wikilinks
+  Syncly.Model/                Blocks, pages, sync settings, wikilinks
   Syncly.Storage/              SQLite: ops, projections, snapshots, links, FTS5 search
-  Syncly.Security/             Device identity, handshake, secure channel
-  Syncly.Sync/                 Protocol, sessions, anti-entropy engine
-  Syncly.Transport.Lan/        UDP discovery + framed TCP
-  Syncly.Transport.WifiDirect/ Platform stubs
+  Syncly.Security/             Device identity, BIP39 chain, blob encryption
+  Syncly.Sync/                 Mailbox engine, local folder backend
+  Syncly.Backend.ProtonDrive/  Proton Drive public-link mailbox
   Syncly.App/                  Workspace commands, inline markup, composition root
   Syncly.UI/                   Blazor components (shared by every host)
   Syncly.Desktop/              Photino host — Linux and Windows
   Syncly.Mobile/               MAUI host — Android (needs the MAUI workload, so it is not in the solution)
 tests/
   Syncly.Crdt.Tests/           Randomized convergence and fuzz
-  Syncly.Sync.Tests/           Multi-device partition simulation
+  Syncly.Sync.Tests/           Chain, encryption, two-device folder sync
   Syncly.Storage.Tests/
 ```
 
@@ -68,20 +66,32 @@ dotnet run --project src/Syncly.Desktop
 dotnet build src/Syncly.Mobile -t:Run -f:net10.0-android
 ```
 
-Two instances on one machine, to watch sync happen:
+Two instances on one machine, sharing a folder:
 
 ```bash
-SYNCLY_DATA_DIR=.local/a SYNCLY_DEVICE_NAME="Peer A" SYNCLY_PORT=45678 dotnet run --project src/Syncly.Desktop &
-SYNCLY_DATA_DIR=.local/b SYNCLY_DEVICE_NAME="Peer B" SYNCLY_PORT=45688 dotnet run --project src/Syncly.Desktop
+SYNCLY_DATA_DIR=.local/a SYNCLY_DEVICE_NAME="Peer A" dotnet run --project src/Syncly.Desktop &
+SYNCLY_DATA_DIR=.local/b SYNCLY_DEVICE_NAME="Peer B" dotnet run --project src/Syncly.Desktop
 ```
+
+Then in Settings on both: the same folder as the mailbox, and the same 24-word chain.
 
 VS Code has the same thing as the **Syncly (both peers)** compound launch configuration.
 
 | Variable | Meaning |
 |----------|---------|
 | `SYNCLY_DATA_DIR` | Where `syncly.db` lives (default: local app data) |
-| `SYNCLY_DEVICE_NAME` | Name other devices see (default: machine name) |
-| `SYNCLY_PORT` | TCP listen port (default: 45654; discovery beacons use 45655) |
+| `SYNCLY_DEVICE_NAME` | Name written into this device's mailbox pack (default: machine name) |
+
+## Installers and updates
+
+Every push to `main` publishes a GitHub Release (`v2.0.<build>`) at
+https://github.com/PatTheLad/Syncly/releases with:
+
+- **Windows** — Velopack setup (`Syncly-win-Setup.exe`)
+- **Linux** — Velopack setup for x64
+- **Android** — `Syncly-android.apk`
+
+Installed copies check that feed on startup. When a newer release exists, the shell and Settings show an **Update** button. On desktop the download is silent and Syncly restarts into the new version. On Android the APK downloads silently, then Android's package installer asks once to replace the app (sideloaded APKs cannot skip that system prompt).
 
 ## Editing
 
@@ -107,5 +117,5 @@ body lines become blocks, and leaves the old table untouched as a backup.
 
 ## Not in this pass
 
-Graph view, sync over the internet, real Wi-Fi Direct connection setup, encryption at rest, and file
-attachments.
+Graph view, extra cloud providers beyond Proton Drive, encryption at rest of the local database,
+and file attachments.

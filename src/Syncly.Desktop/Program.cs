@@ -2,11 +2,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Photino.Blazor;
 using Syncly.App;
-using Syncly.Sync;
-using Syncly.Transport.Lan;
-using Syncly.Transport.WifiDirect;
 using Syncly.UI;
 using Syncly.UI.Services;
+using Velopack;
 
 namespace Syncly.Desktop;
 
@@ -15,14 +13,14 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        VelopackApp.Build().Run();
+
         var loggerFactory = LoggerFactory.Create(logging =>
         {
             logging.AddSimpleConsole(o => o.SingleLine = true);
             logging.SetMinimumLevel(LogLevel.Information);
         });
 
-        // The whole app hangs off one composition root, so it is started before the UI exists and
-        // handed to DI as a ready object.
         var syncly = SynclyApp.StartAsync(BuildOptions(args), loggerFactory)
             .GetAwaiter()
             .GetResult();
@@ -32,6 +30,7 @@ internal static class Program
         builder.Services.AddLogging(logging => logging.AddSimpleConsole(o => o.SingleLine = true));
         builder.Services.AddSingleton(syncly);
         builder.Services.AddSingleton(syncly.Workspace);
+        builder.Services.AddSingleton<IAppUpdater>(new VelopackUpdater(loggerFactory));
         builder.Services.AddScoped<EditorState>();
 
         builder.RootComponents.Add<Syncly.UI.App>("#app");
@@ -59,13 +58,6 @@ internal static class Program
     {
         DataDirectory = Argument(args, "--data"),
         DisplayName = Argument(args, "--name"),
-        ListenPort = int.TryParse(Argument(args, "--port"), out var port) ? port : 45_654,
-        Transports = () => [new LanTcpTransport()],
-        Discoveries = () =>
-        [
-            new LanDiscovery(),
-            new WifiDirectDiscovery(OperatingSystem.IsWindows() ? "Windows" : "Linux"),
-        ],
     };
 
     private static string? Argument(string[] args, string name)

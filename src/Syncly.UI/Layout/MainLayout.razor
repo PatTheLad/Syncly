@@ -5,6 +5,7 @@
 @inject SynclyApp App
 @inject NavigationManager Nav
 @inject IJSRuntime Js
+@inject IAppUpdater Updater
 
 <div class="shell @(State.SidebarOpen ? null : "no-sidebar")">
     <nav class="rail">
@@ -18,8 +19,6 @@
 
         <button class="rail-item @(IsAt("") ? "active" : null)" title="Notes (Ctrl+K to jump)"
                 @onclick='() => Go("")'>✎</button>
-        <button class="rail-item @(IsAt("devices") ? "active" : null)" title="Devices"
-                @onclick='() => Go("devices")'>⇄</button>
         <button class="rail-item @(IsAt("settings") ? "active" : null)" title="Settings"
                 @onclick='() => Go("settings")'>⚙</button>
 
@@ -84,6 +83,15 @@
                 <span class="card-sub grow">@SyncSummary</span>
                 <button class="chip muted" title="Sync now (Ctrl+S)" @onclick="SyncNowAsync">↻</button>
             </div>
+            @if (Updater.Available is { } update)
+            {
+                <button class="chip primary update-chip"
+                        disabled="@Updater.Busy"
+                        title="Install Syncly @update.Version"
+                        @onclick="UpdateAsync">
+                    @(Updater.Busy ? (Updater.Progress ?? "Updating…") : $"Update to {update.Version}")
+                </button>
+            }
         </div>
     </aside>
 
@@ -97,17 +105,17 @@
     </div>
 </div>
 
-@if (App.Pairing.Pending is { } pending)
+@if (Updater.Available is { } banner && !IsAt("settings"))
 {
     <div class="banner">
         <div>
-            <div class="who">@(pending.Inbound ? "Incoming from" : "Connecting to") @pending.DisplayName</div>
-            <div class="code">@pending.ComparisonCode</div>
-            <div class="who">Pair only if both screens show these digits.</div>
+            <div class="who">Syncly @banner.Version is ready</div>
+            <div class="who">@(Updater.Progress ?? "Update downloads in the background.")</div>
         </div>
         <div class="row">
-            <button class="chip primary" @onclick="App.Pairing.Approve">Pair</button>
-            <button class="chip danger" @onclick="App.Pairing.Reject">Ignore</button>
+            <button class="chip primary" disabled="@Updater.Busy" @onclick="UpdateAsync">
+                @(Updater.Busy ? "Updating…" : "Update")
+            </button>
         </div>
     </div>
 }
@@ -127,6 +135,7 @@
 
 @code {
     private DotNetObjectReference<MainLayout>? _self;
+    private CancellationTokenSource? _updateCts;
     private string _query = string.Empty;
     private List<SearchHit>? _hits;
 
@@ -134,8 +143,8 @@
     {
         State.Changed += Refresh;
         State.Workspace.Changed += Refresh;
-        App.Pairing.Changed += Refresh;
         App.Sync.Changed += Refresh;
+        Updater.Changed += Refresh;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -146,6 +155,8 @@
         _self = DotNetObjectReference.Create(this);
         await Js.InvokeVoidAsync("syncly.attachShell", _self);
         await State.Workspace.RefreshPagesAsync();
+        _updateCts = new CancellationTokenSource();
+        _ = PollUpdatesAsync(_updateCts.Token);
 
         if (await Js.InvokeAsync<bool>("syncly.isNarrow"))
             State.SetSidebar(false);
@@ -203,32 +214,46 @@
 
     private Task SyncNowAsync() => App.Sync.SyncNowAsync();
 
-    private bool IsLive => App.Sync.Sessions.Any(s => s.Phase == SyncPhase.Live);
+    private Task UpdateAsync() => Updater.ApplyAsync();
 
-    private string StatusClass => App.Sync.Sessions switch
+    private async Task PollUpdatesAsync(CancellationToken ct)
     {
-        var s when s.Any(x => x.Phase == SyncPhase.Live) => "live",
-        var s when s.Any(x => x.Phase == SyncPhase.Failed) => "failed",
-        var s when s.Count > 0 => "working",
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Updater.CheckAsync(ct);
+                await Task.Delay(TimeSpan.FromHours(6), ct);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromHours(1), ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+            }
+        }
+    }
+
+    private bool IsLive => App.Sync.Status.Phase == SyncPhase.Idle && App.Sync.IsConfigured;
+
+    private string StatusClass => App.Sync.Status.Phase switch
+    {
+        SyncPhase.Idle when App.Sync.IsConfigured => "live",
+        SyncPhase.Failed => "failed",
+        SyncPhase.Syncing => "working",
         _ => "",
     };
 
-    private string SyncSummary
-    {
-        get
-        {
-            var sessions = App.Sync.Sessions;
-            var live = sessions.Count(s => s.Phase == SyncPhase.Live);
-            if (live > 0)
-                return live == 1 ? "Synced with 1 device" : $"Synced with {live} devices";
-
-            if (sessions.Count > 0)
-                return sessions[0].Detail ?? sessions[0].Phase.ToString();
-
-            var nearby = App.Sync.DiscoveredPeers.Count;
-            return nearby > 0 ? $"{nearby} device(s) nearby" : "No devices nearby";
-        }
-    }
+    private string SyncSummary => App.Sync.Status.Summary;
 
     private IReadOnlyList<Palette.PaletteItem> PaletteItems()
     {
@@ -244,11 +269,6 @@
             new("👁", State.ReadingMode ? "Edit this page" : "Reading mode", "Ctrl+E", () =>
             {
                 State.ToggleReadingMode();
-                return Task.CompletedTask;
-            }),
-            new("⇄", "Devices", null, () =>
-            {
-                Go("devices");
                 return Task.CompletedTask;
             }),
             new("⚙", "Settings", null, () =>
@@ -301,10 +321,12 @@
 
     public void Dispose()
     {
+        _updateCts?.Cancel();
+        _updateCts?.Dispose();
         State.Changed -= Refresh;
         State.Workspace.Changed -= Refresh;
-        App.Pairing.Changed -= Refresh;
         App.Sync.Changed -= Refresh;
+        Updater.Changed -= Refresh;
         _self?.Dispose();
     }
 }

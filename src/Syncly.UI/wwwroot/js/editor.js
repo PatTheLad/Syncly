@@ -313,6 +313,62 @@
     return window.matchMedia('(max-width: 720px)').matches;
   }
 
+  function confirmDialog(message) {
+    return window.confirm(message);
+  }
+
+  async function scanQr() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      return null;
+    }
+
+    const Detector = window.BarcodeDetector;
+    const detector = Detector ? new Detector({ formats: ['qr_code'] }) : null;
+    if (!detector) return null;
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment' },
+    });
+
+    const overlay = document.createElement('div');
+    overlay.className = 'qr-scan';
+    const video = document.createElement('video');
+    video.autoplay = true;
+    video.playsInline = true;
+    video.muted = true;
+    video.srcObject = stream;
+    const cancel = document.createElement('button');
+    cancel.className = 'chip';
+    cancel.textContent = 'Cancel';
+    overlay.append(video, cancel);
+    document.body.appendChild(overlay);
+    await video.play().catch(() => {});
+
+    return await new Promise((resolve) => {
+      let done = false;
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        clearInterval(timer);
+        stream.getTracks().forEach((track) => track.stop());
+        overlay.remove();
+        resolve(value);
+      };
+
+      cancel.addEventListener('click', () => finish(null));
+      const timer = setInterval(async () => {
+        try {
+          const codes = await detector.detect(video);
+          if (codes && codes.length > 0 && codes[0].rawValue) {
+            finish(codes[0].rawValue);
+          }
+        } catch {
+          // Keep scanning until cancel.
+        }
+      }, 250);
+    });
+  }
+
   window.syncly = {
     attachBlock,
     attachShell,
@@ -325,5 +381,7 @@
     setMenuOpen,
     setPaletteOpen,
     isNarrow,
+    confirm: confirmDialog,
+    scanQr,
   };
 })();

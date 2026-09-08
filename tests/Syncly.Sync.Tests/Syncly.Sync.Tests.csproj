@@ -12,12 +12,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Syncly.App\Syncly.App.csproj" />
+    <ProjectReference Include="..\..\src\Syncly.Backend.ProtonDrive\Syncly.Backend.ProtonDrive.csproj" />
     <ProjectReference Include="..\..\src\Syncly.Crdt\Syncly.Crdt.csproj" />
     <ProjectReference Include="..\..\src\Syncly.Model\Syncly.Model.csproj" />
     <ProjectReference Include="..\..\src\Syncly.Security\Syncly.Security.csproj" />
     <ProjectReference Include="..\..\src\Syncly.Storage\Syncly.Storage.csproj" />
     <ProjectReference Include="..\..\src\Syncly.Sync\Syncly.Sync.csproj" />
-    <ProjectReference Include="..\..\src\Syncly.Transport.Lan\Syncly.Transport.Lan.csproj" />
   </ItemGroup>
 
   <ItemGroup>

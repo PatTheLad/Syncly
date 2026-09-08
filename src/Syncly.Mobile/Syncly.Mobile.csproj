@@ -10,8 +10,9 @@
     <RootNamespace>Syncly.Mobile</RootNamespace>
     <ApplicationTitle>Syncly</ApplicationTitle>
     <ApplicationId>dev.syncly.app</ApplicationId>
-    <ApplicationDisplayVersion>2.0</ApplicationDisplayVersion>
-    <ApplicationVersion>2</ApplicationVersion>
+    <ApplicationDisplayVersion>$(Version)</ApplicationDisplayVersion>
+    <ApplicationVersion Condition="'$(AndroidVersionCode)' != ''">$(AndroidVersionCode)</ApplicationVersion>
+    <ApplicationVersion Condition="'$(AndroidVersionCode)' == ''">1</ApplicationVersion>
     <SupportedOSPlatformVersion>26.0</SupportedOSPlatformVersion>
   </PropertyGroup>
 
@@ -30,8 +31,6 @@
     <ProjectReference Include="..\Syncly.App\Syncly.App.csproj" />
     <ProjectReference Include="..\Syncly.Model\Syncly.Model.csproj" />
     <ProjectReference Include="..\Syncly.Sync\Syncly.Sync.csproj" />
-    <ProjectReference Include="..\Syncly.Transport.Lan\Syncly.Transport.Lan.csproj" />
-    <ProjectReference Include="..\Syncly.Transport.WifiDirect\Syncly.Transport.WifiDirect.csproj" />
     <ProjectReference Include="..\Syncly.UI\Syncly.UI.csproj" />
   </ItemGroup>
 

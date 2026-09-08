@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Logging;
 using Syncly.App;
-using Syncly.Transport.Lan;
 using Syncly.UI.Services;
 
 namespace Syncly.Mobile;
@@ -20,14 +19,11 @@ public static class MauiProgram
         builder.Logging.AddDebug();
 #endif
 
-        // Android hands us a private app directory; everything else matches the desktop host.
         var syncly = SynclyApp.StartAsync(
                 new SynclyOptions
                 {
                     DataDirectory = FileSystem.AppDataDirectory,
                     DisplayName = DeviceInfo.Name,
-                    Transports = () => [new P2pBoundTcpTransport()],
-                    Discoveries = () => [new LanDiscovery(), new AndroidWifiDirectDiscovery()],
                 })
             .GetAwaiter()
             .GetResult();
@@ -35,6 +31,19 @@ public static class MauiProgram
         builder.Services.AddSingleton(syncly);
         builder.Services.AddSingleton(syncly.Workspace);
         builder.Services.AddScoped<EditorState>();
+#if DEBUG
+        builder.Services.AddSingleton<IAppUpdater, NoOpAppUpdater>();
+#else
+        builder.Services.AddSingleton<IAppUpdater>(_ =>
+        {
+            var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+            http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "Syncly");
+            return new GitHubApkUpdater(
+                http,
+                (path, ct) => new AndroidApkInstaller().InstallAsync(path, ct),
+                FileSystem.CacheDirectory);
+        });
+#endif
 
         return builder.Build();
     }

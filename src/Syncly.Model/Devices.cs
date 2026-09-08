@@ -1,45 +1,9 @@
 namespace Syncly.Model;
 
-/// <summary>Stable identity of a device, as advertised on the wire.</summary>
+/// <summary>Stable identity of a device. The id is a hash of the long-lived key; the name is cosmetic.</summary>
 public sealed record DeviceDescriptor(string DeviceId, string DisplayName, string PublicKeyBase64)
 {
     public string ShortFingerprint => DeviceId.Length <= 8 ? DeviceId : DeviceId[..8];
-}
-
-public enum PeerTransport
-{
-    Lan = 0,
-    WifiDirect = 1,
-    Manual = 2,
-}
-
-/// <summary>A peer seen by discovery, before or after trust is established.</summary>
-public sealed record DiscoveredPeer(
-    string DeviceId,
-    string DisplayName,
-    string Address,
-    int Port,
-    PeerTransport Transport,
-    DateTimeOffset SeenAt)
-{
-    public string Endpoint => $"{Address}:{Port}";
-}
-
-public static class PeerEndpoints
-{
-    public static bool IsRoutable(string address)
-    {
-        if (!System.Net.IPAddress.TryParse(address, out var ip))
-            return false;
-
-        if (ip.AddressFamily is not (System.Net.Sockets.AddressFamily.InterNetwork
-            or System.Net.Sockets.AddressFamily.InterNetworkV6))
-            return false;
-
-        return !System.Net.IPAddress.Any.Equals(ip)
-               && !System.Net.IPAddress.IPv6Any.Equals(ip)
-               && !System.Net.IPAddress.None.Equals(ip);
-    }
 }
 
 public sealed record TrustedDevice(
@@ -48,30 +12,49 @@ public sealed record TrustedDevice(
     string PublicKeyBase64,
     DateTimeOffset TrustedAt);
 
-/// <summary>Shown on both devices during pairing; the 6-digit code must match.</summary>
-public sealed record PairingRequest(
-    string DeviceId,
-    string DisplayName,
-    string PublicKeyBase64,
-    string ComparisonCode,
-    bool Inbound);
+public enum SyncBackendKind
+{
+    None = 0,
+    Folder = 1,
+    Cloud = 2,
+}
+
+public enum CloudProvider
+{
+    ProtonDrive = 0,
+}
+
+public sealed class SyncPreferences
+{
+    public SyncBackendKind Backend { get; set; } = SyncBackendKind.None;
+
+    public string? FolderPath { get; set; }
+
+    public CloudProvider Provider { get; set; } = CloudProvider.ProtonDrive;
+
+    public string? ProtonShareUrl { get; set; }
+
+    public bool HasMailbox => Backend switch
+    {
+        SyncBackendKind.Folder => !string.IsNullOrWhiteSpace(FolderPath),
+        SyncBackendKind.Cloud => Provider == CloudProvider.ProtonDrive
+                                 && !string.IsNullOrWhiteSpace(ProtonShareUrl),
+        _ => false,
+    };
+}
 
 public enum SyncPhase
 {
+    Disabled,
     Idle,
-    Connecting,
-    Handshaking,
-    AwaitingTrust,
-    Exchanging,
-    Live,
+    Syncing,
     Failed,
 }
 
 public sealed record SyncStatus(
-    string DeviceId,
-    string DisplayName,
     SyncPhase Phase,
+    string Summary,
     string? Detail,
-    long OpsSent,
-    long OpsReceived,
-    DateTimeOffset UpdatedAt);
+    string? BackendName,
+    DateTimeOffset? LastSuccessAt,
+    int RemoteDevices);

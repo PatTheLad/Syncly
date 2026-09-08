@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Syncly.Backend.ProtonDrive;
 using Syncly.Crdt;
 using Syncly.Model;
 using Syncly.Security;
@@ -14,12 +15,6 @@ public sealed class SynclyOptions
     public string? DataDirectory { get; init; }
 
     public string? DisplayName { get; init; }
-
-    public int ListenPort { get; init; } = 45_654;
-
-    public Func<IEnumerable<ISyncTransport>>? Transports { get; init; }
-
-    public Func<IEnumerable<IPeerDiscovery>>? Discoveries { get; init; }
 
     public string ResolveDataDirectory()
     {
@@ -39,11 +34,6 @@ public sealed class SynclyOptions
         DisplayName
         ?? Environment.GetEnvironmentVariable("SYNCLY_DEVICE_NAME")
         ?? Environment.MachineName;
-
-    public int ResolveListenPort() =>
-        int.TryParse(Environment.GetEnvironmentVariable("SYNCLY_PORT"), out var port) && port > 0
-            ? port
-            : ListenPort;
 }
 
 /// <summary>Stores the device key in the same database as everything else.</summary>
@@ -71,7 +61,7 @@ public sealed class SynclyApp : IAsyncDisposable
         Workspace workspace,
         OpLogStore opLog,
         PeerStore peers,
-        PairingBroker pairing,
+        IKeyVault vault,
         SyncEngine sync,
         string dataDirectory)
     {
@@ -81,7 +71,7 @@ public sealed class SynclyApp : IAsyncDisposable
         Workspace = workspace;
         OpLog = opLog;
         Peers = peers;
-        Pairing = pairing;
+        Vault = vault;
         Sync = sync;
         DataDirectory = dataDirectory;
     }
@@ -98,7 +88,7 @@ public sealed class SynclyApp : IAsyncDisposable
 
     public PeerStore Peers { get; }
 
-    public PairingBroker Pairing { get; }
+    public IKeyVault Vault { get; }
 
     public SyncEngine Sync { get; }
 
@@ -116,8 +106,8 @@ public sealed class SynclyApp : IAsyncDisposable
         Directory.CreateDirectory(directory);
 
         var database = await SynclyDatabase.OpenAsync(Path.Combine(directory, "syncly.db"), ct);
-        var identity = await DeviceIdentity.LoadOrCreateAsync(
-            new SqliteKeyVault(database), options.ResolveDisplayName(), ct);
+        var vault = new SqliteKeyVault(database);
+        var identity = await DeviceIdentity.LoadOrCreateAsync(vault, options.ResolveDisplayName(), ct);
 
         var opLog = new OpLogStore(database);
         var snapshots = new SnapshotStore(database);
@@ -141,22 +131,19 @@ public sealed class SynclyApp : IAsyncDisposable
         await workspace.EnsureSpacesAsync(ct);
         await database.SetMetaAsync(ProjectionVersionKey, VersionVectorText.Format(replica.Version), ct);
 
-        var pairing = new PairingBroker();
         var context = new SyncContext
         {
             Identity = identity,
             Replica = replica,
             OpLog = opLog,
             Peers = peers,
-            Prompter = pairing,
-            Options = new SyncOptions { ListenPort = options.ResolveListenPort() },
+            Vault = vault,
             OnRemoteOps = ops => workspace.ProjectAsync(ops.Select(o => o.ObjectId), ct),
+            BackendFactory = CreateBackend,
         };
 
         var engine = new SyncEngine(
             context,
-            options.Transports?.Invoke() ?? [],
-            options.Discoveries?.Invoke() ?? [],
             snapshots,
             loggerFactory.CreateLogger<SyncEngine>());
 
@@ -167,7 +154,20 @@ public sealed class SynclyApp : IAsyncDisposable
             identity.DisplayName, identity.DeviceId[..8], directory);
 
         return new SynclyApp(
-            database, identity, replica, workspace, opLog, peers, pairing, engine, directory);
+            database, identity, replica, workspace, opLog, peers, vault, engine, directory);
+    }
+
+    internal static ISyncBackend? CreateBackend(SyncPreferences preferences)
+    {
+        return preferences.Backend switch
+        {
+            SyncBackendKind.Folder when !string.IsNullOrWhiteSpace(preferences.FolderPath) =>
+                new LocalFolderBackend(preferences.FolderPath),
+            SyncBackendKind.Cloud when preferences.Provider == CloudProvider.ProtonDrive
+                                      && !string.IsNullOrWhiteSpace(preferences.ProtonShareUrl) =>
+                new ProtonDriveBackend(preferences.ProtonShareUrl),
+            _ => null,
+        };
     }
 
     /// <summary>

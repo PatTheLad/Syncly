@@ -1,14 +1,13 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Syncly.App/Syncly.App.csproj" />
+    <Project Path="src/Syncly.Backend.ProtonDrive/Syncly.Backend.ProtonDrive.csproj" />
     <Project Path="src/Syncly.Crdt/Syncly.Crdt.csproj" />
     <Project Path="src/Syncly.Desktop/Syncly.Desktop.csproj" />
     <Project Path="src/Syncly.Model/Syncly.Model.csproj" />
     <Project Path="src/Syncly.Security/Syncly.Security.csproj" />
     <Project Path="src/Syncly.Storage/Syncly.Storage.csproj" />
     <Project Path="src/Syncly.Sync/Syncly.Sync.csproj" />
-    <Project Path="src/Syncly.Transport.Lan/Syncly.Transport.Lan.csproj" />
-    <Project Path="src/Syncly.Transport.WifiDirect/Syncly.Transport.WifiDirect.csproj" />
     <Project Path="src/Syncly.UI/Syncly.UI.csproj" />
   </Folder>
   <Folder Name="/tests/">

@@ -1,0 +1,164 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: true
+  VERSION: 2.0.${{ github.run_number }}
+  ANDROID_VERSION_CODE: ${{ github.run_number }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - run: dotnet test Syncly.slnx -c Release
+
+  windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - run: dotnet tool install --global vpk --version 1.2.0
+      - run: >
+          dotnet publish src/Syncly.Desktop/Syncly.Desktop.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:Version=${{ env.VERSION }}
+          -p:PublishSingleFile=false
+          -o publish/win
+      - run: >
+          vpk pack
+          -u Syncly
+          -v ${{ env.VERSION }}
+          -p publish/win
+          -e Syncly.exe
+          -o dist/win
+          --channel win
+          --packTitle Syncly
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/win
+
+  linux:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
+      - run: dotnet tool install --global vpk --version 1.2.0
+      - run: >
+          dotnet publish src/Syncly.Desktop/Syncly.Desktop.csproj
+          -c Release -r linux-x64 --self-contained true
+          -p:Version=${{ env.VERSION }}
+          -p:PublishSingleFile=false
+          -o publish/linux
+      - run: >
+          vpk pack
+          -u Syncly
+          -v ${{ env.VERSION }}
+          -p publish/linux
+          -e Syncly
+          -o dist/linux
+          --channel linux
+          --packTitle Syncly
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/linux
+
+  android:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - run: dotnet workload install maui-android
+      - name: Debug keystore
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -noprompt \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android -keypass android \
+              -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+      - run: >
+          dotnet publish src/Syncly.Mobile/Syncly.Mobile.csproj
+          -c Release -f net10.0-android
+          -p:Version=${{ env.VERSION }}
+          -p:AndroidVersionCode=${{ env.ANDROID_VERSION_CODE }}
+          -p:AndroidPackageFormat=apk
+          -p:AndroidKeyStore=true
+          -p:AndroidSigningKeyStore=$HOME/.android/debug.keystore
+          -p:AndroidSigningKeyAlias=androiddebugkey
+          -p:AndroidSigningKeyPass=android
+          -p:AndroidSigningStorePass=android
+      - name: Collect APK
+        shell: bash
+        run: |
+          mkdir -p dist/android
+          find src/Syncly.Mobile -name "*.apk" -print
+          apk=$(find src/Syncly.Mobile -name "*-Signed.apk" | head -n 1)
+          if [ -z "$apk" ]; then
+            apk=$(find src/Syncly.Mobile -name "*.apk" | head -n 1)
+          fi
+          test -n "$apk"
+          cp "$apk" dist/android/Syncly-android.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/android
+
+  publish:
+    needs: [windows, linux, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          mapfile -t files < <(find artifacts -type f | sort)
+          test "${#files[@]}" -gt 0
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${files[@]}" --clobber
+          else
+            gh release create "$tag" \
+              --title "Syncly ${VERSION}" \
+              --notes "Installers for Windows, Linux, and Android. Installed copies show an Update button for the next release; the download is silent." \
+              --latest \
+              "${files[@]}"
+          fi

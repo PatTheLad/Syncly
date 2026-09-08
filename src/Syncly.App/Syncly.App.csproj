@@ -14,6 +14,7 @@
     <ProjectReference Include="..\Syncly.Model\Syncly.Model.csproj" />
     <ProjectReference Include="..\Syncly.Security\Syncly.Security.csproj" />
     <ProjectReference Include="..\Syncly.Storage\Syncly.Storage.csproj" />
+    <ProjectReference Include="..\Syncly.Backend.ProtonDrive\Syncly.Backend.ProtonDrive.csproj" />
     <ProjectReference Include="..\Syncly.Sync\Syncly.Sync.csproj" />
   </ItemGroup>
 

@@ -1,7 +1,10 @@
 @page "/settings"
 @namespace Syncly.UI.Pages
+@implements IDisposable
 @inject SynclyApp App
 @inject EditorState State
+@inject IJSRuntime Js
+@inject IAppUpdater Updater
 
 <div class="workspace">
     <div class="topbar">
@@ -11,12 +14,171 @@
     <div class="editor-scroll">
         <div class="page">
             <section>
+                <h2>Sync</h2>
+                <p class="lede">Devices share a mailbox — a folder or Proton Drive — and a 24-word chain code. The mailbox only ever sees ciphertext.</p>
+
+                <div class="card">
+                    <div class="card-title">Mailbox</div>
+                    <div class="row wrap">
+                        <button class="chip @(_prefs.Backend == SyncBackendKind.Folder ? "primary" : null)"
+                                @onclick="() => SetBackendAsync(SyncBackendKind.Folder)">
+                            Local folder
+                        </button>
+                        <button class="chip @(_prefs.Backend == SyncBackendKind.Cloud ? "primary" : null)"
+                                @onclick="() => SetBackendAsync(SyncBackendKind.Cloud)">
+                            Cloud
+                        </button>
+                    </div>
+
+                    @if (_prefs.Backend == SyncBackendKind.Folder)
+                    {
+                        <div class="card-sub">A folder on this machine, a USB stick, or a network share both devices can see.</div>
+                        <div class="row">
+                            <input class="field grow" placeholder="C:\SynclyMailbox" @bind="_prefs.FolderPath" @bind:event="oninput" />
+                            <button class="chip" @onclick="SaveMailboxAsync">Save</button>
+                        </div>
+                    }
+                    else if (_prefs.Backend == SyncBackendKind.Cloud)
+                    {
+                        <div class="row wrap">
+                            <span class="chip primary">Proton Drive</span>
+                            <span class="card-sub">More providers later</span>
+                        </div>
+                        <div class="card-sub">
+                            In Proton Drive, share a folder → public link → <strong>Editor</strong>. Paste the full URL, including the part after #.
+                        </div>
+                        <div class="row">
+                            <input class="field grow" placeholder="https://drive.proton.me/urls/…#…"
+                                   @bind="_prefs.ProtonShareUrl" @bind:event="oninput" />
+                        </div>
+                        <div class="row">
+                            <button class="chip" @onclick="SaveMailboxAsync">Save</button>
+                            <button class="chip" @onclick="TestMailboxAsync">Test connection</button>
+                        </div>
+                    }
+
+                    @if (_mailboxMessage is { Length: > 0 })
+                    {
+                        <div class="card-sub @(_mailboxError ? "error" : null)">@_mailboxMessage</div>
+                    }
+                </div>
+
+                <div class="card">
+                    <div class="card-title">Chain code</div>
+                    <div class="card-sub">
+                        Same idea as Brave Sync: 24 words (or a QR) are the encryption key. Anyone with the code can read this mailbox.
+                    </div>
+
+                    @if (App.Sync.Chain is { } chain)
+                    {
+                        <div class="row wrap">
+                            <button class="chip" @onclick="() => _revealChain = !_revealChain">
+                                @(_revealChain ? "Hide words" : "Show words")
+                            </button>
+                            <button class="chip" @onclick="() => CopyAsync(chain.Words)">Copy words</button>
+                            <button class="chip" @onclick="() => CopyAsync(chain.Uri)">Copy link</button>
+                            <button class="chip" @onclick="() => _showQr = !_showQr">
+                                @(_showQr ? "Hide QR" : "Show QR")
+                            </button>
+                        </div>
+
+                        @if (_revealChain)
+                        {
+                            <div class="chain-words">@chain.Words</div>
+                        }
+
+                        @if (_showQr)
+                        {
+                            <div class="qr-wrap">
+                                <img class="qr" alt="Sync chain QR code" src="@QrDataUri(chain.Uri)" />
+                                <div class="card-sub">Scan this on the other device, or type the 24 words.</div>
+                            </div>
+                        }
+
+                        <div class="card-sub">Chain @_shortId · rotating makes old cloud blobs unreadable.</div>
+                        <div class="row wrap">
+                            <button class="chip danger" @onclick="RotateAsync">Rotate chain</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="row wrap">
+                            <button class="chip primary" @onclick="CreateChainAsync">Create chain</button>
+                            <button class="chip" @onclick="() => _joinOpen = !_joinOpen">Join with code</button>
+                            <button class="chip" @onclick="ScanQrAsync">Scan QR</button>
+                        </div>
+                    }
+
+                    @if (_joinOpen || App.Sync.Chain is null)
+                    {
+                        <textarea class="field chain-input" rows="3"
+                                  placeholder="24 words, or a syncly:sync:v1:… code"
+                                  @bind="_joinText"></textarea>
+                        <div class="row">
+                            <button class="chip primary" @onclick="JoinAsync">Join</button>
+                        </div>
+                    }
+
+                    @if (_chainMessage is { Length: > 0 })
+                    {
+                        <div class="card-sub @(_chainError ? "error" : null)">@_chainMessage</div>
+                    }
+                </div>
+
+                <div class="card">
+                    <div class="row">
+                        <span class="status-dot @StatusClass"></span>
+                        <div class="grow">
+                            <div class="card-title">@App.Sync.Status.Summary</div>
+                            @if (App.Sync.Status.Detail is { Length: > 0 } detail)
+                            {
+                                <div class="card-sub">@detail</div>
+                            }
+                            @if (App.Sync.Status.LastSuccessAt is { } at)
+                            {
+                                <div class="card-sub">Last success @at.ToLocalTime().ToString("g")</div>
+                            }
+                        </div>
+                        <button class="chip primary" @onclick="() => App.Sync.SyncNowAsync()">Sync now</button>
+                    </div>
+                </div>
+            </section>
+
+            <section>
+                <h2>App</h2>
+                <div class="card">
+                    <div class="card-title">Version @Updater.CurrentVersion</div>
+                    @if (Updater.Available is { } update)
+                    {
+                        <div class="card-sub">@update.Version is ready. The download is silent.</div>
+                        <div class="row wrap">
+                            <button class="chip primary" disabled="@Updater.Busy" @onclick="UpdateAsync">
+                                @(Updater.Busy ? (Updater.Progress ?? "Updating…") : $"Update to {update.Version}")
+                            </button>
+                        </div>
+                    }
+                    else if (Updater.CanSelfUpdate)
+                    {
+                        <div class="card-sub">@(Updater.Progress ?? "This build is current.")</div>
+                        <button class="chip" @onclick="() => Updater.CheckAsync()">Check for updates</button>
+                    }
+                    else
+                    {
+                        <div class="card-sub">
+                            This copy was not installed from a Syncly installer, so it cannot self-update.
+                            Installers are published from the main branch on GitHub.
+                        </div>
+                    }
+                </div>
+            </section>
+
+            <section>
                 <h2>Identity</h2>
                 <div class="card">
                     <div class="card-title">@App.Identity.DisplayName</div>
                     <div class="card-sub">Device ID @App.Identity.DeviceId</div>
                     <div class="card-sub">
-                        The key never leaves this device. Set <code>SYNCLY_DEVICE_NAME</code> to rename it.
+                        Set <code>SYNCLY_DEVICE_NAME</code> to rename it. This name is written into the mailbox so other devices can see who sent a pack.
                     </div>
                 </div>
             </section>
@@ -70,11 +232,167 @@
     private int _pageCount;
     private long _opCount;
     private string _maintenance = string.Empty;
+    private SyncPreferences _prefs = new();
+    private string _joinText = string.Empty;
+    private bool _revealChain;
+    private bool _showQr;
+    private bool _joinOpen;
+    private string? _mailboxMessage;
+    private bool _mailboxError;
+    private string? _chainMessage;
+    private bool _chainError;
+
+    private string? _shortId => App.Sync.Chain is { } chain ? chain.ChainId : null;
+
+    private string StatusClass => App.Sync.Status.Phase switch
+    {
+        SyncPhase.Idle => "live",
+        SyncPhase.Syncing => "working",
+        SyncPhase.Failed => "failed",
+        _ => "",
+    };
 
     protected override async Task OnInitializedAsync()
     {
+        App.Sync.Changed += Refresh;
+        Updater.Changed += Refresh;
+        _prefs = App.Sync.Preferences;
         _pageCount = App.Workspace.Pages.Count;
         _opCount = await App.OpLog.CountAsync();
+    }
+
+    private void Refresh() => InvokeAsync(StateHasChanged);
+
+    private async Task SetBackendAsync(SyncBackendKind kind)
+    {
+        _prefs.Backend = kind;
+        await SaveMailboxAsync();
+    }
+
+    private async Task SaveMailboxAsync()
+    {
+        _mailboxError = false;
+        try
+        {
+            await App.Sync.SavePreferencesAsync(_prefs);
+            _mailboxMessage = "Saved.";
+        }
+        catch (Exception ex)
+        {
+            _mailboxError = true;
+            _mailboxMessage = ex.Message;
+        }
+    }
+
+    private async Task TestMailboxAsync()
+    {
+        _mailboxError = false;
+        _mailboxMessage = "Checking…";
+        try
+        {
+            await App.Sync.SavePreferencesAsync(_prefs);
+            await App.Sync.TestBackendAsync();
+            _mailboxMessage = "Proton Drive accepted the link. Editor access looks good.";
+        }
+        catch (Exception ex)
+        {
+            _mailboxError = true;
+            _mailboxMessage = ex.Message;
+        }
+    }
+
+    private async Task CreateChainAsync()
+    {
+        _chainError = false;
+        try
+        {
+            await App.Sync.CreateChainAsync();
+            _revealChain = true;
+            _showQr = true;
+            _chainMessage = "Share the words or QR with your other devices.";
+        }
+        catch (Exception ex)
+        {
+            _chainError = true;
+            _chainMessage = ex.Message;
+        }
+    }
+
+    private async Task JoinAsync()
+    {
+        _chainError = false;
+        try
+        {
+            await App.Sync.JoinChainAsync(_joinText);
+            _joinText = string.Empty;
+            _joinOpen = false;
+            _chainMessage = "Joined the chain. Sync now to pull from the mailbox.";
+        }
+        catch (Exception ex)
+        {
+            _chainError = true;
+            _chainMessage = ex.Message;
+        }
+    }
+
+    private async Task RotateAsync()
+    {
+            if (!await Js.InvokeAsync<bool>("syncly.confirm",
+                "Rotate the chain? Other devices must scan the new code, and old cloud files become unreadable."))
+            return;
+
+        _chainError = false;
+        await App.Sync.RotateChainAsync();
+        _revealChain = true;
+        _showQr = true;
+        _chainMessage = "New chain created. Update every other device.";
+    }
+
+    private async Task ScanQrAsync()
+    {
+        _chainError = false;
+        try
+        {
+            var value = await Js.InvokeAsync<string?>("syncly.scanQr");
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                _joinOpen = true;
+                _chainMessage = "Camera unavailable. Paste the 24 words instead.";
+                return;
+            }
+
+            _joinText = value;
+            await JoinAsync();
+        }
+        catch (Exception ex)
+        {
+            _joinOpen = true;
+            _chainError = true;
+            _chainMessage = ex.Message + " Paste the 24 words instead.";
+        }
+    }
+
+    private async Task CopyAsync(string value)
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("navigator.clipboard.writeText", value);
+            _chainMessage = "Copied.";
+            _chainError = false;
+        }
+        catch
+        {
+            _chainMessage = value;
+            _chainError = false;
+        }
+    }
+
+    private static string QrDataUri(string payload)
+    {
+        using var generator = new QRCoder.QRCodeGenerator();
+        using var data = generator.CreateQrCode(payload, QRCoder.QRCodeGenerator.ECCLevel.M);
+        var png = new QRCoder.PngByteQRCode(data);
+        return "data:image/png;base64," + Convert.ToBase64String(png.GetGraphic(6));
     }
 
     private async Task CompactAsync()
@@ -83,5 +401,13 @@
         await App.Sync.CollectAsync();
         _opCount = await App.OpLog.CountAsync();
         _maintenance = "Done";
+    }
+
+    private Task UpdateAsync() => Updater.ApplyAsync();
+
+    public void Dispose()
+    {
+        App.Sync.Changed -= Refresh;
+        Updater.Changed -= Refresh;
     }
 }

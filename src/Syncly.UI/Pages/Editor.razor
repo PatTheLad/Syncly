@@ -50,7 +50,7 @@
             {
                 <div class="empty-state">
                     <h2>@(State.CurrentSpace?.DisplayTitle ?? "This space")</h2>
-                    <p>Create a page to start writing. Nearby devices pick it up over Wi-Fi Direct — no shared network needed.</p>
+                    <p>Create a page to start writing. Sync through a folder or Proton Drive from Settings — notes stay encrypted in the mailbox.</p>
                     <div class="row">
                         <button class="chip primary" @onclick="() => CreateFirstPageAsync()">New page</button>
                         <button class="chip" @onclick="() => State.ToggleSpaceSwitcher(true)">Switch space</button>

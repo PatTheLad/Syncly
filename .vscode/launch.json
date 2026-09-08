@@ -13,7 +13,7 @@
       "stopAtEntry": false,
       "env": {
         "SYNCLY_DATA_DIR": "${workspaceFolder}/.local/syncly",
-        "SYNCLY_PORT": "45654"
+        "SYNCLY_DEVICE_NAME": "Desktop"
       }
     },
     {
@@ -28,8 +28,7 @@
       "stopAtEntry": false,
       "env": {
         "SYNCLY_DATA_DIR": "${workspaceFolder}/.local/syncly-a",
-        "SYNCLY_DEVICE_NAME": "Peer A",
-        "SYNCLY_PORT": "45678"
+        "SYNCLY_DEVICE_NAME": "Peer A"
       }
     },
     {
@@ -44,8 +43,7 @@
       "stopAtEntry": false,
       "env": {
         "SYNCLY_DATA_DIR": "${workspaceFolder}/.local/syncly-b",
-        "SYNCLY_DEVICE_NAME": "Peer B",
-        "SYNCLY_PORT": "45688"
+        "SYNCLY_DEVICE_NAME": "Peer B"
       }
     }
   ],
