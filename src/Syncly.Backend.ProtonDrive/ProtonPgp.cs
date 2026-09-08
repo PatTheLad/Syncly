@@ -35,10 +35,11 @@ internal static class ProtonPgp
         return ReadLiteral(new PgpObjectFactory(clear));
     }
 
-    public static (PgpPrivateKey Private, PgpPublicKey Public) UnlockPrivateKey(string armoredKey, byte[] passphrase)
+    public static ProtonKeySet UnlockPrivateKey(string armoredKey, byte[] passphrase)
     {
         using var input = PgpUtilities.GetDecoderStream(new MemoryStream(Encoding.UTF8.GetBytes(armoredKey)));
         var bundle = new PgpSecretKeyRingBundle(input);
+        var unlocked = new List<(PgpPrivateKey Private, PgpPublicKey Public)>();
 
         foreach (PgpSecretKeyRing ring in bundle.GetKeyRings())
         {
@@ -48,7 +49,7 @@ internal static class ProtonPgp
                 {
                     var key = secret.ExtractPrivateKey(ToChars(passphrase));
                     if (key is not null)
-                        return (key, secret.PublicKey);
+                        unlocked.Add((key, secret.PublicKey));
                 }
                 catch (PgpException)
                 {
@@ -57,10 +58,23 @@ internal static class ProtonPgp
             }
         }
 
-        throw new ProtonDriveException("Could not unlock the Proton Drive share key.");
+        if (unlocked.Count == 0)
+            throw new ProtonDriveException("Could not unlock the Proton Drive share key.");
+
+        var encryption = unlocked.FirstOrDefault(k => k.Public.IsEncryptionKey);
+        if (encryption.Private is null)
+            throw new ProtonDriveException("The Proton Drive share key has no encryption subkey.");
+
+        return new ProtonKeySet(encryption.Private, encryption.Public, unlocked.Select(k => k.Private).ToList());
     }
 
-    public static byte[] DecryptWithPrivateKey(string armored, PgpPrivateKey key)
+    public static byte[] DecryptWithPrivateKey(string armored, ProtonKeySet keys) =>
+        DecryptWithPrivateKey(armored, keys.PrivateKeys);
+
+    public static byte[] DecryptWithPrivateKey(string armored, PgpPrivateKey key) =>
+        DecryptWithPrivateKey(armored, [key]);
+
+    public static byte[] DecryptWithPrivateKey(string armored, IReadOnlyList<PgpPrivateKey> keys)
     {
         using var input = PgpUtilities.GetDecoderStream(new MemoryStream(Encoding.UTF8.GetBytes(armored)));
         var factory = new PgpObjectFactory(input);
@@ -69,29 +83,36 @@ internal static class ProtonPgp
 
         foreach (PgpEncryptedData candidate in encrypted.GetEncryptedDataObjects())
         {
-            if (candidate is PgpPublicKeyEncryptedData found && found.KeyId == key.KeyId)
+            if (candidate is not PgpPublicKeyEncryptedData found)
+                continue;
+
+            if (keys.Any(k => k.KeyId == found.KeyId))
             {
                 pk = found;
                 break;
             }
 
-            pk ??= candidate as PgpPublicKeyEncryptedData;
+            pk ??= found;
         }
 
         if (pk is null)
             throw new ProtonDriveException("Proton Drive message is not encrypted to the share key.");
 
-        using var clear = pk.GetDataStream(key);
+        var match = keys.FirstOrDefault(k => k.KeyId == pk.KeyId) ?? keys[0];
+        using var clear = pk.GetDataStream(match);
         return ReadLiteral(new PgpObjectFactory(clear));
     }
 
-    public static string EncryptWithPassword(byte[] plaintext, byte[] password)
+    public static string EncryptToKey(byte[] plaintext, PgpPublicKey publicKey)
     {
+        if (!publicKey.IsEncryptionKey)
+            throw new ProtonDriveException("The Proton Drive share key cannot encrypt.");
+
         var outStream = new MemoryStream();
         using (var armored = new ArmoredOutputStream(outStream))
         {
             var encGen = new PgpEncryptedDataGenerator(SymmetricKeyAlgorithmTag.Aes256, true, new SecureRandom());
-            encGen.AddMethod(ToChars(password), HashAlgorithmTag.Sha256);
+            encGen.AddMethod(publicKey);
             using var enc = encGen.Open(armored, new byte[4096]);
             var literal = new PgpLiteralDataGenerator();
             using var lit = literal.Open(enc, PgpLiteralData.Binary, "syncly", plaintext.Length, DateTime.UtcNow);
@@ -101,13 +122,13 @@ internal static class ProtonPgp
         return Encoding.ASCII.GetString(outStream.ToArray());
     }
 
-    public static string EncryptToKey(byte[] plaintext, PgpPublicKey publicKey)
+    public static string EncryptWithPassword(byte[] plaintext, byte[] password)
     {
         var outStream = new MemoryStream();
         using (var armored = new ArmoredOutputStream(outStream))
         {
             var encGen = new PgpEncryptedDataGenerator(SymmetricKeyAlgorithmTag.Aes256, true, new SecureRandom());
-            encGen.AddMethod(publicKey);
+            encGen.AddMethod(ToChars(password), HashAlgorithmTag.Sha256);
             using var enc = encGen.Open(armored, new byte[4096]);
             var literal = new PgpLiteralDataGenerator();
             using var lit = literal.Open(enc, PgpLiteralData.Binary, "syncly", plaintext.Length, DateTime.UtcNow);
@@ -163,4 +184,16 @@ internal static class ProtonPgp
             chars[i] = (char)password[i];
         return chars;
     }
+}
+
+internal sealed class ProtonKeySet(
+    PgpPrivateKey encryptionPrivate,
+    PgpPublicKey encryptionPublic,
+    IReadOnlyList<PgpPrivateKey> privateKeys)
+{
+    public PgpPrivateKey EncryptionPrivate { get; } = encryptionPrivate;
+
+    public PgpPublicKey EncryptionPublic { get; } = encryptionPublic;
+
+    public IReadOnlyList<PgpPrivateKey> PrivateKeys { get; } = privateKeys;
 }

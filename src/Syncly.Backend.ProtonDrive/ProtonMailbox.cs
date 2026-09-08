@@ -12,18 +12,16 @@ namespace Syncly.Backend.ProtonDrive;
 /// </summary>
 internal sealed class ProtonMailbox
 {
-    private readonly PgpPrivateKey _shareKey;
-    private readonly PgpPublicKey _sharePublic;
+    private readonly ProtonKeySet _keys;
     private HttpClient? _http;
     private string _token = "";
     private string _volumeId = "";
     private string _rootLinkId = "";
     private readonly Dictionary<string, string> _links = new(StringComparer.Ordinal);
 
-    private ProtonMailbox(PgpPrivateKey shareKey, PgpPublicKey sharePublic)
+    private ProtonMailbox(ProtonKeySet keys)
     {
-        _shareKey = shareKey;
-        _sharePublic = sharePublic;
+        _keys = keys;
     }
 
     public static ProtonMailbox Unlock(ProtonShareDto share, string urlPassword)
@@ -50,8 +48,8 @@ internal sealed class ProtonMailbox
             try
             {
                 var passphrase = ProtonPgp.DecryptWithPassword(share.SharePassphrase, candidate);
-                var (privateKey, publicKey) = ProtonPgp.UnlockPrivateKey(share.ShareKey, passphrase);
-                return new ProtonMailbox(privateKey, publicKey);
+                var keys = ProtonPgp.UnlockPrivateKey(share.ShareKey, passphrase);
+                return new ProtonMailbox(keys);
             }
             catch (Exception ex) when (ex is PgpException or ProtonDriveException or InvalidOperationException)
             {
@@ -154,7 +152,7 @@ internal sealed class ProtonMailbox
             return;
         }
 
-        var encryptedName = ProtonPgp.EncryptToKey(Encoding.UTF8.GetBytes(name), _sharePublic);
+        var encryptedName = ProtonPgp.EncryptToKey(Encoding.UTF8.GetBytes(name), _keys.EncryptionPublic);
         var body = new Dictionary<string, object?>
         {
             ["Name"] = encryptedName,
@@ -350,7 +348,7 @@ internal sealed class ProtonMailbox
 
         try
         {
-            var bytes = ProtonPgp.DecryptWithPrivateKey(raw, _shareKey);
+            var bytes = ProtonPgp.DecryptWithPrivateKey(raw, _keys);
             return Encoding.UTF8.GetString(bytes);
         }
         catch
@@ -364,7 +362,7 @@ internal sealed class ProtonMailbox
         try
         {
             if (LooksArmored(raw))
-                return ProtonPgp.DecryptWithPrivateKey(Encoding.UTF8.GetString(raw), _shareKey);
+                return ProtonPgp.DecryptWithPrivateKey(Encoding.UTF8.GetString(raw), _keys);
         }
         catch (Exception ex) when (ex is not ProtonDriveException)
         {
@@ -376,7 +374,7 @@ internal sealed class ProtonMailbox
     }
 
     private byte[] EncryptPayload(byte[] data) =>
-        Encoding.UTF8.GetBytes(ProtonPgp.EncryptToKey(data, _sharePublic));
+        Encoding.UTF8.GetBytes(ProtonPgp.EncryptToKey(data, _keys.EncryptionPublic));
 
     private HttpClient RequireHttp() =>
         _http ?? throw new ProtonDriveException("Proton Drive session is not connected.");
