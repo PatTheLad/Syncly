@@ -60,18 +60,27 @@
             else
             {
                 <div class="editor-inner">
-                    @if (State.ReadingMode)
-                    {
-                        <h1 class="page-title">@_page.DisplayTitle</h1>
-                    }
-                    else
-                    {
-                        <input class="page-title"
-                               placeholder="Untitled"
-                               value="@_titleDraft"
-                               @oninput="OnTitleInput"
-                               @onblur="FlushAsync" />
-                    }
+                    <div class="page-heading">
+                        <button type="button"
+                                class="page-icon-btn @(_page.Icon is { Length: > 0 } ? null : "empty")"
+                                title="Page icon"
+                                @onclick="() => _iconPickerOpen = true">
+                            @(_page.Icon is { Length: > 0 } ? _page.Icon : "◻")
+                        </button>
+
+                        @if (State.ReadingMode)
+                        {
+                            <h1 class="page-title">@_page.DisplayTitle</h1>
+                        }
+                        else
+                        {
+                            <input class="page-title"
+                                   placeholder="Untitled"
+                                   value="@_titleDraft"
+                                   @oninput="OnTitleInput"
+                                   @onblur="FlushAsync" />
+                        }
+                    </div>
 
                     <div class="page-meta">
                         @_snapshot.Blocks.Count block(s) · updated @_snapshot.UpdatedAt.ToLocalTime().ToString("g")
@@ -155,6 +164,13 @@
              OnClose="CloseSlashAsync" />
 }
 
+@if (_iconPickerOpen && _page is not null)
+{
+    <IconPicker Current="_page.Icon"
+                OnPick="SetIconAsync"
+                OnClose="() => _iconPickerOpen = false" />
+}
+
 @code {
     private static readonly TimeSpan SaveDelay = TimeSpan.FromMilliseconds(350);
 
@@ -166,6 +182,7 @@
     private string? _titleDraft;
     private string? _pendingTitle;
     private string? _slashBlockId;
+    private bool _iconPickerOpen;
     private string _saveHint = "Saved";
     private (string BlockId, int Caret)? _focusRequest;
     private string? _loadedPageId;
@@ -214,6 +231,7 @@
         {
             _loadedPageId = pageId;
             _titleDraft = _snapshot.Title;
+            _iconPickerOpen = false;
             _backlinks = await State.Workspace.BacklinksAsync(pageId);
         }
         else if (_pendingTitle is null)
@@ -443,6 +461,15 @@
         _titleDraft = args.Value?.ToString() ?? string.Empty;
         _pendingTitle = _titleDraft;
         Touch();
+    }
+
+    private async Task SetIconAsync(string? icon)
+    {
+        if (_page is null)
+            return;
+
+        await State.Workspace.SetPageIconAsync(_page.Id, string.IsNullOrWhiteSpace(icon) ? null : icon.Trim());
+        _saveHint = "Saved";
     }
 
     // ------------------------------------------------------------ wikilinks

@@ -279,11 +279,15 @@
         };
 
         items.AddRange(State.Workspace.PagesIn(State.CurrentSpaceId).Select(page =>
-            new Palette.PaletteItem("◻", page.DisplayTitle, "Page", () =>
-            {
-                Open(page.Id);
-                return Task.CompletedTask;
-            })));
+            new Palette.PaletteItem(
+                page.Icon is { Length: > 0 } icon ? icon : "◻",
+                page.DisplayTitle,
+                "Page",
+                () =>
+                {
+                    Open(page.Id);
+                    return Task.CompletedTask;
+                })));
 
         return items;
     }

@@ -18,7 +18,11 @@
                 @onclick="() => State.TogglePageExpanded(id)">
             @(childCount > 0 ? "▶" : "")
         </button>
-        <span class="tree-label">@Label(page)</span>
+        @if (!string.IsNullOrEmpty(page.Icon))
+        {
+            <span class="tree-icon" aria-hidden="true">@(page.Icon)</span>
+        }
+        <span class="tree-label">@(page.DisplayTitle)</span>
         <button type="button"
                 class="tree-add"
                 title="New sub-page"
@@ -42,9 +46,6 @@
 
     [Parameter]
     public EventCallback<string> OnAddChild { get; set; }
-
-    private static string Label(PageRef page) =>
-        page.Icon is { Length: > 0 } icon ? $"{icon} {page.DisplayTitle}" : page.DisplayTitle;
 
     private IEnumerable<(PageRef Page, int Depth, int ChildCount)> VisibleRows()
     {

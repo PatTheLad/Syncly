@@ -1,0 +1,52 @@
+@namespace Syncly.UI.Components
+
+<div class="overlay" @onclick="Close">
+    <div class="icon-picker" @onclick:stopPropagation="true">
+        <div class="icon-picker-head">
+            <div>
+                <div class="icon-picker-kicker">Page icon</div>
+                <div class="icon-picker-title">Pick a mark for this page</div>
+            </div>
+            <button type="button" class="chip muted" @onclick="ClearAsync" disabled="@string.IsNullOrEmpty(Current)">
+                Remove
+            </button>
+        </div>
+
+        <div class="icon-grid">
+            @foreach (var icon in PageIcons.All)
+            {
+                <button type="button"
+                        class="icon-cell @(icon == Current ? "picked" : null)"
+                        title="@icon"
+                        @onclick="() => PickAsync(icon)">
+                    @icon
+                </button>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    public string? Current { get; set; }
+
+    [Parameter]
+    public EventCallback<string?> OnPick { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    private Task Close() => OnClose.InvokeAsync();
+
+    private async Task PickAsync(string icon)
+    {
+        await OnPick.InvokeAsync(icon);
+        await Close();
+    }
+
+    private async Task ClearAsync()
+    {
+        await OnPick.InvokeAsync(null);
+        await Close();
+    }
+}

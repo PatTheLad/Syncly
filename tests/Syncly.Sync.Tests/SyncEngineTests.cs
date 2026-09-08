@@ -108,6 +108,34 @@ public class SyncEngineTests
         Assert.Contains("different sync chain", b.Engine.Status.Detail, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task Page_icon_round_trips_through_the_mailbox()
+    {
+        var folder = NewFolder();
+        var chain = SyncChain.Create();
+
+        await using var a = await TestNode.CreateAsync("alpha");
+        await using var b = await TestNode.CreateAsync("bravo");
+        await a.UseMailboxAsync(folder, chain);
+        await b.UseMailboxAsync(folder, chain);
+
+        await a.AuthorAsync(x =>
+        {
+            SeedPage(x, "Shared");
+            x.SetProp(Page, Page, PropKeys.Icon, "📌");
+        });
+        await a.Engine.SyncNowAsync();
+        await b.Engine.SyncNowAsync();
+
+        Assert.Equal("📌", b.Replica.Snapshot(Page).Icon);
+
+        await a.AuthorAsync(x => x.SetProp(Page, Page, PropKeys.Icon, null));
+        await a.Engine.SyncNowAsync();
+        await b.Engine.SyncNowAsync();
+
+        Assert.True(string.IsNullOrEmpty(b.Replica.Snapshot(Page).Icon));
+    }
+
     private static string NewFolder()
     {
         var path = Path.Combine(Path.GetTempPath(), "syncly-mailbox", Guid.NewGuid().ToString("N"));
