@@ -140,7 +140,19 @@ internal sealed class ProtonSession : IDisposable
         if (info.Code is not (0 or 1000))
             throw new ProtonDriveException(info.Error ?? "Proton Drive rejected this link.");
 
-        var auth = ProtonSrp.Prove(url.Password, info);
+        if ((info.Flags & (uint)ProtonLinkFlags.CustomPassword) != 0)
+            throw new ProtonDriveException(
+                "This Proton Drive link has an extra password. Create a share that only uses the secret in the URL.");
+
+        ProtonSrp.Proof auth;
+        try
+        {
+            auth = ProtonSrp.Prove(url.Password, info);
+        }
+        catch (Exception ex) when (ex is not ProtonDriveException)
+        {
+            throw new ProtonDriveException("Could not unlock this Proton Drive link.", ex);
+        }
         var request = new HttpRequestMessage(HttpMethod.Post, $"urls/{url.Token}/auth")
         {
             Content = JsonContent.Create(new ProtonAuthRequest(

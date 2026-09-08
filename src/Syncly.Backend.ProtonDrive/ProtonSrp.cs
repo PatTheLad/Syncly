@@ -1,50 +1,40 @@
 using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
+using Org.BouncyCastle.Crypto.Generators;
 
 namespace Syncly.Backend.ProtonDrive;
 
 /// <summary>
-/// Proton's SRP-6a (public-link flavour). The username is empty; the URL password is the secret.
+/// Proton SRP-6a as implemented by <c>ProtonMail/go-srp</c>: little-endian 2048-bit
+/// group, bcrypt + expandHash for the password, expandHash for proofs.
 /// </summary>
 internal static class ProtonSrp
 {
+    internal const int BitLength = 2048;
+    internal const int ByteLength = BitLength / 8;
+
     internal readonly record struct Proof(string ClientProof, string ClientEphemeral, byte[] ExpectedServer);
 
     public static Proof Prove(string password, ProtonInfoResponse info)
     {
-        var n = ParseModulus(info.Modulus);
-        var g = new BigInteger(2);
-        var B = FromUnsigned(Convert.FromBase64String(info.ServerEphemeral));
-        if (B <= 0 || B >= n)
-            throw new ProtonDriveException("Proton Drive sent an invalid SRP challenge.");
+        var version = info.Version == 0 ? (byte)4 : info.Version;
+        if (version < 3)
+            throw new ProtonDriveException($"Unsupported Proton Drive SRP version {info.Version}.");
 
-        var salt = Convert.FromBase64String(info.UrlPasswordSalt);
-        var x = FromUnsigned(ComputeX(password, salt, info.Version));
-        var a = RandomScalar(n);
-        var A = BigInteger.ModPow(g, a, n);
-        var u = FromUnsigned(HashConcat(Pad(A, n), Pad(B, n)));
-        var k = FromUnsigned(HashConcat(Pad(n, n), Pad(g, n)));
+        byte[] salt;
+        byte[] serverEphemeral;
+        try
+        {
+            salt = Convert.FromBase64String(info.UrlPasswordSalt);
+            serverEphemeral = Convert.FromBase64String(info.ServerEphemeral);
+        }
+        catch (FormatException ex)
+        {
+            throw new ProtonDriveException("Proton Drive sent an unreadable SRP challenge.", ex);
+        }
 
-        var gx = BigInteger.ModPow(g, x, n);
-        var baseS = SubMod(B, k * gx % n, n);
-        var S = BigInteger.ModPow(baseS, a + u * x, n);
-        var K = HashConcat(Pad(S, n));
-
-        var clientProof = HashConcat(
-            Xor(HashConcat(Pad(n, n)), HashConcat(Pad(g, n))),
-            HashConcat([]),
-            salt,
-            Pad(A, n),
-            Pad(B, n),
-            K);
-
-        var serverProof = HashConcat(Pad(A, n), clientProof, K);
-
-        return new Proof(
-            Convert.ToBase64String(clientProof),
-            Convert.ToBase64String(ToUnsigned(A)),
-            serverProof);
+        return GenerateProofs(Encoding.UTF8.GetBytes(password), salt, info.Modulus, serverEphemeral);
     }
 
     public static bool VerifyServer(Proof proof, string serverProofB64)
@@ -52,21 +42,82 @@ internal static class ProtonSrp
         if (string.IsNullOrWhiteSpace(serverProofB64))
             return false;
 
-        var actual = Convert.FromBase64String(serverProofB64);
-        return CryptographicOperations.FixedTimeEquals(proof.ExpectedServer, actual);
+        try
+        {
+            var actual = Convert.FromBase64String(serverProofB64);
+            return CryptographicOperations.FixedTimeEquals(proof.ExpectedServer, actual);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
     }
 
-    internal static BigInteger ParseModulus(string armored)
+    internal static Proof GenerateProofs(
+        byte[] password,
+        byte[] salt,
+        string signedModulus,
+        byte[] serverEphemeral)
     {
-        var hex = ExtractSignedBody(armored);
-        if (hex.Length == 0)
+        var modulus = ParseModulus(signedModulus);
+        var hashed = HashPasswordV3(password, salt, modulus);
+        var n = FromLe(modulus);
+        var b = FromLe(serverEphemeral);
+        CheckParams(n, b);
+
+        var nMinus1 = n - 1;
+        var x = FromLe(hashed);
+        var g = new BigInteger(2);
+        var gBytes = ToLeFixed(g);
+        var nBytes = ToLeFixed(n);
+
+        var kInput = new byte[ByteLength * 2];
+        gBytes.CopyTo(kInput, 0);
+        nBytes.CopyTo(kInput, ByteLength);
+        var k = FromLe(ExpandHash(kInput)) % n;
+        if (k <= 1 || k >= nMinus1)
+            throw new ProtonDriveException("Proton Drive SRP multiplier is out of bounds.");
+
+        BigInteger secret;
+        byte[] aBytes;
+        BigInteger scrambling;
+        GenerateEphemeral(n, nMinus1, serverEphemeral, out secret, out aBytes, out scrambling);
+
+        var gx = BigInteger.ModPow(g, x, n);
+        var kgx = k * gx % n;
+        var baseS = (b - kgx) % n;
+        if (baseS < 0)
+            baseS += n;
+
+        var exponent = (scrambling * x + secret) % nMinus1;
+        var shared = BigInteger.ModPow(baseS, exponent, n);
+        var sharedBytes = ToLeFixed(shared);
+
+        var clientProofInput = Concat(aBytes, serverEphemeral, sharedBytes);
+        var clientProof = ExpandHash(clientProofInput);
+        var serverProof = ExpandHash(Concat(aBytes, clientProof, sharedBytes));
+
+        return new Proof(
+            Convert.ToBase64String(clientProof),
+            Convert.ToBase64String(aBytes),
+            serverProof);
+    }
+
+    internal static byte[] ParseModulus(string armored)
+    {
+        var body = ExtractSignedBody(armored).Trim();
+        if (body.Length == 0)
             throw new ProtonDriveException("Proton Drive modulus is missing.");
 
-        hex = hex.Trim();
-        if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-            hex = hex[2..];
-
-        return FromUnsigned(Convert.FromHexString(hex));
+        try
+        {
+            return Convert.FromBase64String(body);
+        }
+        catch (FormatException ex)
+        {
+            throw new ProtonDriveException(
+                "Proton Drive sent an SRP modulus Syncly could not read.", ex);
+        }
     }
 
     internal static string ExtractSignedBody(string armored)
@@ -78,6 +129,9 @@ internal static class ProtonSrp
         foreach (var raw in lines)
         {
             var line = raw.TrimEnd();
+            if (line.StartsWith("-----BEGIN PGP SIGNATURE", StringComparison.Ordinal))
+                break;
+
             if (line.StartsWith("-----BEGIN", StringComparison.Ordinal))
             {
                 started = false;
@@ -87,7 +141,9 @@ internal static class ProtonSrp
             if (line.StartsWith("-----END", StringComparison.Ordinal))
                 break;
 
-            if (line.StartsWith("Hash:", StringComparison.OrdinalIgnoreCase))
+            if (line.StartsWith("Hash:", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("Version:", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("Comment:", StringComparison.OrdinalIgnoreCase))
                 continue;
 
             if (!started)
@@ -97,91 +153,122 @@ internal static class ProtonSrp
                 continue;
             }
 
+            if (line.StartsWith("- ", StringComparison.Ordinal))
+                line = line[2..];
+
             body.Append(line.Trim());
         }
 
         return body.ToString();
     }
 
-    private static byte[] ComputeX(string password, byte[] salt, byte version)
+    internal static byte[] ExpandHash(ReadOnlySpan<byte> data)
     {
-        _ = version;
-        var inner = HashConcat(Encoding.UTF8.GetBytes(password));
-        var data = new byte[salt.Length + inner.Length];
-        salt.CopyTo(data, 0);
-        inner.CopyTo(data, salt.Length);
-        return HashConcat(data);
-    }
-
-    private static byte[] HashConcat(params byte[][] parts)
-    {
-        using var sha = SHA512.Create();
-        foreach (var part in parts)
-            sha.TransformBlock(part, 0, part.Length, null, 0);
-
-        sha.TransformFinalBlock([], 0, 0);
-        return sha.Hash!;
-    }
-
-    private static BigInteger RandomScalar(BigInteger n)
-    {
-        var bytes = new byte[n.GetByteCount(isUnsigned: true)];
-        BigInteger a;
-        do
+        var output = new byte[256];
+        for (byte i = 0; i < 4; i++)
         {
-            RandomNumberGenerator.Fill(bytes);
-            a = FromUnsigned(bytes);
-        } while (a <= 1 || a >= n - 1);
+            using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA512);
+            sha.AppendData(data);
+            sha.AppendData([i]);
+            if (!sha.TryGetHashAndReset(output.AsSpan(i * 64, 64), out _))
+                throw new ProtonDriveException("SRP hash failed.");
+        }
 
-        return a;
+        return output;
     }
 
-    private static byte[] Pad(BigInteger value, BigInteger n)
+    internal static byte[] HashPasswordV3(byte[] password, byte[] salt, byte[] modulus)
     {
-        var size = n.GetByteCount(isUnsigned: true);
-        var raw = ToUnsigned(value);
-        if (raw.Length == size)
-            return raw;
-
-        var padded = new byte[size];
-        raw.CopyTo(padded, size - raw.Length);
-        return padded;
+        var crypted = OpenBsdBCrypt.Generate("2y", Encoding.Latin1.GetChars(password), BcryptSalt16(salt), 10);
+        var input = new byte[crypted.Length + modulus.Length];
+        Encoding.ASCII.GetBytes(crypted, input.AsSpan(0, crypted.Length));
+        modulus.CopyTo(input, crypted.Length);
+        return ExpandHash(input);
     }
 
-    private static byte[] Xor(byte[] a, byte[] b)
+    internal static byte[] BcryptSalt16(byte[] salt)
     {
-        var n = Math.Min(a.Length, b.Length);
-        var result = new byte[n];
-        for (var i = 0; i < n; i++)
-            result[i] = (byte)(a[i] ^ b[i]);
+        var salt16 = new byte[16];
+        if (salt.Length >= 16)
+        {
+            Buffer.BlockCopy(salt, 0, salt16, 0, 16);
+            return salt16;
+        }
+
+        Buffer.BlockCopy(salt, 0, salt16, 0, salt.Length);
+        var suffix = "proton"u8;
+        suffix[..Math.Min(suffix.Length, 16 - salt.Length)].CopyTo(salt16.AsSpan(salt.Length));
+        return salt16;
+    }
+
+    private static void CheckParams(BigInteger n, BigInteger b)
+    {
+        if (n.GetBitLength() != BitLength)
+            throw new ProtonDriveException("Proton Drive SRP modulus has the wrong size.");
+
+        if (n % 8 != 3)
+            throw new ProtonDriveException("Proton Drive SRP modulus is not a valid group.");
+
+        var nMinus1 = n - 1;
+        if (b <= 1 || b >= nMinus1)
+            throw new ProtonDriveException("Proton Drive sent an invalid SRP challenge.");
+    }
+
+    private static void GenerateEphemeral(
+        BigInteger n,
+        BigInteger nMinus1,
+        byte[] serverEphemeral,
+        out BigInteger secret,
+        out byte[] aBytes,
+        out BigInteger scrambling)
+    {
+        var g = new BigInteger(2);
+        var lower = new BigInteger(BitLength * 2);
+
+        while (true)
+        {
+            var buf = new byte[ByteLength];
+            RandomNumberGenerator.Fill(buf);
+            secret = FromLe(buf) % nMinus1;
+            if (secret <= lower || secret >= nMinus1)
+                continue;
+
+            var a = BigInteger.ModPow(g, secret, n);
+            aBytes = ToLeFixed(a);
+            scrambling = FromLe(ExpandHash(Concat(aBytes, serverEphemeral)));
+            if (scrambling.IsZero)
+                continue;
+
+            return;
+        }
+    }
+
+    private static BigInteger FromLe(byte[] bytes) =>
+        new(bytes, isUnsigned: true, isBigEndian: false);
+
+    private static byte[] ToLeFixed(BigInteger value)
+    {
+        var buf = new byte[ByteLength];
+        if (!value.TryWriteBytes(buf, out _, isUnsigned: true, isBigEndian: false))
+            throw new ProtonDriveException("SRP value exceeds the Proton Drive group size.");
+
+        return buf;
+    }
+
+    private static byte[] Concat(params byte[][] parts)
+    {
+        var length = 0;
+        foreach (var part in parts)
+            length += part.Length;
+
+        var result = new byte[length];
+        var offset = 0;
+        foreach (var part in parts)
+        {
+            part.CopyTo(result, offset);
+            offset += part.Length;
+        }
+
         return result;
-    }
-
-    private static BigInteger SubMod(BigInteger a, BigInteger b, BigInteger n)
-    {
-        var r = (a - b) % n;
-        return r < 0 ? r + n : r;
-    }
-
-    private static BigInteger FromUnsigned(byte[] bytes)
-    {
-        if (bytes.Length == 0)
-            return BigInteger.Zero;
-
-        var copy = new byte[bytes.Length + 1];
-        Buffer.BlockCopy(bytes, 0, copy, 1, bytes.Length);
-        Array.Reverse(copy);
-        return new BigInteger(copy);
-    }
-
-    private static byte[] ToUnsigned(BigInteger value)
-    {
-        var bytes = value.ToByteArray();
-        Array.Reverse(bytes);
-        var start = 0;
-        while (start < bytes.Length - 1 && bytes[start] == 0)
-            start++;
-
-        return bytes[start..];
     }
 }

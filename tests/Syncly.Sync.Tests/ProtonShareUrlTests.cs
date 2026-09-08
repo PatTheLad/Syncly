@@ -28,6 +28,15 @@ public class ProtonShareUrlTests
     }
 
     [Fact]
+    public void Ignores_junk_after_a_second_hash()
+    {
+        var url = ProtonShareUrl.Parse(
+            "https://drive.proton.me/urls/AbCdEfGh1234#s3cretPass#not-part-of-the-link");
+        Assert.Equal("AbCdEfGh1234", url.Token);
+        Assert.Equal("s3cretPass", url.Password);
+    }
+
+    [Fact]
     public void Rejects_a_non_proton_host()
     {
         Assert.Throws<FormatException>(() =>

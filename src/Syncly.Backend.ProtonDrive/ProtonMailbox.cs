@@ -29,7 +29,7 @@ internal sealed class ProtonMailbox
     public static ProtonMailbox Unlock(ProtonShareDto share, string urlPassword)
     {
         var salt = Convert.FromBase64String(share.SharePasswordSalt);
-        var hashed = MailboxHash(urlPassword, salt);
+        var hashed = ComputeKeyPassword(urlPassword, salt);
         byte[] passphrase;
         try
         {
@@ -297,25 +297,21 @@ internal sealed class ProtonMailbox
     }
 
     /// <summary>
-    /// Proton's mailbox password hash: SHA512 of the password, then bcrypt with the share salt.
-    /// The bcrypt form is `$2y$10$` plus a 22-character custom alphabet salt.
+    /// Proton <c>computeKeyPassword</c>: bcrypt of the URL password with the share salt
+    /// (10 bytes plus the literal <c>proton</c> pad).
     /// </summary>
-    internal static byte[] MailboxHash(string password, byte[] salt)
+    internal static byte[] ComputeKeyPassword(string password, byte[] salt)
     {
-        var digest = SHA512.HashData(Encoding.UTF8.GetBytes(password));
-        return Encoding.UTF8.GetBytes(BcryptHash(digest, salt));
+        var hashed = Org.BouncyCastle.Crypto.Generators.OpenBsdBCrypt.Generate(
+            "2y",
+            password.ToCharArray(),
+            ProtonSrp.BcryptSalt16(salt),
+            10);
+        return Encoding.UTF8.GetBytes(hashed);
     }
 
-    private static string BcryptHash(byte[] password, byte[] salt)
-    {
-        var salt16 = new byte[16];
-        Buffer.BlockCopy(salt, 0, salt16, 0, Math.Min(16, salt.Length));
-        var chars = new char[password.Length];
-        for (var i = 0; i < password.Length; i++)
-            chars[i] = (char)password[i];
-
-        return Org.BouncyCastle.Crypto.Generators.OpenBsdBCrypt.Generate("2y", chars, salt16, 10);
-    }
+    internal static byte[] MailboxHash(string password, byte[] salt) =>
+        ComputeKeyPassword(password, salt);
 
     private static bool LooksArmored(byte[] raw) =>
         raw.Length > 24 && Encoding.UTF8.GetString(raw.AsSpan(0, Math.Min(raw.Length, 40)))

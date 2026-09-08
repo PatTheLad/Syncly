@@ -32,6 +32,11 @@ public sealed record ProtonShareUrl(string Token, string Password, string Origin
             throw new FormatException("The Proton Drive link is missing its share token.");
 
         var password = uri.Fragment.TrimStart('#');
+        var extra = password.IndexOf('#');
+        if (extra >= 0)
+            password = password[..extra];
+
+        password = Uri.UnescapeDataString(password).Trim();
         if (string.IsNullOrWhiteSpace(password))
             throw new FormatException(
                 "The link is missing the secret after #. Copy it from Proton Drive with Editor access turned on.");
