@@ -97,16 +97,16 @@ internal static class ProtonPgp
     public static (string Armored, ProtonKeySet Keys) GenerateNodeKey(byte[] passphrase)
     {
         var random = new SecureRandom();
-        // RSA primary (gopenpgp verifies those bindings) + Curve25519 encryption subkey.
-        // ContentKeyPacket must stay ≤255 base64 chars, so the encrypt key has to be ECDH —
-        // a full RSA PKESK is rejected by Proton ("This value is too long").
-        var rsa = new RsaKeyPairGenerator();
-        rsa.Init(new KeyGenerationParameters(random, 2048));
-        var signPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaSign, rsa.GenerateKeyPair(), DateTime.UtcNow);
+        // RSA primary for signatures (gopenpgp verifies RSA bindings). Encrypt subkey is
+        // RSA-1024 so the ContentKeyPacket stays ≤255 base64 chars — Proton rejects longer
+        // values, and BC EdDSA→X25519 bindings fail server-side verification (200501).
+        var signRsa = new RsaKeyPairGenerator();
+        signRsa.Init(new KeyGenerationParameters(random, 2048));
+        var signPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaSign, signRsa.GenerateKeyPair(), DateTime.UtcNow);
 
-        var x25519 = new X25519KeyPairGenerator();
-        x25519.Init(new X25519KeyGenerationParameters(random));
-        var encPair = new PgpKeyPair(PublicKeyAlgorithmTag.ECDH, x25519.GenerateKeyPair(), DateTime.UtcNow);
+        var encRsa = new RsaKeyPairGenerator();
+        encRsa.Init(new KeyGenerationParameters(random, 1024));
+        var encPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaEncrypt, encRsa.GenerateKeyPair(), DateTime.UtcNow);
 
         var primaryHashed = new PgpSignatureSubpacketGenerator();
         primaryHashed.SetKeyFlags(false, PgpKeyFlags.CanCertify | PgpKeyFlags.CanSign);
@@ -252,8 +252,8 @@ internal static class ProtonPgp
 
     public static (byte[] KeyPacket, byte[] SessionKey) CreateContentKey(ProtonKeySet fileKeys)
     {
-        // BouncyCastle writes a compact ECDH PKESK (must be ≤255 base64 for Proton).
-        // Recover the session key it chose so block encryption matches the packet.
+        // BouncyCastle writes the PKESK; recover its session key for block encryption.
+        // Proton requires the base64 ContentKeyPacket to be ≤255 characters.
         var encGen = new PgpEncryptedDataGenerator(
             SymmetricKeyAlgorithmTag.Aes256, withIntegrityPacket: true, new SecureRandom());
         encGen.AddMethod(fileKeys.EncryptionPublic);
@@ -270,7 +270,8 @@ internal static class ProtonPgp
         var keyPacket = ReadLeadingPacket(raw);
         var encoded = Convert.ToBase64String(keyPacket);
         if (encoded.Length > 255)
-            throw new ProtonDriveException("Proton Drive content key packet exceeds the 255-character limit.");
+            throw new ProtonDriveException(
+                $"Proton Drive content key packet is {encoded.Length} characters; maximum is 255.");
 
         var sessionInfo = RecoverSessionInfo(raw, fileKeys.EncryptionPrivate);
         if (sessionInfo.Length < 4 || sessionInfo[0] != (byte)SymmetricKeyAlgorithmTag.Aes256)

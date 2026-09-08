@@ -59,9 +59,9 @@ public class ProtonPgpTests
             fileKeys.EncryptionPrivate);
         Assert.Equal(draft.SessionKey, session);
         Assert.Equal(PublicKeyAlgorithmTag.RsaSign, fileKeys.SigningPublic.Algorithm);
-        Assert.Equal(PublicKeyAlgorithmTag.ECDH, fileKeys.EncryptionPublic.Algorithm);
+        Assert.Equal(PublicKeyAlgorithmTag.RsaEncrypt, fileKeys.EncryptionPublic.Algorithm);
         Assert.True(fileKeys.EncryptionPublic.IsEncryptionKey);
-        Assert.True(((string)draft.Body["ContentKeyPacket"]!).Length <= 255);
+        Assert.InRange(((string)draft.Body["ContentKeyPacket"]!).Length, 1, 255);
     }
 
     [Fact]
