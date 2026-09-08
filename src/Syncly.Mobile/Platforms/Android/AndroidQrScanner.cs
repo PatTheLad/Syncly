@@ -133,20 +133,22 @@ public sealed class QrScanActivity : Activity, ISurfaceHolderCallback, Camera.IP
     {
         try
         {
-            _camera = Camera.Open(0);
-            _camera.SetDisplayOrientation(90);
-            _camera.SetPreviewDisplay(holder);
-            var parameters = _camera.GetParameters();
+            var camera = Camera.Open(0)
+                         ?? throw new InvalidOperationException("Camera unavailable.");
+            _camera = camera;
+            camera.SetDisplayOrientation(90);
+            camera.SetPreviewDisplay(holder);
+            var parameters = camera.GetParameters();
             if (parameters is not null)
             {
-                parameters.PreviewFormat = (int)Android.Graphics.ImageFormatType.Nv21;
+                parameters.PreviewFormat = Android.Graphics.ImageFormatType.Nv21;
                 if (parameters.SupportedFocusModes?.Contains(Camera.Parameters.FocusModeContinuousPicture) == true)
                     parameters.FocusMode = Camera.Parameters.FocusModeContinuousPicture;
-                _camera.SetParameters(parameters);
+                camera.SetParameters(parameters);
             }
 
-            _camera.SetPreviewCallback(this);
-            _camera.StartPreview();
+            camera.SetPreviewCallback(this);
+            camera.StartPreview();
         }
         catch (Exception)
         {

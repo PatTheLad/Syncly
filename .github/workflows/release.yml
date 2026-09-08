@@ -51,7 +51,7 @@ jobs:
           -o dist/win
           --channel win
           --packTitle Syncly
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: windows
           path: dist/win
@@ -81,7 +81,7 @@ jobs:
           -o dist/linux
           --channel linux
           --packTitle Syncly
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: linux
           path: dist/linux
@@ -132,7 +132,7 @@ jobs:
           fi
           test -n "$apk"
           cp "$apk" dist/android/Syncly-android.apk
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: android
           path: dist/android
@@ -142,7 +142,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v6
         with:
           path: artifacts
       - name: Create GitHub Release
