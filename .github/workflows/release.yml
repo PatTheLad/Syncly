@@ -11,6 +11,8 @@ concurrency:
 
 permissions:
   contents: write
+  # upload-artifact / download-artifact v4+ use the actions API; contents: write alone is not enough.
+  actions: write
 
 env:
   DOTNET_NOLOGO: true
