@@ -58,9 +58,30 @@ public class ProtonPgpTests
             Convert.FromBase64String((string)draft.Body["ContentKeyPacket"]!),
             fileKeys.EncryptionPrivate);
         Assert.Equal(draft.SessionKey, session);
-        Assert.Equal(PublicKeyAlgorithmTag.RsaSign, fileKeys.SigningPublic.Algorithm);
-        Assert.Equal(PublicKeyAlgorithmTag.RsaEncrypt, fileKeys.EncryptionPublic.Algorithm);
+        Assert.Equal(PublicKeyAlgorithmTag.EdDsa_Legacy, fileKeys.SigningPublic.Algorithm);
+        Assert.Equal(PublicKeyAlgorithmTag.ECDH, fileKeys.EncryptionPublic.Algorithm);
         Assert.True(fileKeys.EncryptionPublic.IsEncryptionKey);
+        Assert.InRange(((string)draft.Body["ContentKeyPacket"]!).Length, 1, 255);
+    }
+
+    [Fact]
+    public void File_draft_roundtrips_with_an_ECDH_parent_folder_key()
+    {
+        var passphrase = "parent-pass"u8.ToArray();
+        var parent = ProtonPgp.UnlockPrivateKey(ArmoredEdDsaPlusEcdhKey(passphrase), passphrase);
+        var hashKey = "folder-hash-key-bytes-are-utf8"u8.ToArray();
+        var draft = ProtonPgp.CreateFileDraft("photo.bin", "parent-link", parent, hashKey);
+
+        var name = Encoding.UTF8.GetString(
+            ProtonPgp.DecryptWithPrivateKey((string)draft.Body["Name"]!, parent));
+        Assert.Equal("photo.bin", name);
+
+        var unlocked = ProtonPgp.DecryptWithPrivateKey((string)draft.Body["NodePassphrase"]!, parent);
+        var fileKeys = ProtonPgp.UnlockPrivateKey((string)draft.Body["NodeKey"]!, unlocked);
+        var session = ProtonPgp.DecryptSessionKey(
+            Convert.FromBase64String((string)draft.Body["ContentKeyPacket"]!),
+            fileKeys.EncryptionPrivate);
+        Assert.Equal(draft.SessionKey, session);
         Assert.InRange(((string)draft.Body["ContentKeyPacket"]!).Length, 1, 255);
     }
 
@@ -97,6 +118,36 @@ public class ProtonPgpTests
             PgpSignature.PositiveCertification,
             signPair,
             "syncly-share",
+            SymmetricKeyAlgorithmTag.Aes256,
+            Encoding.Latin1.GetChars(passphrase),
+            true,
+            null,
+            null,
+            random);
+        generator.AddSubKey(encPair);
+
+        using var buffer = new MemoryStream();
+        using (var armored = new ArmoredOutputStream(buffer))
+            generator.GenerateSecretKeyRing().Encode(armored);
+
+        return Encoding.ASCII.GetString(buffer.ToArray());
+    }
+
+    private static string ArmoredEdDsaPlusEcdhKey(byte[] passphrase)
+    {
+        var random = new SecureRandom();
+        var ed = new Ed25519KeyPairGenerator();
+        ed.Init(new Ed25519KeyGenerationParameters(random));
+        var signPair = new PgpKeyPair(PublicKeyAlgorithmTag.EdDsa_Legacy, ed.GenerateKeyPair(), DateTime.UtcNow);
+
+        var x25519 = new X25519KeyPairGenerator();
+        x25519.Init(new X25519KeyGenerationParameters(random));
+        var encPair = new PgpKeyPair(PublicKeyAlgorithmTag.ECDH, x25519.GenerateKeyPair(), DateTime.UtcNow);
+
+        var generator = new PgpKeyRingGenerator(
+            PgpSignature.PositiveCertification,
+            signPair,
+            "syncly-folder",
             SymmetricKeyAlgorithmTag.Aes256,
             Encoding.Latin1.GetChars(passphrase),
             true,
