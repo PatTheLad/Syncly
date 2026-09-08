@@ -16,6 +16,9 @@ public sealed class SynclyOptions
 
     public string? DisplayName { get; init; }
 
+    /// <summary>False on Android/iOS where a typed desktop folder path is not usable.</summary>
+    public bool SupportsLocalFolder { get; init; } = true;
+
     public string ResolveDataDirectory()
     {
         if (!string.IsNullOrWhiteSpace(DataDirectory))
@@ -138,6 +141,7 @@ public sealed class SynclyApp : IAsyncDisposable
             OpLog = opLog,
             Peers = peers,
             Vault = vault,
+            SupportsLocalFolder = options.SupportsLocalFolder,
             OnRemoteOps = ops => workspace.ProjectAsync(ops.Select(o => o.ObjectId), ct),
             BackendFactory = CreateBackend,
         };
@@ -156,6 +160,15 @@ public sealed class SynclyApp : IAsyncDisposable
         return new SynclyApp(
             database, identity, replica, workspace, opLog, peers, vault, engine, directory);
     }
+
+    public async Task RenameDeviceAsync(string displayName, CancellationToken ct = default)
+    {
+        await Identity.RenameAsync(Vault, displayName, ct);
+        await Sync.ForcePublishIdentityAsync(ct);
+    }
+
+    public Task IgnorePeerAsync(string deviceId, CancellationToken ct = default) =>
+        Sync.IgnorePeerAsync(deviceId, ct);
 
     internal static ISyncBackend? CreateBackend(SyncPreferences preferences)
     {

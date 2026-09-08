@@ -75,9 +75,57 @@ public class SyncInviteTests
     }
 
     [Fact]
+    public void ApplyTo_strips_folder_when_host_does_not_support_it()
+    {
+        var chain = SyncChain.Create();
+        var invite = SyncInvite.From(chain, new Syncly.Model.SyncPreferences
+        {
+            Backend = Syncly.Model.SyncBackendKind.Folder,
+            FolderPath = @"C:\SynclyMailbox",
+        });
+
+        var applied = new Syncly.Model.SyncPreferences();
+        invite.ApplyTo(applied, supportsLocalFolder: false);
+        Assert.Equal(Syncly.Model.SyncBackendKind.None, applied.Backend);
+        Assert.Null(applied.FolderPath);
+    }
+
+    [Fact]
     public void Chain_only_uri_is_not_an_invite()
     {
         Assert.False(SyncInvite.TryParse(SyncChain.Create().Uri, out _));
+    }
+}
+
+public class DeviceIdentityTests
+{
+    private sealed class MemoryVault : IKeyVault
+    {
+        private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);
+
+        public Task<string?> ReadAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult(_values.TryGetValue(key, out var value) ? value : null);
+
+        public Task WriteAsync(string key, string value, CancellationToken ct = default)
+        {
+            _values[key] = value;
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task Rename_persists_in_the_vault()
+    {
+        var vault = new MemoryVault();
+        var identity = await DeviceIdentity.LoadOrCreateAsync(vault, "Phone");
+        await identity.RenameAsync(vault, "Kitchen tablet");
+
+        Assert.Equal("Kitchen tablet", identity.DisplayName);
+
+        identity.Dispose();
+        var reloaded = await DeviceIdentity.LoadOrCreateAsync(vault, "ignored");
+        Assert.Equal("Kitchen tablet", reloaded.DisplayName);
+        reloaded.Dispose();
     }
 }
 

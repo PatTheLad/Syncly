@@ -7,6 +7,7 @@
 @inject IAppUpdater Updater
 @inject IQrScanner QrScanner
 @inject IDeviceCamera Camera
+@inject IMailboxCapabilities Mailbox
 
 <div class="workspace">
     <div class="topbar">
@@ -22,17 +23,31 @@
                 <div class="card">
                     <div class="card-title">Mailbox</div>
                     <div class="row wrap">
-                        <button class="chip @(_prefs.Backend == SyncBackendKind.Folder ? "primary" : null)"
-                                @onclick="() => SetBackendAsync(SyncBackendKind.Folder)">
-                            Local folder
-                        </button>
+                        @if (Mailbox.SupportsLocalFolder)
+                        {
+                            <button class="chip @(_prefs.Backend == SyncBackendKind.Folder ? "primary" : null)"
+                                    @onclick="() => SetBackendAsync(SyncBackendKind.Folder)">
+                                Local folder
+                            </button>
+                        }
                         <button class="chip @(_prefs.Backend == SyncBackendKind.Cloud ? "primary" : null)"
                                 @onclick="() => SetBackendAsync(SyncBackendKind.Cloud)">
                             Cloud
                         </button>
                     </div>
 
-                    @if (_prefs.Backend == SyncBackendKind.Folder)
+                    @if (!Mailbox.SupportsLocalFolder && _prefs.Backend == SyncBackendKind.Folder)
+                    {
+                        <div class="card-sub error">
+                            Local folders are desktop-only on this device. Switch to Proton Drive to sync.
+                        </div>
+                        <div class="row">
+                            <button class="chip primary" @onclick="() => SetBackendAsync(SyncBackendKind.Cloud)">
+                                Use Cloud
+                            </button>
+                        </div>
+                    }
+                    else if (_prefs.Backend == SyncBackendKind.Folder)
                     {
                         <div class="card-sub">A folder on this machine, a USB stick, or a network share both devices can see.</div>
                         <div class="row">
@@ -62,6 +77,10 @@
                             <button class="chip" @onclick="SaveMailboxAsync">Save</button>
                             <button class="chip" @onclick="TestMailboxAsync">Test connection</button>
                         </div>
+                    }
+                    else if (!Mailbox.SupportsLocalFolder)
+                    {
+                        <div class="card-sub">On this device, sync uses Proton Drive. Paste an Editor share link below after choosing Cloud, or scan an invite QR from desktop.</div>
                     }
 
                     @if (_mailboxMessage is { Length: > 0 })
@@ -160,6 +179,38 @@
                         <button class="chip primary" @onclick="() => App.Sync.SyncNowAsync()">Sync now</button>
                     </div>
                 </div>
+
+                <div class="card">
+                    <div class="card-title">Devices</div>
+                    <div class="card-sub">Other devices that have written to this mailbox. Revoking hides them here; they stay ignored even if they keep syncing.</div>
+                    @if (_peers.Count == 0)
+                    {
+                        <div class="card-sub">No other devices yet. Sync after they join the chain.</div>
+                    }
+                    else
+                    {
+                        @foreach (var peer in _peers)
+                        {
+                            <div class="row wrap" style="margin-top:0.5rem;align-items:flex-start;">
+                                <div class="grow">
+                                    <div class="card-title">@peer.DisplayName</div>
+                                    <div class="card-sub">@ShortId(peer.DeviceId)</div>
+                                    @if (peer.LastSyncAt is { } seen && seen > DateTimeOffset.MinValue)
+                                    {
+                                        <div class="card-sub">Last sync @seen.ToLocalTime().ToString("g")</div>
+                                    }
+                                </div>
+                                <button class="chip danger" @onclick="() => RevokePeerAsync(peer.DeviceId, peer.DisplayName)">
+                                    Revoke
+                                </button>
+                            </div>
+                        }
+                    }
+                    @if (_peerMessage is { Length: > 0 })
+                    {
+                        <div class="card-sub">@_peerMessage</div>
+                    }
+                </div>
             </section>
 
             <section>
@@ -193,11 +244,16 @@
             <section>
                 <h2>Identity</h2>
                 <div class="card">
-                    <div class="card-title">@App.Identity.DisplayName</div>
-                    <div class="card-sub">Device ID @App.Identity.DeviceId</div>
-                    <div class="card-sub">
-                        Set <code>SYNCLY_DEVICE_NAME</code> to rename it. This name is written into the mailbox so other devices can see who sent a pack.
+                    <div class="card-sub">Name shown on other devices in the mailbox.</div>
+                    <div class="row">
+                        <input class="field grow" @bind="_deviceName" @bind:event="oninput" />
+                        <button class="chip" @onclick="RenameDeviceAsync">Save name</button>
                     </div>
+                    <div class="card-sub">Device ID @App.Identity.DeviceId</div>
+                    @if (_identityMessage is { Length: > 0 })
+                    {
+                        <div class="card-sub @(_identityError ? "error" : null)">@_identityMessage</div>
+                    }
                 </div>
             </section>
 
@@ -247,6 +303,8 @@
 </div>
 
 @code {
+    private sealed record PeerRow(string DeviceId, string DisplayName, DateTimeOffset? LastSyncAt);
+
     private int _pageCount;
     private long _opCount;
     private string _maintenance = string.Empty;
@@ -259,6 +317,11 @@
     private bool _mailboxError;
     private string? _chainMessage;
     private bool _chainError;
+    private string _deviceName = string.Empty;
+    private string? _identityMessage;
+    private bool _identityError;
+    private List<PeerRow> _peers = [];
+    private string? _peerMessage;
 
     private string? _shortId => App.Sync.Chain is { } chain ? chain.ChainId : null;
 
@@ -275,11 +338,39 @@
         App.Sync.Changed += Refresh;
         Updater.Changed += Refresh;
         _prefs = App.Sync.Preferences;
+        _deviceName = App.Identity.DisplayName;
         _pageCount = App.Workspace.Pages.Count;
         _opCount = await App.OpLog.CountAsync();
+        await LoadPeersAsync();
     }
 
-    private void Refresh() => InvokeAsync(StateHasChanged);
+    private void Refresh() => _ = InvokeAsync(async () =>
+    {
+        _prefs = App.Sync.Preferences;
+        _deviceName = App.Identity.DisplayName;
+        await LoadPeersAsync();
+        StateHasChanged();
+    });
+
+    private async Task LoadPeersAsync()
+    {
+        var self = App.Identity.DeviceId;
+        var list = await App.Peers.ListAsync();
+        var rows = new List<PeerRow>();
+        foreach (var peer in list.Where(p => p.DeviceId != self))
+        {
+            var state = await App.Peers.StateAsync(peer.DeviceId);
+            rows.Add(new PeerRow(
+                peer.DeviceId,
+                peer.DisplayName,
+                state.LastSyncAt > DateTimeOffset.MinValue ? state.LastSyncAt : null));
+        }
+
+        _peers = rows;
+    }
+
+    private static string ShortId(string deviceId) =>
+        deviceId.Length <= 8 ? deviceId : deviceId[..8];
 
     private string? InvitePayload() => App.Sync.InviteUri();
 
@@ -302,6 +393,7 @@
         try
         {
             await App.Sync.SavePreferencesAsync(_prefs);
+            _prefs = App.Sync.Preferences;
             _mailboxMessage = "Saved.";
         }
         catch (Exception ex)
@@ -356,8 +448,9 @@
             _prefs = App.Sync.Preferences;
             _joinText = string.Empty;
             _joinOpen = false;
-            _chainMessage = "Joined. Sync now to pull from the mailbox.";
+            _chainMessage = App.Sync.LastJoinNote ?? "Joined. Sync now to pull from the mailbox.";
             _ = App.Sync.SyncNowAsync();
+            await LoadPeersAsync();
         }
         catch (Exception ex)
         {
@@ -394,6 +487,7 @@
             _joinOpen = true;
             _joinText = string.Empty;
             _chainMessage = "Left the chain. Create a new one or scan an invite to join another.";
+            await LoadPeersAsync();
         }
         catch (Exception ex)
         {
@@ -434,6 +528,33 @@
         }
     }
 
+    private async Task RenameDeviceAsync()
+    {
+        _identityError = false;
+        try
+        {
+            await App.RenameDeviceAsync(_deviceName);
+            _deviceName = App.Identity.DisplayName;
+            _identityMessage = "Name saved. Other devices will see it after the next sync.";
+        }
+        catch (Exception ex)
+        {
+            _identityError = true;
+            _identityMessage = ex.Message;
+        }
+    }
+
+    private async Task RevokePeerAsync(string deviceId, string displayName)
+    {
+        if (!await Js.InvokeAsync<bool>("syncly.confirm",
+                $"Revoke {displayName}? They disappear from this list and stay ignored even if they keep writing packs. Your notes are unchanged."))
+            return;
+
+        await App.IgnorePeerAsync(deviceId);
+        _peerMessage = $"{displayName} revoked.";
+        await LoadPeersAsync();
+    }
+
     private async Task CopyAsync(string value)
     {
         try
@@ -452,7 +573,6 @@
     private static string QrDataUri(string payload)
     {
         using var generator = new QRCoder.QRCodeGenerator();
-        // Invite payloads are larger — lower ECC keeps the QR readable on phones.
         var ecc = payload.StartsWith("syncly:invite:", StringComparison.OrdinalIgnoreCase)
             ? QRCoder.QRCodeGenerator.ECCLevel.L
             : QRCoder.QRCodeGenerator.ECCLevel.M;

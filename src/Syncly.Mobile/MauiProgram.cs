@@ -24,6 +24,7 @@ public static class MauiProgram
                 {
                     DataDirectory = FileSystem.AppDataDirectory,
                     DisplayName = DeviceInfo.Name,
+                    SupportsLocalFolder = false,
                 })
             .GetAwaiter()
             .GetResult();
@@ -31,6 +32,7 @@ public static class MauiProgram
         builder.Services.AddSingleton(syncly);
         builder.Services.AddSingleton(syncly.Workspace);
         builder.Services.AddScoped<EditorState>();
+        builder.Services.AddSingleton<IMailboxCapabilities, MobileMailboxCapabilities>();
         builder.Services.AddSingleton<IDeviceCamera, MauiCameraPermission>();
         builder.Services.AddSingleton<IQrScanner, AndroidQrScanner>();
         builder.Services.AddSingleton<IAppUpdater>(_ =>

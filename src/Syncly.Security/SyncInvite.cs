@@ -59,7 +59,7 @@ public sealed class SyncInvite
         return UriPrefix + Base64Url.Encode(json);
     }
 
-    public void ApplyTo(SyncPreferences preferences)
+    public void ApplyTo(SyncPreferences preferences, bool supportsLocalFolder = true)
     {
         if (Backend != SyncBackendKind.None)
             preferences.Backend = Backend;
@@ -75,6 +75,21 @@ public sealed class SyncInvite
 
         if (FolderPath is not null)
             preferences.FolderPath = FolderPath;
+
+        if (!supportsLocalFolder)
+            StripLocalFolder(preferences);
+    }
+
+    /// <summary>Folder paths are desktop-only; keep Proton/cloud fields when present.</summary>
+    public static void StripLocalFolder(SyncPreferences preferences)
+    {
+        preferences.FolderPath = null;
+        if (preferences.Backend != SyncBackendKind.Folder)
+            return;
+
+        preferences.Backend = string.IsNullOrWhiteSpace(preferences.ProtonShareUrl)
+            ? SyncBackendKind.None
+            : SyncBackendKind.Cloud;
     }
 
     public static bool TryParse(string input, out SyncInvite invite)

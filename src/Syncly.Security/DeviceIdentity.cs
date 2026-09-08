@@ -33,7 +33,7 @@ public sealed class DeviceIdentity : IDisposable
 
     public string DeviceId { get; }
 
-    public string DisplayName { get; }
+    public string DisplayName { get; private set; }
 
     public byte[] PublicKey { get; }
 
@@ -66,6 +66,16 @@ public sealed class DeviceIdentity : IDisposable
         }
 
         return new DeviceIdentity(key, name);
+    }
+
+    public async Task RenameAsync(IKeyVault vault, string displayName, CancellationToken ct = default)
+    {
+        var name = displayName.Trim();
+        if (name.Length == 0)
+            throw new ArgumentException("Device name cannot be empty.", nameof(displayName));
+
+        await vault.WriteAsync(NameKey, name, ct);
+        DisplayName = name;
     }
 
     public static DeviceIdentity CreateEphemeral(string displayName) =>

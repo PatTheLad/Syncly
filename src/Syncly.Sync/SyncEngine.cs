@@ -32,6 +32,9 @@ public sealed class SyncContext
 
     public Func<SyncPreferences, ISyncBackend?>? BackendFactory { get; init; }
 
+    /// <summary>False on mobile hosts that cannot use a typed local folder path.</summary>
+    public bool SupportsLocalFolder { get; init; } = true;
+
     /// <summary>Called after remote ops have been applied and durably stored.</summary>
     public Func<IReadOnlyList<Op>, Task>? OnRemoteOps { get; init; }
 }
@@ -49,11 +52,13 @@ public sealed class SyncEngine : IAsyncDisposable
     internal const string ProtonVaultKey = "sync.cloud.proton.url";
     internal const string ProtonPasswordVaultKey = "sync.cloud.proton.password";
     internal const string UploadedVaultKey = "sync.uploaded.version";
+    internal const string IgnoredPeersVaultKey = "sync.peers.ignored";
 
     private readonly SyncContext _context;
     private readonly SnapshotStore _snapshots;
     private readonly ILogger<SyncEngine> _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly HashSet<string> _ignoredPeers = new(StringComparer.Ordinal);
 
     private CancellationTokenSource? _lifetime;
     private Timer? _debounce;
@@ -64,6 +69,7 @@ public sealed class SyncEngine : IAsyncDisposable
     private SyncPreferences _preferences = new();
     private SyncStatus _status = new(SyncPhase.Disabled, "No sync configured", null, null, null, 0);
     private VersionVector _uploaded = new();
+    private string? _lastJoinNote;
 
     public SyncEngine(
         SyncContext context,
@@ -86,6 +92,11 @@ public sealed class SyncEngine : IAsyncDisposable
     public bool HasChain => _chain is not null;
 
     public bool IsConfigured => _chain is not null && _backend is not null;
+
+    public bool SupportsLocalFolder => _context.SupportsLocalFolder;
+
+    /// <summary>Set after <see cref="JoinChainAsync"/> when the host had to skip folder mailbox fields.</summary>
+    public string? LastJoinNote => _lastJoinNote;
 
     public async Task StartAsync(CancellationToken ct = default)
     {
@@ -128,10 +139,19 @@ public sealed class SyncEngine : IAsyncDisposable
 
     public async Task<SyncChain> JoinChainAsync(string input, CancellationToken ct = default)
     {
+        _lastJoinNote = null;
         if (SyncInvite.TryParse(input, out var invite))
         {
             var prefs = Clone(_preferences);
-            invite.ApplyTo(prefs);
+            var folderOnly = invite.Backend == SyncBackendKind.Folder
+                             || (!string.IsNullOrWhiteSpace(invite.FolderPath)
+                                 && string.IsNullOrWhiteSpace(invite.ProtonShareUrl));
+            invite.ApplyTo(prefs, _context.SupportsLocalFolder);
+            if (!_context.SupportsLocalFolder && folderOnly)
+                _lastJoinNote = "Joined the chain. Folder mailboxes are desktop-only — set up Proton Drive on this device.";
+            else if (!_context.SupportsLocalFolder && invite.FolderPath is not null)
+                _lastJoinNote = "Joined. Desktop folder path was skipped; Proton settings were applied when present.";
+
             await SavePreferencesAsync(prefs, ct);
             var joined = SyncChain.Parse(invite.ChainUri);
             await SetChainAsync(joined, ct);
@@ -155,6 +175,10 @@ public sealed class SyncEngine : IAsyncDisposable
         if (!_preferences.HasMailbox)
             return _chain.Uri;
 
+        // Don't put unusable folder paths into invites from mobile.
+        if (!_context.SupportsLocalFolder && _preferences.Backend == SyncBackendKind.Folder)
+            return _chain.Uri;
+
         return SyncInvite.From(_chain, _preferences).ToUri();
     }
 
@@ -169,9 +193,34 @@ public sealed class SyncEngine : IAsyncDisposable
 
     public Task ClearChainAsync(CancellationToken ct = default) => SetChainAsync(null, ct);
 
+    /// <summary>Rewrites this device's mailbox pack so peers pick up a renamed display name.</summary>
+    public async Task ForcePublishIdentityAsync(CancellationToken ct = default)
+    {
+        _uploaded = new VersionVector();
+        await _context.Vault.WriteAsync(UploadedVaultKey, "", ct);
+        await SyncNowAsync(ct);
+    }
+
+    public async Task IgnorePeerAsync(string deviceId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId) || deviceId == _context.Identity.DeviceId)
+            return;
+
+        _ignoredPeers.Add(deviceId);
+        await PersistIgnoredPeersAsync(ct);
+        await _context.Peers.RevokeAsync(deviceId, ct);
+        Changed?.Invoke();
+    }
+
+    public bool IsPeerIgnored(string deviceId) => _ignoredPeers.Contains(deviceId);
+
     public async Task SavePreferencesAsync(SyncPreferences preferences, CancellationToken ct = default)
     {
-        _preferences = Clone(preferences);
+        var prefs = Clone(preferences);
+        if (!_context.SupportsLocalFolder)
+            SyncInvite.StripLocalFolder(prefs);
+
+        _preferences = prefs;
         await _context.Vault.WriteAsync(BackendVaultKey, _preferences.Backend.ToString().ToLowerInvariant(), ct);
         await _context.Vault.WriteAsync(FolderVaultKey, _preferences.FolderPath ?? "", ct);
         await _context.Vault.WriteAsync(ProviderVaultKey, _preferences.Provider.ToString(), ct);
@@ -289,6 +338,23 @@ public sealed class SyncEngine : IAsyncDisposable
         var uploaded = await _context.Vault.ReadAsync(UploadedVaultKey, ct);
         _uploaded = VersionVectorText.Parse(uploaded);
 
+        _ignoredPeers.Clear();
+        foreach (var id in ParseIgnoredPeers(await _context.Vault.ReadAsync(IgnoredPeersVaultKey, ct)))
+            _ignoredPeers.Add(id);
+
+        if (!_context.SupportsLocalFolder)
+        {
+            var backendBefore = _preferences.Backend;
+            var folderBefore = _preferences.FolderPath;
+            SyncInvite.StripLocalFolder(_preferences);
+            if (backendBefore != _preferences.Backend || folderBefore != _preferences.FolderPath)
+            {
+                await _context.Vault.WriteAsync(
+                    BackendVaultKey, _preferences.Backend.ToString().ToLowerInvariant(), ct);
+                await _context.Vault.WriteAsync(FolderVaultKey, _preferences.FolderPath ?? "", ct);
+            }
+        }
+
         RebuildBackend();
 
         if (_chain is null)
@@ -403,10 +469,32 @@ public sealed class SyncEngine : IAsyncDisposable
         }
 
         var theirs = VersionVectorText.Parse(pack.Version);
-        await _context.Peers.TrustAsync(
-            new TrustedDevice(pack.DeviceId, pack.DisplayName, "", DateTimeOffset.UtcNow), ct);
+        if (!_ignoredPeers.Contains(pack.DeviceId))
+        {
+            await _context.Peers.TrustAsync(
+                new TrustedDevice(pack.DeviceId, pack.DisplayName, "", DateTimeOffset.UtcNow), ct);
+        }
+
         await _context.Peers.SaveStateAsync(
             new PeerSyncState(pack.DeviceId, theirs, theirs, DateTimeOffset.UtcNow), ct);
+    }
+
+    private async Task PersistIgnoredPeersAsync(CancellationToken ct)
+    {
+        var value = string.Join(',', _ignoredPeers.OrderBy(id => id, StringComparer.Ordinal));
+        await _context.Vault.WriteAsync(IgnoredPeersVaultKey, value, ct);
+    }
+
+    private static IEnumerable<string> ParseIgnoredPeers(string? stored)
+    {
+        if (string.IsNullOrWhiteSpace(stored))
+            yield break;
+
+        foreach (var part in stored.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (part.Length > 0)
+                yield return part;
+        }
     }
 
     private async Task PushAsync(ISyncBackend backend, SyncChain chain, CancellationToken ct)
