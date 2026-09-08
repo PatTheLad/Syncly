@@ -14,6 +14,21 @@ public sealed class ProtonDriveBackend : ISyncBackend, IAsyncDisposable
 {
     public const string ApiBase = "https://mail.proton.me/api/drive/";
 
+    /// <summary>
+    /// Public-link sessions have no <c>full</c>/<c>nondelinquent</c> scope.
+    /// Volume routes must go through <c>drive/unauth/</c>; <c>drive/urls/</c> stays as-is.
+    /// </summary>
+    public static string DataPath(string path)
+    {
+        path = path.TrimStart('/');
+        if (path.StartsWith("urls/", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("v2/urls/", StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith("unauth/", StringComparison.OrdinalIgnoreCase))
+            return path;
+
+        return "unauth/" + path;
+    }
+
     private readonly ProtonShareUrl _url;
     private readonly HttpClient _http;
     private readonly bool _ownsHttp;
@@ -50,6 +65,8 @@ public sealed class ProtonDriveBackend : ISyncBackend, IAsyncDisposable
         if (!session.CanEdit)
             throw new ProtonDriveException(
                 "This Proton Drive link is view-only. In Proton Drive, share the folder again and set access to Editor.");
+
+        await session.ListAsync(ct);
     }
 
     public async Task<IReadOnlyList<string>> ListAsync(CancellationToken ct = default)

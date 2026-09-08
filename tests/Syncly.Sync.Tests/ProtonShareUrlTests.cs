@@ -42,4 +42,14 @@ public class ProtonShareUrlTests
         Assert.Throws<FormatException>(() =>
             ProtonShareUrl.Parse("https://example.com/urls/AbCdEfGh1234#pw"));
     }
+
+    [Theory]
+    [InlineData("v2/volumes/vol/folders/id/children", "unauth/v2/volumes/vol/folders/id/children")]
+    [InlineData("urls/TOKEN/info", "urls/TOKEN/info")]
+    [InlineData("v2/urls/TOKEN/info", "v2/urls/TOKEN/info")]
+    [InlineData("unauth/v2/already", "unauth/v2/already")]
+    public void Public_link_data_uses_the_unauth_prefix(string input, string expected)
+    {
+        Assert.Equal(expected, ProtonDriveBackend.DataPath(input));
+    }
 }

@@ -99,7 +99,7 @@ internal sealed class ProtonMailbox
 
         var http = RequireHttp();
         var link = await http.GetFromJsonAsync<JsonElement>(
-            $"v2/volumes/{_volumeId}/links/{linkId}", cancellationToken: ct);
+            ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/links/{linkId}"), cancellationToken: ct);
 
         if (!TryGetLink(link, out var node))
             return null;
@@ -165,7 +165,7 @@ internal sealed class ProtonMailbox
         };
 
         using var response = await http.PostAsJsonAsync(
-            $"v2/volumes/{_volumeId}/folders/{_rootLinkId}/files", body, ct);
+            ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/folders/{_rootLinkId}/files"), body, ct);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -192,7 +192,7 @@ internal sealed class ProtonMailbox
     {
         var http = RequireHttp();
         using var response = await http.PostAsJsonAsync(
-            $"v2/volumes/{_volumeId}/links/{linkId}/revisions",
+            ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/links/{linkId}/revisions"),
             new { Contents = Convert.ToBase64String(EncryptPayload(data.ToArray())) },
             ct);
 
@@ -215,29 +215,88 @@ internal sealed class ProtonMailbox
     private async Task RefreshAsync(CancellationToken ct)
     {
         var http = RequireHttp();
-        using var response = await http.GetAsync($"v2/volumes/{_volumeId}/folders/{_rootLinkId}/children", ct);
-        if (!response.IsSuccessStatusCode)
+        var ids = new List<string>();
+        string? anchor = null;
+
+        while (true)
         {
-            using var retry = await http.GetAsync($"urls/{_token}/files", ct);
-            if (!retry.IsSuccessStatusCode)
+            var path = ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/folders/{_rootLinkId}/children");
+            if (!string.IsNullOrEmpty(anchor))
+                path += "?AnchorID=" + Uri.EscapeDataString(anchor);
+
+            using var response = await http.GetAsync(path, ct);
+            if (!response.IsSuccessStatusCode)
             {
-                var detail = await response.Content.ReadAsStringAsync(ct);
-                throw new ProtonDriveException("Could not list the Proton Drive folder. " + detail);
+                using var retry = await http.GetAsync($"urls/{_token}/files", ct);
+                if (!retry.IsSuccessStatusCode)
+                {
+                    var detail = await response.Content.ReadAsStringAsync(ct);
+                    throw new ProtonDriveException("Could not list the Proton Drive folder. " + detail);
+                }
+
+                await LoadChildrenAsync(retry, ct);
+                return;
             }
 
-            await LoadChildrenAsync(retry, ct);
-            return;
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            var root = doc.RootElement;
+            if (HasLinkObjects(root))
+            {
+                ApplyLinks(root);
+                return;
+            }
+
+            foreach (var id in ReadLinkIds(root))
+                ids.Add(id);
+
+            var more = root.TryGetProperty("More", out var moreEl) && moreEl.ValueKind is JsonValueKind.True;
+            anchor = root.TryGetProperty("AnchorID", out var anchorEl) ? anchorEl.GetString() : null;
+            if (!more || string.IsNullOrEmpty(anchor))
+                break;
         }
 
-        await LoadChildrenAsync(response, ct);
+        _links.Clear();
+        if (ids.Count == 0)
+            return;
+
+        await LoadLinkDetailsAsync(ids, ct);
+    }
+
+    private async Task LoadLinkDetailsAsync(IReadOnlyList<string> ids, CancellationToken ct)
+    {
+        var http = RequireHttp();
+        const int batch = 150;
+        for (var i = 0; i < ids.Count; i += batch)
+        {
+            var chunk = ids.Skip(i).Take(batch).ToArray();
+            using var response = await http.PostAsJsonAsync(
+                ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/links"),
+                new { LinkIDs = chunk },
+                ct);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var detail = await response.Content.ReadAsStringAsync(ct);
+                throw new ProtonDriveException("Could not read Proton Drive folder entries. " + detail);
+            }
+
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            ApplyLinks(doc.RootElement, clear: i == 0);
+        }
     }
 
     private async Task LoadChildrenAsync(HttpResponseMessage response, CancellationToken ct)
     {
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
-        _links.Clear();
+        ApplyLinks(doc.RootElement);
+    }
 
-        foreach (var link in EnumerateLinks(doc.RootElement))
+    private void ApplyLinks(JsonElement root, bool clear = true)
+    {
+        if (clear)
+            _links.Clear();
+
+        foreach (var link in EnumerateLinks(root))
         {
             if (!link.TryGetProperty("LinkID", out var idEl) && !link.TryGetProperty("linkId", out idEl))
                 continue;
@@ -251,6 +310,29 @@ internal sealed class ProtonMailbox
                 continue;
 
             _links[name] = id;
+        }
+    }
+
+    private static bool HasLinkObjects(JsonElement root) =>
+        EnumerateLinks(root).Any(link =>
+            link.TryGetProperty("Name", out _)
+            || (link.TryGetProperty("LinkID", out _) && link.TryGetProperty("MIMEType", out _)));
+
+    private static IEnumerable<string> ReadLinkIds(JsonElement root)
+    {
+        foreach (var name in new[] { "LinkIDs", "linkIDs", "LinkIds" })
+        {
+            if (!root.TryGetProperty(name, out var arr) || arr.ValueKind != JsonValueKind.Array)
+                continue;
+
+            foreach (var item in arr.EnumerateArray())
+            {
+                var id = item.ValueKind == JsonValueKind.String ? item.GetString() : null;
+                if (!string.IsNullOrWhiteSpace(id))
+                    yield return id;
+            }
+
+            yield break;
         }
     }
 
@@ -318,7 +400,15 @@ internal sealed class ProtonMailbox
             if (root.TryGetProperty(name, out var arr) && arr.ValueKind == JsonValueKind.Array)
             {
                 foreach (var item in arr.EnumerateArray())
-                    yield return item;
+                {
+                    if (item.ValueKind == JsonValueKind.Object
+                        && item.TryGetProperty("Link", out var nested)
+                        && nested.ValueKind == JsonValueKind.Object)
+                        yield return nested;
+                    else if (item.ValueKind == JsonValueKind.Object)
+                        yield return item;
+                }
+
                 yield break;
             }
         }
