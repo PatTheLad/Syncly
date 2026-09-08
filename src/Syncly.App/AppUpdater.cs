@@ -225,6 +225,8 @@ public sealed class GitHubApkUpdater : IAppUpdater
         {
             Directory.CreateDirectory(_cacheDirectory);
             var path = Path.Combine(_cacheDirectory, Available.AssetName ?? "Syncly.apk");
+            if (File.Exists(path))
+                File.Delete(path);
 
             using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
             response.EnsureSuccessStatusCode();

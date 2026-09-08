@@ -93,7 +93,7 @@ Every push to `main` publishes a GitHub Release (`v2.0.<build>`) with:
 - **Linux** — Velopack setup for x64
 - **Android** — `Syncly-android.apk`
 
-Installed copies check that feed on startup. When a newer release exists, the shell and Settings show an **Update** button. On desktop the download is silent and Syncly restarts into the new version. On Android the APK downloads silently, then Android's package installer asks once to replace the app (sideloaded APKs cannot skip that system prompt).
+Installed copies check that feed on startup. When a newer release exists, the shell and Settings show an **Update** button. On desktop the download is silent and Syncly restarts into the new version. On Android the APK downloads silently, then Android's package installer asks once to replace the app (sideloaded APKs cannot skip that system prompt). Android will refuse the replacement — "App not installed" — unless the new APK is signed with the same key as the copy already on the phone, so CI signs every build with a persistent upload keystore.
 
 ## Editing
 

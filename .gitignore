@@ -9,3 +9,5 @@
 *.db-wal
 local/
 .local/
+*.keystore
+*.jks

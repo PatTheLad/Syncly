@@ -34,7 +34,16 @@ internal sealed class AndroidApkInstaller
 
         var intent = new Intent(Intent.ActionView);
         intent.SetDataAndType(uri, "application/vnd.android.package-archive");
+        intent.ClipData = ClipData.NewRawUri("", uri);
         intent.AddFlags(ActivityFlags.GrantReadUriPermission | ActivityFlags.NewTask);
+        activity.GrantUriPermission(
+            "com.google.android.packageinstaller",
+            uri,
+            ActivityFlags.GrantReadUriPermission);
+        activity.GrantUriPermission(
+            "com.android.packageinstaller",
+            uri,
+            ActivityFlags.GrantReadUriPermission);
         activity.StartActivity(intent);
         return Task.CompletedTask;
     }
