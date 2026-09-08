@@ -33,6 +33,7 @@ internal static class Program
         builder.Services.AddSingleton<IAppUpdater>(new VelopackUpdater(loggerFactory));
         builder.Services.AddSingleton<IDeviceCamera, AlwaysAllowedCamera>();
         builder.Services.AddSingleton<IMailboxCapabilities, DesktopMailboxCapabilities>();
+        builder.Services.AddSingleton<IFileAccess, DesktopFileAccess>();
         builder.Services.AddScoped<IQrScanner, JsQrScanner>();
         builder.Services.AddScoped<EditorState>();
 

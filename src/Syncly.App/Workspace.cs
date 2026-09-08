@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Syncly.Crdt;
 using Syncly.Model;
+using Syncly.Security;
 using Syncly.Storage;
 
 namespace Syncly.App;
@@ -16,6 +17,8 @@ public sealed class Workspace(
     OpLogStore opLog,
     ProjectionStore projection,
     SynclyDatabase database,
+    BlobStore? blobs = null,
+    Func<SyncChain?>? resolveChain = null,
     ILogger<Workspace>? logger = null)
 {
     public const string DefaultSpaceId = "spc_default";
@@ -26,6 +29,8 @@ public sealed class Workspace(
     private List<PageRef> _objects = [];
 
     public Replica Replica => replica;
+
+    public BlobStore? Blobs => blobs;
 
     /// <summary>Pages in every space. Spaces themselves are <see cref="Spaces"/>.</summary>
     public IReadOnlyList<PageRef> Pages => _objects.Where(o => !o.IsSpace).ToList();
@@ -116,6 +121,37 @@ public sealed class Workspace(
 
     public async Task RenameSpaceAsync(string spaceId, string title, CancellationToken ct = default) =>
         await RenamePageAsync(spaceId, title, ct);
+
+    public Task SetSpaceColorAsync(string spaceId, string color, CancellationToken ct = default) =>
+        CommitAsync(a => a.SetProp(spaceId, spaceId, PropKeys.Color, color), spaceId, ct);
+
+    /// <summary>
+    /// Soft-deletes a space and moves its pages into the default space. The default space cannot
+    /// be removed — every device needs a stable home for orphan pages.
+    /// </summary>
+    public async Task DeleteSpaceAsync(string spaceId, CancellationToken ct = default)
+    {
+        if (spaceId == DefaultSpaceId)
+            throw new InvalidOperationException("The default space cannot be deleted.");
+
+        if (Space(spaceId) is null)
+            return;
+
+        var pages = PagesIn(spaceId).ToList();
+        var affected = new List<string> { spaceId };
+        affected.AddRange(pages.Select(p => p.Id));
+
+        await CommitAsync(a =>
+        {
+            foreach (var page in pages)
+                a.SetProp(page.Id, page.Id, PropKeys.Space, DefaultSpaceId);
+
+            a.SetProp(spaceId, spaceId, PropKeys.Deleted, "true");
+        }, affected, ct);
+
+        if (CurrentSpaceId == spaceId)
+            await SelectSpaceAsync(DefaultSpaceId, ct);
+    }
 
     public async Task SelectSpaceAsync(string spaceId, CancellationToken ct = default)
     {
@@ -250,6 +286,60 @@ public sealed class Workspace(
         string? targetPageId,
         CancellationToken ct = default) =>
         CommitAsync(a => a.SetProp(pageId, blockId, PropKeys.Target, targetPageId), pageId, ct);
+
+    /// <summary>
+    /// Stores an encrypted attachment and inserts a File block. Requires an active sync chain so
+    /// peers can decrypt the same bytes from the mailbox.
+    /// </summary>
+    public async Task<string> AttachFileAsync(
+        string pageId,
+        Stream content,
+        string fileName,
+        string? mime = null,
+        string? afterBlockId = null,
+        CancellationToken ct = default)
+    {
+        if (blobs is null)
+            throw new InvalidOperationException("Attachments are not available.");
+
+        var chain = resolveChain?.Invoke()
+                    ?? throw new InvalidOperationException(
+                        "Create or join a sync chain in Settings before attaching files.");
+
+        var fileId = NewId("fl");
+        await blobs.PutAsync(fileId, content, chain, ct);
+
+        var tree = Tree(pageId);
+        var blockId = NewId("bl");
+        string? parentId = null;
+        string position;
+        if (afterBlockId is not null && tree.Find(afterBlockId) is { } after)
+        {
+            parentId = after.ParentId;
+            position = tree.PositionAfter(after);
+        }
+        else
+        {
+            position = tree.PositionAtEndOf(null);
+        }
+
+        var resolvedMime = string.IsNullOrWhiteSpace(mime)
+            ? FilePreview.GuessMime(fileName)
+            : mime.Trim();
+        var displayName = string.IsNullOrWhiteSpace(fileName) ? "Attachment" : Path.GetFileName(fileName);
+        var sizeText = blobs.LastPutBytes.ToString();
+
+        await CommitAsync(a =>
+        {
+            a.UpsertBlock(pageId, blockId, parentId, position, BlockKind.File);
+            a.SetProp(pageId, blockId, PropKeys.FileId, fileId);
+            a.SetProp(pageId, blockId, PropKeys.Mime, resolvedMime);
+            a.SetProp(pageId, blockId, PropKeys.FileName, displayName);
+            a.SetProp(pageId, blockId, PropKeys.ByteSize, sizeText);
+        }, pageId, ct);
+
+        return blockId;
+    }
 
     public async Task<string> AppendBlockAsync(
         string pageId,

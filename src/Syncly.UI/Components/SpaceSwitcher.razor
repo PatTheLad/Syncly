@@ -14,17 +14,24 @@
         <div class="space-grid">
             @foreach (var space in State.Workspace.Spaces)
             {
-                <button type="button"
-                        class="space-card @(space.Id == State.CurrentSpaceId ? "active" : null)"
-                        @key="space.Id"
-                        @onclick="() => SwitchAsync(space.Id)">
-                    <span class="space-avatar lg" style="background: @space.Accent">@space.Initial</span>
-                    <span class="space-card-name">@space.DisplayTitle</span>
-                    <span class="space-card-meta">@CountLabel(space.Id)</span>
-                </button>
+                <div class="space-card-wrap" @key="space.Id">
+                    <button type="button"
+                            class="space-card @(space.Id == State.CurrentSpaceId ? "active" : null)"
+                            @onclick="() => SwitchAsync(space.Id)">
+                        <span class="space-avatar lg" style="background: @space.Accent">@space.Initial</span>
+                        <span class="space-card-name">@(space.DisplayTitle)</span>
+                        <span class="space-card-meta">@CountLabel(space.Id)</span>
+                    </button>
+                    <button type="button"
+                            class="space-card-edit"
+                            title="Edit space"
+                            @onclick="() => BeginEdit(space)">
+                        Edit
+                    </button>
+                </div>
             }
 
-            <button type="button" class="space-card create" @onclick="() => _creating = true">
+            <button type="button" class="space-card create" @onclick="BeginCreate">
                 <span class="space-avatar lg ghost">+</span>
                 <span class="space-card-name">New space</span>
                 <span class="space-card-meta">A separate set of pages</span>
@@ -34,10 +41,11 @@
         @if (_creating)
         {
             <div class="space-create">
+                <div class="space-create-kicker">New space</div>
                 <input placeholder="Space name"
                        value="@_name"
                        @oninput="e => _name = e.Value?.ToString() ?? string.Empty"
-                       @onkeydown="OnKeyDown" />
+                       @onkeydown="OnCreateKeyDown" />
                 <div class="space-colors">
                     @foreach (var color in SpaceColors.All)
                     {
@@ -49,23 +57,103 @@
                     }
                 </div>
                 <div class="row">
-                    <button class="chip" @onclick="() => _creating = false">Cancel</button>
+                    <button class="chip" @onclick="CancelPanels">Cancel</button>
                     <button class="chip primary" @onclick="CreateAsync">Create</button>
                 </div>
+            </div>
+        }
+        else if (_editing is { } editing)
+        {
+            <div class="space-create">
+                <div class="space-create-kicker">Edit space</div>
+                <input placeholder="Space name"
+                       value="@_name"
+                       @oninput="e => _name = e.Value?.ToString() ?? string.Empty"
+                       @onkeydown="OnEditKeyDown" />
+                <div class="space-colors">
+                    @foreach (var color in SpaceColors.All)
+                    {
+                        <button type="button"
+                                class="space-swatch @(_color == color ? "picked" : null)"
+                                style="background: @color"
+                                title="@color"
+                                @onclick="() => _color = color"></button>
+                    }
+                </div>
+                <div class="row wrap">
+                    <button class="chip" @onclick="CancelPanels">Cancel</button>
+                    <button class="chip primary" @onclick="SaveEditAsync">Save</button>
+                    @if (editing.Id != DefaultSpaceId)
+                    {
+                        @if (_confirmDelete)
+                        {
+                            <button class="chip danger" @onclick="DeleteAsync">Delete forever</button>
+                        }
+                        else
+                        {
+                            <button class="chip danger" @onclick="() => _confirmDelete = true">Delete…</button>
+                        }
+                    }
+                </div>
+                @if (_confirmDelete && editing.Id != DefaultSpaceId)
+                {
+                    <div class="space-create-hint">
+                        Pages move to @(State.Workspace.Space(DefaultSpaceId)?.DisplayTitle ?? "Private").
+                    </div>
+                }
+                @if (!string.IsNullOrEmpty(_error))
+                {
+                    <div class="space-create-hint danger">@_error</div>
+                }
             </div>
         }
     </div>
 </div>
 
 @code {
+    private const string DefaultSpaceId = Syncly.App.Workspace.DefaultSpaceId;
+
     private bool _creating;
+    private PageRef? _editing;
+    private bool _confirmDelete;
     private string _name = string.Empty;
     private string _color = SpaceColors.Default;
+    private string? _error;
 
     [Parameter]
     public EventCallback OnClose { get; set; }
 
     private Task Close() => OnClose.InvokeAsync();
+
+    private void CancelPanels()
+    {
+        _creating = false;
+        _editing = null;
+        _confirmDelete = false;
+        _error = null;
+        _name = string.Empty;
+        _color = SpaceColors.Default;
+    }
+
+    private void BeginCreate()
+    {
+        _editing = null;
+        _confirmDelete = false;
+        _error = null;
+        _creating = true;
+        _name = string.Empty;
+        _color = SpaceColors.Default;
+    }
+
+    private void BeginEdit(PageRef space)
+    {
+        _creating = false;
+        _confirmDelete = false;
+        _error = null;
+        _editing = space;
+        _name = space.Title;
+        _color = space.Accent;
+    }
 
     private async Task SwitchAsync(string spaceId)
     {
@@ -77,13 +165,54 @@
     {
         var title = string.IsNullOrWhiteSpace(_name) ? "Untitled space" : _name.Trim();
         await State.CreateSpaceAsync(title, _color);
-        _name = string.Empty;
-        _creating = false;
+        CancelPanels();
         await Close();
     }
 
-    private Task OnKeyDown(KeyboardEventArgs args) =>
-        args.Key == "Enter" ? CreateAsync() : args.Key == "Escape" ? Close() : Task.CompletedTask;
+    private async Task SaveEditAsync()
+    {
+        if (_editing is null)
+            return;
+
+        var title = string.IsNullOrWhiteSpace(_name) ? "Untitled space" : _name.Trim();
+        var spaceId = _editing.Id;
+
+        if (!string.Equals(title, _editing.Title, StringComparison.Ordinal))
+            await State.RenameSpaceAsync(spaceId, title);
+
+        if (!string.Equals(_color, _editing.Accent, StringComparison.OrdinalIgnoreCase))
+            await State.SetSpaceColorAsync(spaceId, _color);
+
+        CancelPanels();
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_editing is null || _editing.Id == DefaultSpaceId)
+            return;
+
+        try
+        {
+            await State.DeleteSpaceAsync(_editing.Id);
+            CancelPanels();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private Task OnCreateKeyDown(KeyboardEventArgs args) =>
+        args.Key == "Enter" ? CreateAsync() : args.Key == "Escape" ? CancelAndMaybeClose() : Task.CompletedTask;
+
+    private Task OnEditKeyDown(KeyboardEventArgs args) =>
+        args.Key == "Enter" ? SaveEditAsync() : args.Key == "Escape" ? CancelAndMaybeClose() : Task.CompletedTask;
+
+    private Task CancelAndMaybeClose()
+    {
+        CancelPanels();
+        return Task.CompletedTask;
+    }
 
     private string CountLabel(string spaceId)
     {

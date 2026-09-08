@@ -6,6 +6,7 @@
 @inject EditorState State
 @inject SynclyApp App
 @inject IJSRuntime Js
+@inject IFileAccess Files
 
 <div class="workspace">
     <div class="topbar">
@@ -94,7 +95,14 @@
 
                     @if (!State.ReadingMode)
                     {
-                        <button class="chip muted" @onclick="AppendBlockAsync">+ Add block</button>
+                        <div class="row">
+                            <button class="chip muted" @onclick="AppendBlockAsync">+ Add block</button>
+                            <button class="chip muted" @onclick="TriggerAttachAsync">Attach file</button>
+                            <InputFile id="syncly-attach"
+                                       class="visually-hidden"
+                                       OnChange="OnAttachInputAsync"
+                                       accept="image/*,video/*,application/pdf,*/*" />
+                        </div>
                     }
                 </div>
             }
@@ -183,6 +191,7 @@
     private string? _pendingTitle;
     private string? _slashBlockId;
     private bool _iconPickerOpen;
+    private string? _attachAfterBlockId;
     private string _saveHint = "Saved";
     private (string BlockId, int Caret)? _focusRequest;
     private string? _loadedPageId;
@@ -196,6 +205,7 @@
     {
         State.Changed += Refresh;
         State.Workspace.Changed += Refresh;
+        App.Sync.Changed += Refresh;
     }
 
     protected override async Task OnParametersSetAsync()
@@ -422,6 +432,37 @@
         return Task.CompletedTask;
     }
 
+    public async Task<string?> ResolveFileObjectUrlAsync(string fileId, string mime)
+    {
+        var chain = App.Sync.Chain;
+        var blobs = State.Workspace.Blobs;
+        if (chain is null || blobs is null)
+            return null;
+
+        var plain = await blobs.TryGetPlainAsync(fileId, chain);
+        if (plain is null)
+            return null;
+
+        return await Js.InvokeAsync<string>("syncly.createObjectUrl", plain, mime);
+    }
+
+    public async Task OpenAttachedFileAsync(string blockId)
+    {
+        var block = State.Workspace.Tree(PageIdOrThrow).Find(blockId);
+        if (block?.FileId is not { Length: > 0 } fileId || App.Sync.Chain is null || State.Workspace.Blobs is null)
+            return;
+
+        var plain = await State.Workspace.Blobs.TryGetPlainAsync(fileId, App.Sync.Chain);
+        if (plain is null)
+        {
+            _saveHint = "Waiting for file…";
+            StateHasChanged();
+            return;
+        }
+
+        await Files.OpenAsync(block.FileName ?? "attachment", block.Mime ?? "application/octet-stream", plain);
+    }
+
     public Task EditAtAsync(string blockId) => FocusBlockAsync(blockId, -1);
 
     public string? ResolveLink(string title) => State.Workspace.ResolvePageByTitle(title);
@@ -623,7 +664,7 @@
         [
             BlockKind.Paragraph, BlockKind.Heading1, BlockKind.Heading2, BlockKind.Heading3,
             BlockKind.Bullet, BlockKind.Numbered, BlockKind.Todo, BlockKind.Quote,
-            BlockKind.Code, BlockKind.Divider, BlockKind.PageLink,
+            BlockKind.Code, BlockKind.Divider, BlockKind.PageLink, BlockKind.File,
         ];
 
         return kinds.Select(kind => new Palette.PaletteItem(
@@ -645,6 +686,7 @@
         BlockKind.Code => "{}",
         BlockKind.Divider => "—",
         BlockKind.PageLink => "↗",
+        BlockKind.File => "📎",
         _ => "¶",
     };
 
@@ -659,6 +701,14 @@
         _pendingText.Remove(blockId);
         var cleaned = text.EndsWith('/') ? text[..^1] : text;
         var pageId = PageIdOrThrow;
+
+        if (kind == BlockKind.File)
+        {
+            _slashBlockId = null;
+            _attachAfterBlockId = blockId;
+            await TriggerAttachAsync();
+            return;
+        }
 
         if (kind == BlockKind.PageLink)
         {
@@ -749,6 +799,75 @@
         await FocusBlockAsync(blockId, 0);
     }
 
+    private async Task TriggerAttachAsync()
+    {
+        try
+        {
+            await using var picked = await Files.PickAsync();
+            if (picked is not null)
+            {
+                await AttachStreamAsync(picked.Content, picked.FileName, picked.MimeType);
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            _saveHint = ex.Message;
+            StateHasChanged();
+        }
+
+        await Js.InvokeVoidAsync("syncly.click", "syncly-attach");
+    }
+
+    private async Task OnAttachInputAsync(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        if (file is null)
+            return;
+
+        try
+        {
+            if (file.Size > BlobStore.MaxBytes)
+            {
+                _saveHint = $"Files larger than {BlobStore.MaxBytes / (1024 * 1024)} MB cannot be attached yet.";
+                StateHasChanged();
+                return;
+            }
+
+            await using var stream = file.OpenReadStream(BlobStore.MaxBytes);
+            await AttachStreamAsync(stream, file.Name, file.ContentType);
+        }
+        catch (Exception ex)
+        {
+            _saveHint = ex.Message;
+            StateHasChanged();
+        }
+    }
+
+    private async Task AttachStreamAsync(Stream stream, string fileName, string? mime)
+    {
+        await FlushAsync();
+        _saveHint = "Attaching…";
+        StateHasChanged();
+
+        var after = _attachAfterBlockId;
+        _attachAfterBlockId = null;
+
+        try
+        {
+            await State.Workspace.AttachFileAsync(PageIdOrThrow, stream, fileName, mime, after);
+            _saveHint = "Saved";
+            if (App.Sync.IsConfigured)
+                _ = App.Sync.SyncNowAsync();
+        }
+        catch (Exception ex)
+        {
+            _saveHint = ex.Message;
+        }
+
+        StateHasChanged();
+    }
+
     private async Task StopEditingAsync()
     {
         await FlushAsync();
@@ -779,6 +898,7 @@
     {
         State.Changed -= Refresh;
         State.Workspace.Changed -= Refresh;
+        App.Sync.Changed -= Refresh;
 
         if (_saveTimer is not null)
             await _saveTimer.DisposeAsync();

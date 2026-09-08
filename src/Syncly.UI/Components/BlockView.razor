@@ -1,10 +1,11 @@
 @namespace Syncly.UI.Components
+@implements IAsyncDisposable
 @implements IDisposable
 @inject IJSRuntime Js
 @inject EditorState State
 
 <div class="block @KindClass" @key="Block.Id">
-    @if (!Host.Reading && Block.Kind is not (BlockKind.Divider or BlockKind.PageLink))
+    @if (!Host.Reading && Block.Kind is not (BlockKind.Divider or BlockKind.PageLink or BlockKind.File))
     {
         <button class="block-handle" title="Block actions" @onclick="OpenMenuAsync">⋮</button>
     }
@@ -40,6 +41,56 @@
             <span class="page-link-title">@LinkTitle</span>
             <span class="page-link-hint">Open</span>
         </button>
+        @if (!Host.Reading)
+        {
+            <button type="button"
+                    class="block-handle page-link-menu"
+                    title="Block actions"
+                    @onclick="OpenMenuAsync">⋮</button>
+        }
+    }
+    else if (Block.Kind == BlockKind.File)
+    {
+        <div class="file-block">
+            @if (_objectUrl is null && !_loading && !_missing)
+            {
+                <div class="file-pending">Loading…</div>
+            }
+            else if (_missing)
+            {
+                <div class="file-card">
+                    <span class="file-card-icon">📎</span>
+                    <div class="file-card-body">
+                        <strong>@(Block.FileName ?? "Attachment")</strong>
+                        <span>Waiting for file to sync…</span>
+                    </div>
+                </div>
+            }
+            else if (Preview == FilePreviewKind.Image && _objectUrl is not null)
+            {
+                <img class="file-media" src="@_objectUrl" alt="@(Block.FileName ?? "Image")" />
+            }
+            else if (Preview == FilePreviewKind.Video && _objectUrl is not null)
+            {
+                <video class="file-media" controls src="@_objectUrl"></video>
+            }
+            else if (Preview == FilePreviewKind.Pdf && _objectUrl is not null)
+            {
+                <iframe class="file-pdf" title="@(Block.FileName ?? "PDF")" src="@_objectUrl"></iframe>
+                <button type="button" class="chip muted" @onclick="() => Host.OpenAttachedFileAsync(Block.Id)">Open PDF</button>
+            }
+            else
+            {
+                <button type="button" class="file-card" @onclick="() => Host.OpenAttachedFileAsync(Block.Id)">
+                    <span class="file-card-icon">📎</span>
+                    <div class="file-card-body">
+                        <strong>@(Block.FileName ?? "Attachment")</strong>
+                        <span>@SizeLabel · @(Block.Mime ?? "file")</span>
+                    </div>
+                    <span class="page-link-hint">Open</span>
+                </button>
+            }
+        </div>
         @if (!Host.Reading)
         {
             <button type="button"
@@ -85,6 +136,10 @@
     private string _pushed = "";
     private bool _attached;
     private bool _wasReading;
+    private string? _objectUrl;
+    private string? _loadedFileId;
+    private bool _loading;
+    private bool _missing;
 
     [Parameter, EditorRequired]
     public required BlockNode Block { get; set; }
@@ -107,6 +162,15 @@
     private string LinkIcon =>
         TargetPage?.Icon is { Length: > 0 } icon ? icon : "↗";
 
+    private FilePreviewKind Preview => FilePreview.ForMime(Block.Mime);
+
+    private string SizeLabel =>
+        Block.ByteSize is { } size
+            ? size >= 1024 * 1024
+                ? $"{size / (1024.0 * 1024.0):0.#} MB"
+                : $"{Math.Max(1, size / 1024)} KB"
+            : "file";
+
     private string KindClass => Block.Kind switch
     {
         BlockKind.Heading1 => "h1",
@@ -119,6 +183,7 @@
         BlockKind.Code => "code",
         BlockKind.Divider => "divider",
         BlockKind.PageLink => "page-link",
+        BlockKind.File => "file",
         _ => "paragraph",
     };
 
@@ -130,9 +195,40 @@
         _ => "Type '/' for commands",
     };
 
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Block.Kind != BlockKind.File || Block.FileId is not { Length: > 0 } fileId)
+            return;
+
+        // Keep the blob URL once loaded; retry while missing so a late sync pull can fill in.
+        if (_loadedFileId == fileId && _objectUrl is not null)
+            return;
+
+        if (_loading)
+            return;
+
+        await LoadFileAsync(fileId);
+    }
+
+    private async Task LoadFileAsync(string fileId)
+    {
+        _loading = true;
+        _missing = false;
+        await RevokeUrlAsync();
+        _loadedFileId = fileId;
+
+        var url = await Host.ResolveFileObjectUrlAsync(fileId, Block.Mime ?? "application/octet-stream");
+        if (url is null)
+            _missing = true;
+        else
+            _objectUrl = url;
+
+        _loading = false;
+    }
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (Block.Kind is BlockKind.Divider or BlockKind.PageLink)
+        if (Block.Kind is BlockKind.Divider or BlockKind.PageLink or BlockKind.File)
         {
             _attached = false;
             return;
@@ -159,7 +255,6 @@
             return;
         }
 
-        // Keystrokes live in the DOM. Do not push stale CRDT text back until it has caught up.
         if (_echo is not null)
         {
             if (!string.Equals(_echo, Block.Text, StringComparison.Ordinal))
@@ -229,6 +324,28 @@
             return Host.OpenPageAsync(target);
 
         return Task.CompletedTask;
+    }
+
+    private async Task RevokeUrlAsync()
+    {
+        if (_objectUrl is null)
+            return;
+
+        try
+        {
+            await Js.InvokeVoidAsync("syncly.revokeObjectUrl", _objectUrl);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+
+        _objectUrl = null;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await RevokeUrlAsync();
+        _self?.Dispose();
     }
 
     public void Dispose() => _self?.Dispose();

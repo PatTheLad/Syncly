@@ -14,12 +14,13 @@ public enum BlockKind
     Code = 8,
     Divider = 9,
     PageLink = 10,
+    File = 11,
 }
 
 public static class BlockKinds
 {
     public static bool IsText(this BlockKind kind) =>
-        kind is not (BlockKind.Divider or BlockKind.PageLink);
+        kind is not (BlockKind.Divider or BlockKind.PageLink or BlockKind.File);
 
     public static bool IsHeading(this BlockKind kind) =>
         kind is BlockKind.Heading1 or BlockKind.Heading2 or BlockKind.Heading3;
@@ -37,6 +38,7 @@ public static class BlockKinds
         BlockKind.Code => "Code",
         BlockKind.Divider => "Divider",
         BlockKind.PageLink => "Page link",
+        BlockKind.File => "File",
         _ => kind.ToString(),
     };
 }
@@ -55,6 +57,10 @@ public static class PropKeys
     public const string Type = "type";
     public const string Space = "space";
     public const string Color = "color";
+    public const string FileId = "fileId";
+    public const string Mime = "mime";
+    public const string FileName = "fileName";
+    public const string ByteSize = "byteSize";
 }
 
 public static class ObjectTypes
@@ -81,6 +87,15 @@ public sealed class BlockNode
     public string? Language => Props.TryGetValue(PropKeys.Language, out var v) ? v : null;
 
     public string? Target => Props.TryGetValue(PropKeys.Target, out var v) ? v : null;
+
+    public string? FileId => Props.TryGetValue(PropKeys.FileId, out var v) ? v : null;
+
+    public string? Mime => Props.TryGetValue(PropKeys.Mime, out var v) ? v : null;
+
+    public string? FileName => Props.TryGetValue(PropKeys.FileName, out var v) ? v : null;
+
+    public long? ByteSize =>
+        Props.TryGetValue(PropKeys.ByteSize, out var v) && long.TryParse(v, out var n) ? n : null;
 
     public IEnumerable<BlockNode> DescendantsAndSelf()
     {

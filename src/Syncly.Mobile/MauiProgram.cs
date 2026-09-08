@@ -35,6 +35,7 @@ public static class MauiProgram
         builder.Services.AddSingleton<IMailboxCapabilities, MobileMailboxCapabilities>();
         builder.Services.AddSingleton<IDeviceCamera, MauiCameraPermission>();
         builder.Services.AddSingleton<IQrScanner, AndroidQrScanner>();
+        builder.Services.AddSingleton<IFileAccess, MauiFileAccess>();
         builder.Services.AddSingleton<IAppUpdater>(_ =>
         {
             var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };

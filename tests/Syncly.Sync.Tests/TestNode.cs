@@ -54,6 +54,8 @@ public sealed class TestNode : IAsyncDisposable
 
     public Replica Replica { get; }
 
+    public App.BlobStore Blobs { get; set; } = null!;
+
     public SyncEngine Engine { get; private set; } = null!;
 
     public static async Task<TestNode> CreateAsync(string name, SyncOptions? options = null)
@@ -65,6 +67,7 @@ public sealed class TestNode : IAsyncDisposable
         var identity = DeviceIdentity.CreateEphemeral(name);
         var vault = new MemoryVault();
         var node = new TestNode(name, directory, database, identity, vault);
+        var blobs = new App.BlobStore(directory);
 
         var context = new SyncContext
         {
@@ -78,8 +81,12 @@ public sealed class TestNode : IAsyncDisposable
                 LocalChangeDebounce = TimeSpan.FromMilliseconds(30),
                 AutoSyncInterval = TimeSpan.FromHours(1),
             },
+            ListLocalBlobIds = () => blobs.ListIds(),
+            ReadLocalBlobSealed = (id, token) => blobs.ReadSealedAsync(id, token),
+            WriteLocalBlobSealed = (id, bytes, token) => blobs.PutSealedAsync(id, bytes, token),
         };
 
+        node.Blobs = blobs;
         node.Engine = new SyncEngine(context, node.Snapshots);
         await node.Engine.StartAsync();
         return node;

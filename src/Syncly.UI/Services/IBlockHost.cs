@@ -37,6 +37,12 @@ public interface IBlockHost
     /// <summary>Opens another page from a page-link block.</summary>
     Task OpenPageAsync(string pageId);
 
+    /// <summary>Decrypts an attachment and returns a blob: object URL for inline preview.</summary>
+    Task<string?> ResolveFileObjectUrlAsync(string fileId, string mime);
+
+    /// <summary>Writes the attachment to a temp path and opens it with the OS.</summary>
+    Task OpenAttachedFileAsync(string blockId);
+
     /// <summary>Leaves reading mode with the caret in this block.</summary>
     Task EditAtAsync(string blockId);
 

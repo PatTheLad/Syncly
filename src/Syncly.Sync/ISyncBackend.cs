@@ -79,12 +79,21 @@ public static class MailboxFiles
 {
     public const string ChainManifest = "chain.json";
     public const string PackExtension = ".syncly";
+    public const string BlobPrefix = "b-";
 
     public static string PackName(string deviceId) => deviceId + PackExtension;
 
+    public static string BlobName(string fileId) => BlobPrefix + fileId + PackExtension;
+
+    public static bool IsBlob(string name) =>
+        name.StartsWith(BlobPrefix, StringComparison.OrdinalIgnoreCase)
+        && name.EndsWith(PackExtension, StringComparison.OrdinalIgnoreCase)
+        && name.Length > BlobPrefix.Length + PackExtension.Length;
+
     public static bool IsPack(string name) =>
         name.EndsWith(PackExtension, StringComparison.OrdinalIgnoreCase)
-        && !name.StartsWith('.');
+        && !name.StartsWith('.')
+        && !IsBlob(name);
 
     public static string? DeviceIdOf(string name)
     {
@@ -92,6 +101,14 @@ public static class MailboxFiles
             return null;
 
         return name[..^PackExtension.Length];
+    }
+
+    public static string? BlobIdOf(string name)
+    {
+        if (!IsBlob(name))
+            return null;
+
+        return name[BlobPrefix.Length..^PackExtension.Length];
     }
 }
 

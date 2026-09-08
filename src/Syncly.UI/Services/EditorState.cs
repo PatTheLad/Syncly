@@ -157,5 +157,40 @@ public sealed class EditorState(SynclyApp app)
         _ = spaceId;
     }
 
+    public async Task RenameSpaceAsync(string spaceId, string title)
+    {
+        await Workspace.RenameSpaceAsync(spaceId, title);
+        Changed?.Invoke();
+    }
+
+    public async Task SetSpaceColorAsync(string spaceId, string color)
+    {
+        await Workspace.SetSpaceColorAsync(spaceId, color);
+        Changed?.Invoke();
+    }
+
+    public async Task DeleteSpaceAsync(string spaceId)
+    {
+        var wasCurrent = CurrentSpaceId == spaceId;
+        await Workspace.DeleteSpaceAsync(spaceId);
+
+        if (wasCurrent)
+        {
+            CurrentPageId = Workspace.ChildrenOf(null, Workspace.DefaultSpaceId).FirstOrDefault()?.Id;
+            ReadingMode = true;
+        }
+        else if (CurrentPageId is { } pageId)
+        {
+            var page = Workspace.Page(pageId);
+            if (page is null)
+            {
+                CurrentPageId = Workspace.ChildrenOf(null, CurrentSpaceId).FirstOrDefault()?.Id;
+                ReadingMode = true;
+            }
+        }
+
+        Changed?.Invoke();
+    }
+
     public IReadOnlyList<PageRef> Roots => Workspace.ChildrenOf(null, CurrentSpaceId);
 }

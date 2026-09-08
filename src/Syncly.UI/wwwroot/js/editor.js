@@ -369,7 +369,7 @@
     });
   }
 
-  window.syncly = {
+    window.syncly = {
     attachBlock,
     attachShell,
     setText,
@@ -383,5 +383,24 @@
     isNarrow,
     confirm: confirmDialog,
     scanQr,
+    click(id) {
+      const el = element(id);
+      if (el) el.click();
+    },
+    createObjectUrl(bytes, mime) {
+      let array;
+      if (typeof bytes === "string") {
+        const bin = atob(bytes);
+        array = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) array[i] = bin.charCodeAt(i);
+      } else {
+        array = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      }
+      const blob = new Blob([array], { type: mime || "application/octet-stream" });
+      return URL.createObjectURL(blob);
+    },
+    revokeObjectUrl(url) {
+      if (url) URL.revokeObjectURL(url);
+    },
   };
 })();

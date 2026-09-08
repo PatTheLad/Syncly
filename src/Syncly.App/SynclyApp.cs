@@ -62,6 +62,7 @@ public sealed class SynclyApp : IAsyncDisposable
         DeviceIdentity identity,
         Replica replica,
         Workspace workspace,
+        BlobStore blobs,
         OpLogStore opLog,
         PeerStore peers,
         IKeyVault vault,
@@ -72,6 +73,7 @@ public sealed class SynclyApp : IAsyncDisposable
         Identity = identity;
         Replica = replica;
         Workspace = workspace;
+        Blobs = blobs;
         OpLog = opLog;
         Peers = peers;
         Vault = vault;
@@ -86,6 +88,8 @@ public sealed class SynclyApp : IAsyncDisposable
     public Replica Replica { get; }
 
     public Workspace Workspace { get; }
+
+    public BlobStore Blobs { get; }
 
     public OpLogStore OpLog { get; }
 
@@ -120,8 +124,16 @@ public sealed class SynclyApp : IAsyncDisposable
         var replica = new Replica(identity.DeviceId);
         var dirty = await RestoreAsync(replica, opLog, snapshots, database, logger, ct);
 
+        var blobs = new BlobStore(directory);
+        SyncEngine? engine = null;
         var workspace = new Workspace(
-            replica, opLog, projection, database, loggerFactory.CreateLogger<Workspace>());
+            replica,
+            opLog,
+            projection,
+            database,
+            blobs,
+            () => engine?.Chain,
+            loggerFactory.CreateLogger<Workspace>());
 
         if (await LegacyImport.IsPendingAsync(database, ct))
         {
@@ -144,9 +156,12 @@ public sealed class SynclyApp : IAsyncDisposable
             SupportsLocalFolder = options.SupportsLocalFolder,
             OnRemoteOps = ops => workspace.ProjectAsync(ops.Select(o => o.ObjectId), ct),
             BackendFactory = CreateBackend,
+            ListLocalBlobIds = () => blobs.ListIds(),
+            ReadLocalBlobSealed = (id, token) => blobs.ReadSealedAsync(id, token),
+            WriteLocalBlobSealed = (id, bytes, token) => blobs.PutSealedAsync(id, bytes, token),
         };
 
-        var engine = new SyncEngine(
+        engine = new SyncEngine(
             context,
             snapshots,
             loggerFactory.CreateLogger<SyncEngine>());
@@ -158,7 +173,7 @@ public sealed class SynclyApp : IAsyncDisposable
             identity.DisplayName, identity.DeviceId[..8], directory);
 
         return new SynclyApp(
-            database, identity, replica, workspace, opLog, peers, vault, engine, directory);
+            database, identity, replica, workspace, blobs, opLog, peers, vault, engine, directory);
     }
 
     public async Task RenameDeviceAsync(string displayName, CancellationToken ct = default)
