@@ -84,8 +84,7 @@ VS Code has the same thing as the **Syncly (both peers)** compound launch config
 
 ## Installers and updates
 
-Every push to `main` publishes a GitHub Release (`v2.0.<build>`) at
-https://github.com/PatTheLad/Syncly/releases with:
+Every push to `main` publishes a GitHub Release (`v2.0.<build>`) with:
 
 - **Windows** — Velopack setup (`Syncly-win-Setup.exe`)
 - **Linux** — Velopack setup for x64

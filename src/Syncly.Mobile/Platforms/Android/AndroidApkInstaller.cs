@@ -1,8 +1,6 @@
 using Android.Content;
-using Android.Provider;
-using AndroidX.Core.Content;
+using AndroidXFileProvider = AndroidX.Core.Content.FileProvider;
 using File = Java.IO.File;
-using Uri = Android.Net.Uri;
 
 namespace Syncly.Mobile;
 
@@ -14,21 +12,10 @@ internal sealed class AndroidApkInstaller
         var activity = Microsoft.Maui.ApplicationModel.Platform.CurrentActivity
                        ?? throw new InvalidOperationException("Syncly is not in the foreground.");
 
-        if (OperatingSystem.IsAndroidVersionAtLeast(26)
-            && activity.PackageManager is { CanRequestPackageInstalls: false })
-        {
-            var settings = new Intent(Settings.ActionManageUnknownAppSources);
-            settings.SetData(Uri.Parse("package:" + activity.PackageName));
-            settings.AddFlags(ActivityFlags.NewTask);
-            activity.StartActivity(settings);
-            throw new InvalidOperationException("Allow Syncly to install packages, then tap Update again.");
-        }
-
-        var file = new File(apkPath);
-        var uri = FileProvider.GetUriForFile(
+        var uri = AndroidXFileProvider.GetUriForFile(
             activity,
             activity.PackageName + ".fileProvider",
-            file);
+            new File(apkPath));
 
         var intent = new Intent(Intent.ActionView);
         intent.SetDataAndType(uri, "application/vnd.android.package-archive");
