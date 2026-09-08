@@ -24,6 +24,60 @@ public class ProtonPgpTests
         var cipher = ProtonPgp.EncryptToKey("hello"u8.ToArray(), keys.EncryptionPublic);
         var plain = ProtonPgp.DecryptWithPrivateKey(cipher, keys);
         Assert.Equal("hello"u8.ToArray(), plain);
+        Assert.True(keys.SigningPublic.IsMasterKey);
+    }
+
+    [Fact]
+    public void File_draft_includes_every_attribute_Proton_requires()
+    {
+        var passphrase = "parent-pass"u8.ToArray();
+        var parent = ProtonPgp.UnlockPrivateKey(ArmoredSigningPlusEncryptionKey(passphrase), passphrase);
+        var hashKey = "folder-hash-key-bytes-are-utf8"u8.ToArray();
+        var draft = ProtonPgp.CreateFileDraft("syncly-ops.bin", "parent-link", parent, hashKey);
+
+        foreach (var key in new[]
+                 {
+                     "Name", "Hash", "ParentLinkID", "NodePassphrase", "NodePassphraseSignature",
+                     "NodeKey", "MIMEType", "ContentKeyPacket", "ContentKeyPacketSignature",
+                 })
+        {
+            Assert.True(draft.Body.ContainsKey(key), key);
+            Assert.False(string.IsNullOrWhiteSpace(draft.Body[key] as string), key);
+        }
+
+        Assert.Equal("parent-link", draft.Body["ParentLinkID"]);
+        Assert.Equal(ProtonPgp.LookupHash("syncly-ops.bin", hashKey), draft.Body["Hash"]);
+
+        var name = Encoding.UTF8.GetString(
+            ProtonPgp.DecryptWithPrivateKey((string)draft.Body["Name"]!, parent));
+        Assert.Equal("syncly-ops.bin", name);
+
+        var unlocked = ProtonPgp.DecryptWithPrivateKey((string)draft.Body["NodePassphrase"]!, parent);
+        var fileKeys = ProtonPgp.UnlockPrivateKey((string)draft.Body["NodeKey"]!, unlocked);
+        var session = ProtonPgp.DecryptSessionKey(
+            Convert.FromBase64String((string)draft.Body["ContentKeyPacket"]!),
+            fileKeys.EncryptionPrivate);
+        Assert.Equal(draft.SessionKey, session);
+    }
+
+    [Fact]
+    public void Session_key_roundtrips_a_file_block()
+    {
+        var key = ProtonPgp.GenerateSessionKey();
+        var plain = "syncly mailbox blob"u8.ToArray();
+        var cipher = ProtonPgp.EncryptWithSessionKey(plain, key);
+        Assert.Equal(plain, ProtonPgp.DecryptWithSessionKey(cipher, key));
+    }
+
+    [Fact]
+    public void Verification_token_xors_the_block_prefix()
+    {
+        var code = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
+        var block = Enumerable.Range(100, 40).Select(i => (byte)i).ToArray();
+        var token = ProtonPgp.VerificationToken(code, block);
+        Assert.Equal(32, token.Length);
+        Assert.Equal((byte)(0 ^ 100), token[0]);
+        Assert.Equal((byte)(31 ^ 131), token[31]);
     }
 
     private static string ArmoredSigningPlusEncryptionKey(byte[] passphrase)

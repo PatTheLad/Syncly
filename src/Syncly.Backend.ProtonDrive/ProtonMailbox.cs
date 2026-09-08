@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
@@ -7,21 +8,23 @@ using Org.BouncyCastle.Bcpg.OpenPgp;
 namespace Syncly.Backend.ProtonDrive;
 
 /// <summary>
-/// After SRP, the share private key unlocks folder names and file contents. Syncly only stores
-/// its own ciphertext blobs in that folder.
+/// After SRP, the share private key unlocks the folder key. File names and contents use that
+/// folder key, then each file's own node key, matching Proton Drive's public-link upload.
 /// </summary>
 internal sealed class ProtonMailbox
 {
-    private readonly ProtonKeySet _keys;
+    private readonly ProtonKeySet _shareKeys;
     private HttpClient? _http;
     private string _token = "";
     private string _volumeId = "";
     private string _rootLinkId = "";
+    private ProtonKeySet? _folderKeys;
+    private byte[]? _hashKey;
     private readonly Dictionary<string, string> _links = new(StringComparer.Ordinal);
 
     private ProtonMailbox(ProtonKeySet keys)
     {
-        _keys = keys;
+        _shareKeys = keys;
     }
 
     public static ProtonMailbox Unlock(ProtonShareDto share, string urlPassword)
@@ -96,122 +99,284 @@ internal sealed class ProtonMailbox
             return null;
 
         var http = RequireHttp();
-        var link = await http.GetFromJsonAsync<JsonElement>(
+        var linkDoc = await http.GetFromJsonAsync<JsonElement>(
             ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/links/{linkId}"), cancellationToken: ct);
 
-        if (!TryGetLink(link, out var node))
+        if (!TryGetLink(linkDoc, out var node))
             return null;
 
-        if (node.TryGetProperty("FileProperties", out var file)
-            && file.TryGetProperty("ActiveRevision", out var revision)
-            && revision.TryGetProperty("Blocks", out var blocks)
-            && blocks.ValueKind == JsonValueKind.Array)
+        if (!TryUnlockFile(node, out _, out var sessionKey))
+            throw new ProtonDriveException($"Could not download “{name}” from Proton Drive.");
+
+        if (!TryReadBlockTargets(node, out var blocks))
+            blocks = await LoadRevisionBlocksAsync(linkId, ReadActiveRevisionId(node), ct);
+
+        if (blocks.Count == 0)
+            throw new ProtonDriveException($"Could not download “{name}” from Proton Drive.");
+
+        using var buffer = new MemoryStream();
+        foreach (var (url, token) in blocks)
         {
-            using var buffer = new MemoryStream();
-            foreach (var block in blocks.EnumerateArray())
-            {
-                if (!block.TryGetProperty("BareUrl", out var urlEl)
-                    && !block.TryGetProperty("URL", out urlEl)
-                    && !block.TryGetProperty("Url", out urlEl))
-                    continue;
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (!string.IsNullOrWhiteSpace(token))
+                request.Headers.TryAddWithoutValidation("pm-storage-token", token);
 
-                var url = urlEl.GetString();
-                if (string.IsNullOrWhiteSpace(url))
-                    continue;
-
-                var raw = await http.GetByteArrayAsync(url, ct);
-                var decrypted = DecryptBlock(node, raw);
-                await buffer.WriteAsync(decrypted, ct);
-            }
-
-            return buffer.ToArray();
+            using var response = await http.SendAsync(request, ct);
+            response.EnsureSuccessStatusCode();
+            var raw = await response.Content.ReadAsByteArrayAsync(ct);
+            await buffer.WriteAsync(DecryptFileBlock(raw, sessionKey), ct);
         }
 
-        // Some public shares put a single encrypted payload on the link itself.
-        if (node.TryGetProperty("Name", out _))
-        {
-            var fallback = await http.GetAsync($"urls/{_token}/files/{linkId}", ct);
-            if (fallback.IsSuccessStatusCode)
-            {
-                var raw = await fallback.Content.ReadAsByteArrayAsync(ct);
-                return DecryptBlock(node, raw);
-            }
-        }
-
-        throw new ProtonDriveException($"Could not download “{name}” from Proton Drive.");
+        return buffer.ToArray();
     }
 
     public async Task WriteAsync(string name, ReadOnlyMemory<byte> data, CancellationToken ct)
     {
         await RefreshAsync(ct);
-        var http = RequireHttp();
 
         if (_links.TryGetValue(name, out var existing))
         {
-            await UploadRevisionAsync(existing, name, data, ct);
+            await UploadRevisionAsync(existing, data, ct);
             return;
         }
 
-        var encryptedName = ProtonPgp.EncryptToKey(Encoding.UTF8.GetBytes(name), _keys.EncryptionPublic);
-        var body = new Dictionary<string, object?>
+        var folder = RequireFolder();
+        var draft = ProtonPgp.CreateFileDraft(name, _rootLinkId, folder.Keys, folder.HashKey);
+        var created = await CreateFileAsync(draft.Body, ct);
+        if (created is null)
         {
-            ["Name"] = encryptedName,
-            ["Hash"] = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(name))),
-            ["ParentLinkID"] = _rootLinkId,
-            ["MIMEType"] = "application/octet-stream",
-            ["Content"] = Convert.ToBase64String(EncryptPayload(data.ToArray())),
-        };
-
-        using var response = await http.PostAsJsonAsync(
-            ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/folders/{_rootLinkId}/files"), body, ct);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            // Older public-link route used by the web client.
-            using var retry = await http.PostAsJsonAsync($"urls/{_token}/files", new
+            await RefreshAsync(ct);
+            if (_links.TryGetValue(name, out existing))
             {
-                Name = name,
-                MIMEType = "application/octet-stream",
-                Contents = Convert.ToBase64String(data.ToArray()),
-            }, ct);
-
-            if (!retry.IsSuccessStatusCode)
-            {
-                var detail = await retry.Content.ReadAsStringAsync(ct);
-                throw new ProtonDriveException(
-                    "Proton Drive refused the upload. Confirm the link has Editor access. " + detail);
+                await UploadRevisionAsync(existing, data, ct);
+                return;
             }
+
+            throw new ProtonDriveException("Proton Drive refused the upload. Confirm the link has Editor access.");
         }
 
-        _links[name] = name;
+        try
+        {
+            await UploadBlocksAndCommitAsync(created.Value.LinkId, created.Value.RevisionId, draft.FileKeys, draft.SessionKey, data, ct);
+            _links[name] = created.Value.LinkId;
+        }
+        catch
+        {
+            await TryDeleteLinkAsync(created.Value.LinkId, ct);
+            throw;
+        }
     }
 
-    private async Task UploadRevisionAsync(string linkId, string name, ReadOnlyMemory<byte> data, CancellationToken ct)
+    private async Task<(string LinkId, string RevisionId)?> CreateFileAsync(
+        Dictionary<string, object?> body,
+        CancellationToken ct)
     {
         var http = RequireHttp();
-        using var response = await http.PostAsJsonAsync(
-            ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/links/{linkId}/revisions"),
-            new { Contents = Convert.ToBase64String(EncryptPayload(data.ToArray())) },
-            ct);
-
-        if (!response.IsSuccessStatusCode)
+        var paths = new[]
         {
-            using var retry = await http.PutAsJsonAsync($"urls/{_token}/files/{linkId}", new
-            {
-                Name = name,
-                Contents = Convert.ToBase64String(data.ToArray()),
-            }, ct);
+            ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/files"),
+            ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/folders/{_rootLinkId}/files"),
+        };
 
-            if (!retry.IsSuccessStatusCode)
+        string? lastError = null;
+        foreach (var path in paths)
+        {
+            using var response = await http.PostAsJsonAsync(path, body, ct);
+            var text = await response.Content.ReadAsStringAsync(ct);
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(text) ? "{}" : text);
+            var root = doc.RootElement;
+            var code = ReadCode(root);
+
+            if (code is 0 or 1000 && TryReadCreatedFile(root, out var created))
+                return created;
+
+            if (code is 2500 or 2501)
+                return null;
+
+            lastError = text;
+            if (response.IsSuccessStatusCode)
+                continue;
+
+            if ((int)response.StatusCode is 404 or 405)
+                continue;
+
+            throw new ProtonDriveException(
+                "Proton Drive refused the upload. Confirm the link has Editor access. " + text);
+        }
+
+        throw new ProtonDriveException(
+            "Proton Drive refused the upload. Confirm the link has Editor access. " + lastError);
+    }
+
+    private async Task UploadRevisionAsync(string linkId, ReadOnlyMemory<byte> data, CancellationToken ct)
+    {
+        var http = RequireHttp();
+        var linkDoc = await http.GetFromJsonAsync<JsonElement>(
+            ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/links/{linkId}"), cancellationToken: ct);
+        if (!TryGetLink(linkDoc, out var node) || !TryUnlockFile(node, out var fileKeys, out var sessionKey))
+            throw new ProtonDriveException("Could not unlock the existing Proton Drive file.");
+
+        var currentRevision = ReadActiveRevisionId(node);
+        var body = new Dictionary<string, object?>();
+        if (!string.IsNullOrWhiteSpace(currentRevision))
+            body["CurrentRevisionID"] = currentRevision;
+
+        using var response = await http.PostAsJsonAsync(
+            ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/files/{linkId}/revisions"),
+            body,
+            ct);
+        var text = await response.Content.ReadAsStringAsync(ct);
+        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(text) ? "{}" : text);
+        if (!TryReadCreatedRevision(doc.RootElement, out var revisionId))
+        {
+            throw new ProtonDriveException("Could not update the file on Proton Drive. " + text);
+        }
+
+        await UploadBlocksAndCommitAsync(linkId, revisionId, fileKeys, sessionKey, data, ct);
+    }
+
+    private async Task UploadBlocksAndCommitAsync(
+        string linkId,
+        string revisionId,
+        ProtonKeySet fileKeys,
+        byte[] sessionKey,
+        ReadOnlyMemory<byte> data,
+        CancellationToken ct)
+    {
+        var http = RequireHttp();
+        var plaintext = data.ToArray();
+        var encrypted = ProtonPgp.EncryptWithSessionKey(plaintext, sessionKey);
+        var hash = Convert.ToBase64String(SHA256.HashData(encrypted));
+        var encSignature = ProtonPgp.EncryptToKey(ProtonPgp.SignDetached(plaintext, fileKeys), fileKeys.EncryptionPublic);
+        var verifier = await TryVerificationTokenAsync(linkId, revisionId, encrypted, ct);
+
+        var block = new Dictionary<string, object?>
+        {
+            ["Index"] = 1,
+            ["Size"] = encrypted.Length,
+            ["Hash"] = hash,
+            ["EncSignature"] = encSignature,
+        };
+        if (verifier is not null)
+            block["Verifier"] = new Dictionary<string, object?> { ["Token"] = Convert.ToBase64String(verifier) };
+
+        var request = new Dictionary<string, object?>
+        {
+            ["VolumeID"] = _volumeId,
+            ["LinkID"] = linkId,
+            ["RevisionID"] = revisionId,
+            ["BlockList"] = new object[] { block },
+            ["ThumbnailList"] = Array.Empty<object>(),
+        };
+
+        using var prepare = await http.PostAsJsonAsync(ProtonDriveBackend.DataPath("blocks"), request, ct);
+        var prepareText = await prepare.Content.ReadAsStringAsync(ct);
+        using var prepareDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(prepareText) ? "{}" : prepareText);
+        if (!TryReadUploadTarget(prepareDoc.RootElement, out var bareUrl, out var token))
+            throw new ProtonDriveException("Proton Drive did not accept the file block. " + prepareText);
+
+        await UploadBlockBytesAsync(http, bareUrl, token, encrypted, ct);
+
+        var commit = new Dictionary<string, object?>
+        {
+            ["State"] = 1,
+            ["ManifestSignature"] = ProtonPgp.SignDetachedArmored(SHA256.HashData(encrypted), fileKeys),
+            ["BlockList"] = new object[]
             {
-                var detail = await retry.Content.ReadAsStringAsync(ct);
-                throw new ProtonDriveException("Could not update the file on Proton Drive. " + detail);
-            }
+                new Dictionary<string, object?> { ["Index"] = 1, ["Token"] = token },
+            },
+        };
+
+        using var sealedRevision = await http.PutAsJsonAsync(
+            ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/files/{linkId}/revisions/{revisionId}"),
+            commit,
+            ct);
+        if (!sealedRevision.IsSuccessStatusCode)
+        {
+            var detail = await sealedRevision.Content.ReadAsStringAsync(ct);
+            throw new ProtonDriveException("Proton Drive could not finish the upload. " + detail);
+        }
+    }
+
+    private async Task<byte[]?> TryVerificationTokenAsync(
+        string linkId,
+        string revisionId,
+        byte[] encrypted,
+        CancellationToken ct)
+    {
+        var http = RequireHttp();
+        using var response = await http.GetAsync(
+            ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/links/{linkId}/revisions/{revisionId}/verification"),
+            ct);
+        if (!response.IsSuccessStatusCode)
+            return null;
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        if (!doc.RootElement.TryGetProperty("VerificationCode", out var codeEl))
+            return null;
+
+        var raw = codeEl.GetString();
+        if (string.IsNullOrWhiteSpace(raw))
+            return null;
+
+        try
+        {
+            return ProtonPgp.VerificationToken(Convert.FromBase64String(raw), encrypted);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+
+    private static async Task UploadBlockBytesAsync(
+        HttpClient http,
+        string bareUrl,
+        string token,
+        byte[] encrypted,
+        CancellationToken ct)
+    {
+        using var raw = new HttpRequestMessage(HttpMethod.Post, bareUrl);
+        raw.Headers.TryAddWithoutValidation("pm-storage-token", token);
+        raw.Content = new ByteArrayContent(encrypted);
+        raw.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        using var rawResponse = await http.SendAsync(raw, ct);
+        if (rawResponse.IsSuccessStatusCode)
+            return;
+
+        using var multipart = new MultipartFormDataContent();
+        var part = new ByteArrayContent(encrypted);
+        part.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        multipart.Add(part, "Block", "blob");
+        using var form = new HttpRequestMessage(HttpMethod.Post, bareUrl);
+        form.Headers.TryAddWithoutValidation("pm-storage-token", token);
+        form.Content = multipart;
+        using var formResponse = await http.SendAsync(form, ct);
+        if (!formResponse.IsSuccessStatusCode)
+        {
+            var detail = await formResponse.Content.ReadAsStringAsync(ct);
+            throw new ProtonDriveException("Proton Drive storage refused the file block. " + detail);
+        }
+    }
+
+    private async Task TryDeleteLinkAsync(string linkId, CancellationToken ct)
+    {
+        try
+        {
+            var http = RequireHttp();
+            await http.DeleteAsync(
+                ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/links/{linkId}"),
+                ct);
+        }
+        catch
+        {
+            // Best-effort cleanup of a failed draft.
         }
     }
 
     private async Task RefreshAsync(CancellationToken ct)
     {
+        await EnsureFolderAsync(ct);
         var http = RequireHttp();
         var ids = new List<string>();
         string? anchor = null;
@@ -258,6 +423,36 @@ internal sealed class ProtonMailbox
             return;
 
         await LoadLinkDetailsAsync(ids, ct);
+    }
+
+    private async Task EnsureFolderAsync(CancellationToken ct)
+    {
+        if (_folderKeys is not null && _hashKey is not null)
+            return;
+
+        var http = RequireHttp();
+        var doc = await http.GetFromJsonAsync<JsonElement>(
+            ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/links/{_rootLinkId}"),
+            cancellationToken: ct);
+
+        if (!TryGetLink(doc, out var link))
+            throw new ProtonDriveException("Proton Drive did not return the shared folder.");
+
+        var passphrase = ReadString(link, "NodePassphrase");
+        var nodeKey = ReadString(link, "NodeKey");
+        if (string.IsNullOrWhiteSpace(passphrase) || string.IsNullOrWhiteSpace(nodeKey))
+            throw new ProtonDriveException("Proton Drive folder is missing its encryption key.");
+
+        var unlocked = ProtonPgp.DecryptWithPrivateKey(passphrase, _shareKeys);
+        _folderKeys = ProtonPgp.UnlockPrivateKey(nodeKey, unlocked);
+
+        var hashArmored = ReadNestedString(link, "FolderProperties", "NodeHashKey")
+                          ?? ReadNestedString(link, "Folder", "NodeHashKey")
+                          ?? ReadString(link, "NodeHashKey");
+        if (string.IsNullOrWhiteSpace(hashArmored))
+            throw new ProtonDriveException("Proton Drive folder is missing its name hash key.");
+
+        _hashKey = ProtonPgp.DecryptWithPrivateKey(hashArmored, _folderKeys);
     }
 
     private async Task LoadLinkDetailsAsync(IReadOnlyList<string> ids, CancellationToken ct)
@@ -346,35 +541,134 @@ internal sealed class ProtonMailbox
         if (!raw.Contains("BEGIN PGP", StringComparison.Ordinal))
             return raw;
 
+        foreach (var keys in NameKeys())
+        {
+            try
+            {
+                return Encoding.UTF8.GetString(ProtonPgp.DecryptWithPrivateKey(raw, keys));
+            }
+            catch
+            {
+                // Try the share key if the folder key is not the recipient.
+            }
+        }
+
+        return null;
+    }
+
+    private IEnumerable<ProtonKeySet> NameKeys()
+    {
+        if (_folderKeys is not null)
+            yield return _folderKeys;
+        yield return _shareKeys;
+    }
+
+    private async Task<List<(string Url, string? Token)>> LoadRevisionBlocksAsync(
+        string linkId,
+        string? revisionId,
+        CancellationToken ct)
+    {
+        var blocks = new List<(string Url, string? Token)>();
+        if (string.IsNullOrWhiteSpace(revisionId))
+            return blocks;
+
+        var http = RequireHttp();
+        var path = ProtonDriveBackend.DataPath(
+            $"v2/volumes/{_volumeId}/files/{linkId}/revisions/{revisionId}?FromBlockIndex=1&PageSize=50");
+        using var response = await http.GetAsync(path, ct);
+        if (!response.IsSuccessStatusCode)
+            return blocks;
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        if (doc.RootElement.TryGetProperty("Revision", out var revision)
+            && revision.TryGetProperty("Blocks", out var blockEl)
+            && blockEl.ValueKind == JsonValueKind.Array)
+            ReadBlockTargets(blockEl, blocks);
+
+        return blocks;
+    }
+
+    private static bool TryReadBlockTargets(JsonElement node, out List<(string Url, string? Token)> blocks)
+    {
+        blocks = [];
+        if (!TryGetFileProperties(node, out var file))
+            return false;
+
+        if (file.TryGetProperty("ActiveRevision", out var revision)
+            && revision.TryGetProperty("Blocks", out var blockEl)
+            && blockEl.ValueKind == JsonValueKind.Array)
+            return ReadBlockTargets(blockEl, blocks);
+
+        return false;
+    }
+
+    private bool TryUnlockFile(JsonElement node, out ProtonKeySet fileKeys, out byte[] sessionKey)
+    {
+        fileKeys = _shareKeys;
+        sessionKey = [];
+
+        var passphrase = ReadString(node, "NodePassphrase");
+        var nodeKey = ReadString(node, "NodeKey");
+        if (string.IsNullOrWhiteSpace(passphrase) || string.IsNullOrWhiteSpace(nodeKey))
+            return false;
+
+        var parent = _folderKeys ?? _shareKeys;
+        byte[] unlocked;
         try
         {
-            var bytes = ProtonPgp.DecryptWithPrivateKey(raw, _keys);
-            return Encoding.UTF8.GetString(bytes);
+            unlocked = ProtonPgp.DecryptWithPrivateKey(passphrase, parent);
         }
         catch
         {
-            return null;
+            return false;
+        }
+
+        try
+        {
+            fileKeys = ProtonPgp.UnlockPrivateKey(nodeKey, unlocked);
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (!TryGetFileProperties(node, out var file))
+            return false;
+
+        var packet = ReadString(file, "ContentKeyPacket");
+        if (string.IsNullOrWhiteSpace(packet))
+            return false;
+
+        try
+        {
+            sessionKey = ProtonPgp.DecryptSessionKey(Convert.FromBase64String(packet), fileKeys.EncryptionPrivate);
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 
-    private byte[] DecryptBlock(JsonElement node, byte[] raw)
+    private static byte[] DecryptFileBlock(byte[] raw, byte[] sessionKey)
     {
         try
         {
-            if (LooksArmored(raw))
-                return ProtonPgp.DecryptWithPrivateKey(Encoding.UTF8.GetString(raw), _keys);
+            return ProtonPgp.DecryptWithSessionKey(raw, sessionKey);
         }
         catch (Exception ex) when (ex is not ProtonDriveException)
         {
-            // Fall through to treating the bytes as already-decrypted ciphertext from Syncly.
+            throw new ProtonDriveException("Could not decrypt a Proton Drive file block.", ex);
         }
-
-        _ = node;
-        return raw;
     }
 
-    private byte[] EncryptPayload(byte[] data) =>
-        Encoding.UTF8.GetBytes(ProtonPgp.EncryptToKey(data, _keys.EncryptionPublic));
+    private FolderSecrets RequireFolder()
+    {
+        if (_folderKeys is null || _hashKey is null)
+            throw new ProtonDriveException("Proton Drive folder keys are not ready.");
+
+        return new FolderSecrets(_folderKeys, _hashKey);
+    }
 
     private HttpClient RequireHttp() =>
         _http ?? throw new ProtonDriveException("Proton Drive session is not connected.");
@@ -415,7 +709,108 @@ internal sealed class ProtonMailbox
             yield return single;
     }
 
-    private static bool LooksArmored(byte[] raw) =>
-        raw.Length > 24 && Encoding.UTF8.GetString(raw.AsSpan(0, Math.Min(raw.Length, 40)))
-            .Contains("BEGIN PGP", StringComparison.Ordinal);
+    private static bool TryGetFileProperties(JsonElement node, out JsonElement file)
+    {
+        if (node.TryGetProperty("FileProperties", out file) || node.TryGetProperty("File", out file))
+            return file.ValueKind == JsonValueKind.Object;
+
+        file = default;
+        return false;
+    }
+
+    private static bool ReadBlockTargets(JsonElement blocks, List<(string Url, string? Token)> output)
+    {
+        foreach (var block in blocks.EnumerateArray())
+        {
+            if (!block.TryGetProperty("BareUrl", out var urlEl)
+                && !block.TryGetProperty("BareURL", out urlEl)
+                && !block.TryGetProperty("URL", out urlEl)
+                && !block.TryGetProperty("Url", out urlEl))
+                continue;
+
+            var url = urlEl.GetString();
+            if (string.IsNullOrWhiteSpace(url))
+                continue;
+
+            var token = ReadString(block, "Token");
+            output.Add((url, token));
+        }
+
+        return output.Count > 0;
+    }
+
+    private static bool TryReadCreatedFile(JsonElement root, out (string LinkId, string RevisionId) created)
+    {
+        created = default;
+        if (!root.TryGetProperty("File", out var file) && !root.TryGetProperty("file", out file))
+            return false;
+
+        var linkId = ReadString(file, "ID") ?? ReadString(file, "LinkID");
+        var revisionId = ReadString(file, "RevisionID") ?? ReadString(file, "RevisionId");
+        if (string.IsNullOrWhiteSpace(linkId) || string.IsNullOrWhiteSpace(revisionId))
+            return false;
+
+        created = (linkId, revisionId);
+        return true;
+    }
+
+    private static bool TryReadCreatedRevision(JsonElement root, out string revisionId)
+    {
+        revisionId = "";
+        if (root.TryGetProperty("Revision", out var revision))
+        {
+            revisionId = ReadString(revision, "ID") ?? ReadString(revision, "RevisionID") ?? "";
+            return !string.IsNullOrWhiteSpace(revisionId);
+        }
+
+        revisionId = ReadString(root, "ID") ?? ReadString(root, "RevisionID") ?? "";
+        return !string.IsNullOrWhiteSpace(revisionId);
+    }
+
+    private static bool TryReadUploadTarget(JsonElement root, out string bareUrl, out string token)
+    {
+        bareUrl = "";
+        token = "";
+        if (!root.TryGetProperty("UploadLinks", out var links) || links.ValueKind != JsonValueKind.Array)
+            return false;
+
+        foreach (var link in links.EnumerateArray())
+        {
+            bareUrl = ReadString(link, "BareURL") ?? ReadString(link, "BareUrl") ?? "";
+            token = ReadString(link, "Token") ?? "";
+            if (!string.IsNullOrWhiteSpace(bareUrl) && !string.IsNullOrWhiteSpace(token))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static string? ReadActiveRevisionId(JsonElement node)
+    {
+        if (!TryGetFileProperties(node, out var file))
+            return null;
+
+        if (file.TryGetProperty("ActiveRevision", out var revision))
+            return ReadString(revision, "ID")
+                   ?? ReadString(revision, "RevisionID")
+                   ?? ReadString(revision, "ActiveRevisionID");
+
+        return ReadString(file, "ActiveRevisionID");
+    }
+
+    private static int ReadCode(JsonElement root) =>
+        root.TryGetProperty("Code", out var code) && code.TryGetInt32(out var value) ? value : -1;
+
+    private static string? ReadString(JsonElement obj, string name) =>
+        obj.TryGetProperty(name, out var el) ? el.GetString() : null;
+
+    private static string? ReadNestedString(JsonElement obj, string parent, string name)
+    {
+        if (!obj.TryGetProperty(parent, out var child) || child.ValueKind != JsonValueKind.Object)
+            return null;
+
+        return ReadString(child, name);
+    }
+
+    private readonly record struct FolderSecrets(ProtonKeySet Keys, byte[] HashKey);
 }
