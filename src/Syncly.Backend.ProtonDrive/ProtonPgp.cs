@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using Org.BouncyCastle.Bcpg;
@@ -5,7 +6,6 @@ using Org.BouncyCastle.Bcpg.OpenPgp;
 using Org.BouncyCastle.Crypto;
 using Org.BouncyCastle.Crypto.Generators;
 using Org.BouncyCastle.Crypto.Parameters;
-using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Security;
 using Org.BouncyCastle.Utilities.IO;
 
@@ -94,11 +94,14 @@ internal static class ProtonPgp
     public static (string Armored, ProtonKeySet Keys) GenerateNodeKey(byte[] passphrase)
     {
         var random = new SecureRandom();
-        var rsa = new RsaKeyPairGenerator();
-        rsa.Init(new KeyGenerationParameters(random, 2048));
+        var ed = new Ed25519KeyPairGenerator();
+        ed.Init(new Ed25519KeyGenerationParameters(random));
+        var signPair = new PgpKeyPair(PublicKeyAlgorithmTag.EdDsa_Legacy, ed.GenerateKeyPair(), DateTime.UtcNow);
 
-        var signPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaSign, rsa.GenerateKeyPair(), DateTime.UtcNow);
-        var encPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaEncrypt, rsa.GenerateKeyPair(), DateTime.UtcNow);
+        var x25519 = new X25519KeyPairGenerator();
+        x25519.Init(new X25519KeyGenerationParameters(random));
+        var encPair = new PgpKeyPair(PublicKeyAlgorithmTag.ECDH, x25519.GenerateKeyPair(), DateTime.UtcNow);
+
         var generator = new PgpKeyRingGenerator(
             PgpSignature.PositiveCertification,
             signPair,
@@ -236,40 +239,29 @@ internal static class ProtonPgp
         return key;
     }
 
-    public static byte[] EncryptSessionKey(byte[] sessionKey, PgpPublicKey publicKey)
+    public static (byte[] KeyPacket, byte[] SessionKey) CreateContentKey(ProtonKeySet fileKeys)
     {
-        if (publicKey.Algorithm is not (PublicKeyAlgorithmTag.RsaEncrypt or PublicKeyAlgorithmTag.RsaGeneral))
-            throw new ProtonDriveException("The Proton Drive file key cannot wrap a content key.");
+        var dummy = new byte[] { 1 };
+        using var message = new MemoryStream();
+        var encGen = new PgpEncryptedDataGenerator(SymmetricKeyAlgorithmTag.Aes256, true, new SecureRandom());
+        encGen.AddMethod(fileKeys.EncryptionPublic);
+        using (var enc = encGen.Open(message, dummy.Length))
+        {
+            var literal = new PgpLiteralDataGenerator();
+            using var lit = literal.Open(enc, PgpLiteralData.Binary, "", dummy.Length, DateTime.UtcNow);
+            lit.Write(dummy);
+        }
 
-        var sessionInfo = CreateSessionInfo(sessionKey);
-        var cipher = CipherUtilities.GetCipher("RSA//PKCS1Padding");
-        cipher.Init(true, new ParametersWithRandom(publicKey.GetKey(), new SecureRandom()));
-        var encrypted = cipher.DoFinal(sessionInfo);
-        var mpi = new MPInteger(new BigInteger(1, encrypted)).GetEncoded();
-
-        using var output = new MemoryStream();
-        using (var pOut = new BcpgOutputStream(output))
-            new PublicKeyEncSessionPacket(publicKey.KeyId, publicKey.Algorithm, [mpi]).Encode(pOut);
-
-        return output.ToArray();
+        var bytes = message.ToArray();
+        return (ReadFirstPacket(bytes), RecoverSessionKey(bytes, fileKeys.EncryptionPrivate));
     }
 
     public static byte[] DecryptSessionKey(byte[] keyPacket, PgpPrivateKey privateKey)
     {
-        var body = ReadPacketBody(keyPacket, PacketTag.PublicKeyEncryptedSession);
-        // version (1) + key id (8) + algorithm (1) + MPI
-        if (body.Length < 12)
-            throw new ProtonDriveException("Proton Drive content key packet is not a session key.");
-
-        var mpi = body.AsSpan(10).ToArray();
-        var cipher = CipherUtilities.GetCipher("RSA//PKCS1Padding");
-        cipher.Init(false, privateKey.Key);
-        cipher.ProcessBytes(mpi, 2, mpi.Length - 2);
-        var sessionInfo = cipher.DoFinal();
-        if (sessionInfo.Length < 4 || sessionInfo[0] != (byte)SymmetricKeyAlgorithmTag.Aes256)
-            throw new ProtonDriveException("Proton Drive content key is not AES-256.");
-
-        return sessionInfo.AsSpan(1, sessionInfo.Length - 3).ToArray();
+        using var message = new MemoryStream();
+        message.Write(keyPacket);
+        message.Write(DummyIntegrityPacket());
+        return RecoverSessionKey(message.ToArray(), privateKey);
     }
 
     public static byte[] EncryptWithSessionKey(byte[] plaintext, byte[] sessionKey)
@@ -338,8 +330,7 @@ internal static class ProtonPgp
     {
         var passphrase = Encoding.UTF8.GetBytes(GeneratePassphrase());
         var (armoredKey, fileKeys) = GenerateNodeKey(passphrase);
-        var sessionKey = GenerateSessionKey();
-        var keyPacket = EncryptSessionKey(sessionKey, fileKeys.EncryptionPublic);
+        var (keyPacket, sessionKey) = CreateContentKey(fileKeys);
 
         return new ProtonFileDraft
         {
@@ -374,6 +365,81 @@ internal static class ProtonPgp
         }
 
         return Encoding.ASCII.GetString(outStream.ToArray());
+    }
+
+    private static byte[] RecoverSessionKey(byte[] pgpMessage, PgpPrivateKey privateKey)
+    {
+        using var input = PgpUtilities.GetDecoderStream(new MemoryStream(pgpMessage));
+        var factory = new PgpObjectFactory(input);
+        if (factory.NextPgpObject() is not PgpEncryptedDataList list)
+            throw new ProtonDriveException("Proton Drive content key packet is not a session key.");
+
+        PgpPublicKeyEncryptedData? pk = null;
+        foreach (PgpEncryptedData candidate in list.GetEncryptedDataObjects())
+        {
+            if (candidate is PgpPublicKeyEncryptedData found)
+            {
+                pk = found;
+                break;
+            }
+        }
+
+        if (pk is null)
+            throw new ProtonDriveException("Proton Drive content key packet is not a session key.");
+
+        var recover = typeof(PgpPublicKeyEncryptedData).GetMethod(
+            "RecoverSessionData",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        if (recover is null)
+            throw new ProtonDriveException("Could not read the Proton Drive content key.");
+
+        if (recover.Invoke(pk, [privateKey]) is not byte[] sessionInfo
+            || sessionInfo.Length < 4
+            || sessionInfo[0] != (byte)SymmetricKeyAlgorithmTag.Aes256)
+            throw new ProtonDriveException("Proton Drive content key is not AES-256.");
+
+        return sessionInfo.AsSpan(1, sessionInfo.Length - 3).ToArray();
+    }
+
+    private static byte[] ReadFirstPacket(byte[] message)
+    {
+        if (message.Length < 2)
+            throw new ProtonDriveException("Proton Drive content key packet is truncated.");
+
+        var header = message[0];
+        int offset;
+        int bodyLength;
+        if ((header & 0x40) != 0)
+        {
+            offset = ReadNewLength(message, 1, out bodyLength);
+        }
+        else
+        {
+            offset = 1;
+            bodyLength = (header & 0x3) switch
+            {
+                0 => message[offset++],
+                1 => (message[offset++] << 8) | message[offset++],
+                2 => (message[offset++] << 24) | (message[offset++] << 16) | (message[offset++] << 8) | message[offset++],
+                _ => throw new ProtonDriveException("Proton Drive OpenPGP packet uses an unsupported length."),
+            };
+        }
+
+        if (offset + bodyLength > message.Length)
+            throw new ProtonDriveException("Proton Drive content key packet is truncated.");
+
+        return message.AsSpan(0, offset + bodyLength).ToArray();
+    }
+
+    private static byte[] DummyIntegrityPacket()
+    {
+        var body = new byte[40];
+        body[0] = 1;
+        using var output = new MemoryStream();
+        using (var pOut = new BcpgOutputStream(output, PacketTag.SymmetricEncryptedIntegrityProtected, body.Length))
+            pOut.Write(body);
+
+        return output.ToArray();
     }
 
     private static byte[] ReadPacketBody(byte[] packet, PacketTag expected)
@@ -440,19 +506,6 @@ internal static class ProtonPgp
         }
 
         throw new ProtonDriveException("Proton Drive OpenPGP packet uses an unsupported length.");
-    }
-
-    private static byte[] CreateSessionInfo(byte[] sessionKey)
-    {
-        var sessionInfo = new byte[sessionKey.Length + 3];
-        sessionInfo[0] = (byte)SymmetricKeyAlgorithmTag.Aes256;
-        sessionKey.CopyTo(sessionInfo, 1);
-        var check = 0;
-        for (var i = 1; i < sessionInfo.Length - 2; i++)
-            check += sessionInfo[i];
-        sessionInfo[^2] = (byte)(check >> 8);
-        sessionInfo[^1] = (byte)check;
-        return sessionInfo;
     }
 
     private static byte[] Concat(params byte[][] parts)

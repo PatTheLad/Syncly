@@ -58,6 +58,7 @@ public class ProtonPgpTests
             Convert.FromBase64String((string)draft.Body["ContentKeyPacket"]!),
             fileKeys.EncryptionPrivate);
         Assert.Equal(draft.SessionKey, session);
+        Assert.True(((string)draft.Body["ContentKeyPacket"]!).Length <= 255);
     }
 
     [Fact]
