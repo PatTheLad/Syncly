@@ -244,6 +244,13 @@ public sealed class Workspace(
         return CommitAsync(a => a.SetProp(pageId, blockId, PropKeys.Checked, next), pageId, ct);
     }
 
+    public Task SetBlockTargetAsync(
+        string pageId,
+        string blockId,
+        string? targetPageId,
+        CancellationToken ct = default) =>
+        CommitAsync(a => a.SetProp(pageId, blockId, PropKeys.Target, targetPageId), pageId, ct);
+
     public async Task<string> AppendBlockAsync(
         string pageId,
         BlockKind kind = BlockKind.Paragraph,

@@ -623,6 +623,62 @@ textarea {
   background: var(--line-strong);
 }
 
+.block.page-link {
+  align-items: stretch;
+  gap: 6px;
+}
+
+.page-link-card {
+  display: flex;
+  flex: 1;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 10px 12px;
+  text-align: left;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.page-link-card:hover {
+  background: var(--bg-3);
+  border-color: var(--line-strong);
+}
+
+.page-link-icon {
+  flex: none;
+  width: 1.4em;
+  font-size: 18px;
+  line-height: 1;
+  text-align: center;
+}
+
+.page-link-title {
+  flex: 1;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-link-hint {
+  flex: none;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.block-handle.page-link-menu {
+  position: static;
+  opacity: 0.35;
+}
+
+.block.page-link:hover .block-handle.page-link-menu {
+  opacity: 1;
+}
+
 .checkbox {
   display: grid;
   place-items: center;

@@ -413,6 +413,15 @@
     public Task ToggleTodoAsync(string blockId) =>
         State.Workspace.ToggleTodoAsync(PageIdOrThrow, blockId);
 
+    public Task OpenPageAsync(string pageId)
+    {
+        if (string.IsNullOrWhiteSpace(pageId))
+            return Task.CompletedTask;
+
+        State.Open(pageId);
+        return Task.CompletedTask;
+    }
+
     public Task EditAtAsync(string blockId) => FocusBlockAsync(blockId, -1);
 
     public string? ResolveLink(string title) => State.Workspace.ResolvePageByTitle(title);
@@ -614,7 +623,7 @@
         [
             BlockKind.Paragraph, BlockKind.Heading1, BlockKind.Heading2, BlockKind.Heading3,
             BlockKind.Bullet, BlockKind.Numbered, BlockKind.Todo, BlockKind.Quote,
-            BlockKind.Code, BlockKind.Divider,
+            BlockKind.Code, BlockKind.Divider, BlockKind.PageLink,
         ];
 
         return kinds.Select(kind => new Palette.PaletteItem(
@@ -635,6 +644,7 @@
         BlockKind.Quote => "❝",
         BlockKind.Code => "{}",
         BlockKind.Divider => "—",
+        BlockKind.PageLink => "↗",
         _ => "¶",
     };
 
@@ -648,16 +658,28 @@
 
         _pendingText.Remove(blockId);
         var cleaned = text.EndsWith('/') ? text[..^1] : text;
+        var pageId = PageIdOrThrow;
 
-        await State.Workspace.SetBlockKindAsync(PageIdOrThrow, blockId, kind);
-        await State.Workspace.SetBlockTextAsync(PageIdOrThrow, blockId, cleaned);
+        if (kind == BlockKind.PageLink)
+        {
+            var title = string.IsNullOrWhiteSpace(cleaned) ? "Untitled" : cleaned.Trim();
+            var targetId = await State.Workspace.EnsurePageByTitleAsync(title);
+            await State.Workspace.SetBlockKindAsync(pageId, blockId, BlockKind.PageLink);
+            await State.Workspace.SetBlockTargetAsync(pageId, blockId, targetId);
+            await State.Workspace.SetBlockTextAsync(pageId, blockId, title);
+            _slashBlockId = null;
+            return;
+        }
+
+        await State.Workspace.SetBlockKindAsync(pageId, blockId, kind);
+        await State.Workspace.SetBlockTextAsync(pageId, blockId, cleaned);
         await Js.InvokeVoidAsync("syncly.setText", $"blk-{blockId}", cleaned, cleaned.Length);
 
         _slashBlockId = null;
 
         if (kind == BlockKind.Divider)
         {
-            var next = await State.Workspace.SplitBlockAsync(PageIdOrThrow, blockId, cleaned.Length);
+            var next = await State.Workspace.SplitBlockAsync(pageId, blockId, cleaned.Length);
             await FocusBlockAsync(next, 0);
             return;
         }

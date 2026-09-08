@@ -34,6 +34,9 @@ public interface IBlockHost
 
     Task ToggleTodoAsync(string blockId);
 
+    /// <summary>Opens another page from a page-link block.</summary>
+    Task OpenPageAsync(string pageId);
+
     /// <summary>Leaves reading mode with the caret in this block.</summary>
     Task EditAtAsync(string blockId);
 

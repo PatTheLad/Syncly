@@ -136,6 +136,36 @@ public class SyncEngineTests
         Assert.True(string.IsNullOrEmpty(b.Replica.Snapshot(Page).Icon));
     }
 
+    [Fact]
+    public async Task Page_link_block_round_trips_through_the_mailbox()
+    {
+        var folder = NewFolder();
+        var chain = SyncChain.Create();
+
+        await using var a = await TestNode.CreateAsync("alpha");
+        await using var b = await TestNode.CreateAsync("bravo");
+        await a.UseMailboxAsync(folder, chain);
+        await b.UseMailboxAsync(folder, chain);
+
+        const string dest = "page-dest";
+        const string link = "b-link";
+
+        await a.AuthorAsync(x =>
+        {
+            SeedPage(x, "Shared");
+            x.CreateObject(dest, "Destination");
+            x.UpsertBlock(Page, link, null, FracIndex.Between(FracIndex.Middle, null), BlockKind.PageLink);
+            x.SetProp(Page, link, PropKeys.Target, dest);
+        });
+        await a.Engine.SyncNowAsync();
+        await b.Engine.SyncNowAsync();
+
+        var block = b.Replica.Snapshot(Page).Flatten().Single(bl => bl.Id == link);
+        Assert.Equal(BlockKind.PageLink, block.Kind);
+        Assert.Equal(dest, block.Target);
+        Assert.Equal("Destination", b.Replica.Snapshot(dest).Title);
+    }
+
     private static string NewFolder()
     {
         var path = Path.Combine(Path.GetTempPath(), "syncly-mailbox", Guid.NewGuid().ToString("N"));

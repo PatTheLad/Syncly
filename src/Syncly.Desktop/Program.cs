@@ -40,13 +40,18 @@ internal static class Program
 
         var app = builder.Build();
 
-        app.MainWindow
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "app.ico");
+        var window = app.MainWindow
             .SetTitle("Syncly")
             .SetUseOsDefaultSize(false)
             .SetSize(1280, 840)
             .SetUseOsDefaultLocation(true)
             .SetChromeless(false)
-            .SetDevToolsEnabled(true);
+            .SetDevToolsEnabled(true)
+            .SetNotificationsEnabled(false);
+
+        if (File.Exists(iconPath))
+            window.SetIconFile(iconPath);
 
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             loggerFactory.CreateLogger("Syncly").LogError(e.ExceptionObject as Exception, "Fatal error.");

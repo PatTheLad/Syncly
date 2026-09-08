@@ -1,9 +1,10 @@
 @namespace Syncly.UI.Components
 @implements IDisposable
 @inject IJSRuntime Js
+@inject EditorState State
 
 <div class="block @KindClass" @key="Block.Id">
-    @if (!Host.Reading && Block.Kind != BlockKind.Divider)
+    @if (!Host.Reading && Block.Kind is not (BlockKind.Divider or BlockKind.PageLink))
     {
         <button class="block-handle" title="Block actions" @onclick="OpenMenuAsync">⋮</button>
     }
@@ -28,6 +29,24 @@
     @if (Block.Kind == BlockKind.Divider)
     {
         <hr />
+    }
+    else if (Block.Kind == BlockKind.PageLink)
+    {
+        <button type="button"
+                class="page-link-card"
+                title="Open page"
+                @onclick="OpenTargetAsync">
+            <span class="page-link-icon" aria-hidden="true">@LinkIcon</span>
+            <span class="page-link-title">@LinkTitle</span>
+            <span class="page-link-hint">Open</span>
+        </button>
+        @if (!Host.Reading)
+        {
+            <button type="button"
+                    class="block-handle page-link-menu"
+                    title="Block actions"
+                    @onclick="OpenMenuAsync">⋮</button>
+        }
     }
     else if (Host.Reading)
     {
@@ -78,6 +97,16 @@
 
     public string ElementId => $"blk-{Block.Id}";
 
+    private PageRef? TargetPage =>
+        Block.Target is { Length: > 0 } target ? State.Workspace.Page(target) : null;
+
+    private string LinkTitle =>
+        TargetPage?.DisplayTitle
+        ?? (string.IsNullOrWhiteSpace(Block.Text) ? "Untitled" : Block.Text);
+
+    private string LinkIcon =>
+        TargetPage?.Icon is { Length: > 0 } icon ? icon : "↗";
+
     private string KindClass => Block.Kind switch
     {
         BlockKind.Heading1 => "h1",
@@ -89,6 +118,7 @@
         BlockKind.Quote => "quote",
         BlockKind.Code => "code",
         BlockKind.Divider => "divider",
+        BlockKind.PageLink => "page-link",
         _ => "paragraph",
     };
 
@@ -102,6 +132,12 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (Block.Kind is BlockKind.Divider or BlockKind.PageLink)
+        {
+            _attached = false;
+            return;
+        }
+
         if (Host.Reading)
         {
             _attached = false;
@@ -186,6 +222,14 @@
     public Task OnEscape() => Host.EscapeAsync();
 
     private Task OpenMenuAsync() => Host.SlashAsync(Block.Id);
+
+    private Task OpenTargetAsync()
+    {
+        if (Block.Target is { Length: > 0 } target)
+            return Host.OpenPageAsync(target);
+
+        return Task.CompletedTask;
+    }
 
     public void Dispose() => _self?.Dispose();
 }

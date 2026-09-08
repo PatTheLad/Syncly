@@ -53,6 +53,7 @@ jobs:
           -o dist/win
           --channel win
           --packTitle Syncly
+          --icon src/Syncly.Desktop/Assets/app.ico
       - uses: actions/upload-artifact@v6
         with:
           name: windows
