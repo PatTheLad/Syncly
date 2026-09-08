@@ -97,13 +97,16 @@ internal static class ProtonPgp
     public static (string Armored, ProtonKeySet Keys) GenerateNodeKey(byte[] passphrase)
     {
         var random = new SecureRandom();
-        // Full RSA keyring (sign + encrypt). Proton's server unlocks the NodeKey with
-        // gopenpgp and decrypts ContentKeyPacket; EdDSA→X25519 bindings from
-        // BouncyCastle are often dropped, which yields 200501. RSA→RSA bindings verify.
+        // RSA primary (gopenpgp verifies those bindings) + Curve25519 encryption subkey.
+        // ContentKeyPacket must stay ≤255 base64 chars, so the encrypt key has to be ECDH —
+        // a full RSA PKESK is rejected by Proton ("This value is too long").
         var rsa = new RsaKeyPairGenerator();
         rsa.Init(new KeyGenerationParameters(random, 2048));
         var signPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaSign, rsa.GenerateKeyPair(), DateTime.UtcNow);
-        var encPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaEncrypt, rsa.GenerateKeyPair(), DateTime.UtcNow);
+
+        var x25519 = new X25519KeyPairGenerator();
+        x25519.Init(new X25519KeyGenerationParameters(random));
+        var encPair = new PgpKeyPair(PublicKeyAlgorithmTag.ECDH, x25519.GenerateKeyPair(), DateTime.UtcNow);
 
         var primaryHashed = new PgpSignatureSubpacketGenerator();
         primaryHashed.SetKeyFlags(false, PgpKeyFlags.CanCertify | PgpKeyFlags.CanSign);
@@ -249,8 +252,8 @@ internal static class ProtonPgp
 
     public static (byte[] KeyPacket, byte[] SessionKey) CreateContentKey(ProtonKeySet fileKeys)
     {
-        // Let BouncyCastle emit the PKESK (RSA for our node keys), then recover the
-        // session key it chose so block encryption uses the same material Proton will verify.
+        // BouncyCastle writes a compact ECDH PKESK (must be ≤255 base64 for Proton).
+        // Recover the session key it chose so block encryption matches the packet.
         var encGen = new PgpEncryptedDataGenerator(
             SymmetricKeyAlgorithmTag.Aes256, withIntegrityPacket: true, new SecureRandom());
         encGen.AddMethod(fileKeys.EncryptionPublic);
@@ -265,6 +268,10 @@ internal static class ProtonPgp
 
         var raw = message.ToArray();
         var keyPacket = ReadLeadingPacket(raw);
+        var encoded = Convert.ToBase64String(keyPacket);
+        if (encoded.Length > 255)
+            throw new ProtonDriveException("Proton Drive content key packet exceeds the 255-character limit.");
+
         var sessionInfo = RecoverSessionInfo(raw, fileKeys.EncryptionPrivate);
         if (sessionInfo.Length < 4 || sessionInfo[0] != (byte)SymmetricKeyAlgorithmTag.Aes256)
             throw new ProtonDriveException("Proton Drive content key is not AES-256.");
