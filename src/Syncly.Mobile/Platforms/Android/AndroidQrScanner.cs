@@ -1,7 +1,6 @@
 #pragma warning disable CS0618 // Camera API is deprecated but still the simplest live preview on API 26+.
 using Android.App;
 using Android.Content.PM;
-using Android.Graphics;
 using Android.Hardware;
 using Android.OS;
 using Android.Views;
@@ -10,7 +9,8 @@ using Syncly.App;
 using ZXing;
 using ZXing.Common;
 using Camera = Android.Hardware.Camera;
-using Permission = Android.Manifest.Permission;
+using GraphicsColor = Android.Graphics.Color;
+using ManifestPermission = Android.Manifest.Permission;
 
 namespace Syncly.Mobile;
 
@@ -80,7 +80,7 @@ public sealed class QrScanActivity : Activity, ISurfaceHolderCallback, Camera.IP
     {
         base.OnCreate(savedInstanceState);
 
-        if (CheckSelfPermission(Permission.Camera) != Permission.Granted)
+        if (CheckSelfPermission(ManifestPermission.Camera) != Permission.Granted)
         {
             FinishWith(null);
             return;
@@ -90,7 +90,7 @@ public sealed class QrScanActivity : Activity, ISurfaceHolderCallback, Camera.IP
         _preview = new SurfaceView(this);
         _preview.Holder?.AddCallback(this);
 
-        var cancel = new Button(this) { Text = "Cancel" };
+        var cancel = new Android.Widget.Button(this) { Text = "Cancel" };
         cancel.Click += (_, _) => FinishWith(null);
 
         var hint = new TextView(this)
@@ -98,8 +98,8 @@ public sealed class QrScanActivity : Activity, ISurfaceHolderCallback, Camera.IP
             Text = "Point at the Syncly invite QR",
             Gravity = GravityFlags.Center,
         };
-        hint.SetTextColor(Color.White);
-        hint.SetBackgroundColor(Color.Argb(160, 0, 0, 0));
+        hint.SetTextColor(GraphicsColor.White);
+        hint.SetBackgroundColor(GraphicsColor.Argb(160, 0, 0, 0));
         hint.SetPadding(24, 16, 24, 16);
 
         var overlay = new LinearLayout(this) { Orientation = Orientation.Vertical };
@@ -137,10 +137,14 @@ public sealed class QrScanActivity : Activity, ISurfaceHolderCallback, Camera.IP
             _camera.SetDisplayOrientation(90);
             _camera.SetPreviewDisplay(holder);
             var parameters = _camera.GetParameters();
-            parameters?.SetPreviewFormat(ImageFormatType.Nv21);
-            if (parameters?.SupportedFocusModes?.Contains(Camera.Parameters.FocusModeContinuousPicture) == true)
-                parameters.FocusMode = Camera.Parameters.FocusModeContinuousPicture;
-            _camera.SetParameters(parameters);
+            if (parameters is not null)
+            {
+                parameters.PreviewFormat = (int)Android.Graphics.ImageFormatType.Nv21;
+                if (parameters.SupportedFocusModes?.Contains(Camera.Parameters.FocusModeContinuousPicture) == true)
+                    parameters.FocusMode = Camera.Parameters.FocusModeContinuousPicture;
+                _camera.SetParameters(parameters);
+            }
+
             _camera.SetPreviewCallback(this);
             _camera.StartPreview();
         }
@@ -150,7 +154,7 @@ public sealed class QrScanActivity : Activity, ISurfaceHolderCallback, Camera.IP
         }
     }
 
-    public void SurfaceChanged(ISurfaceHolder holder, Format format, int width, int height) { }
+    public void SurfaceChanged(ISurfaceHolder holder, Android.Graphics.Format format, int width, int height) { }
 
     public void SurfaceDestroyed(ISurfaceHolder holder) => ReleaseCamera();
 
