@@ -118,10 +118,14 @@ jobs:
           # Strip whitespace/newlines from the pasted secret before decoding.
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '\r\n\t ' | base64 -d > "$RUNNER_TEMP/syncly-release.keystore"
           test -s "$RUNNER_TEMP/syncly-release.keystore"
-          # file: avoids MSBuild choking on special characters in env: passwords.
-          printf '%s' "$ANDROID_KEYSTORE_PASSWORD" > "$RUNNER_TEMP/syncly-keystore.pass"
+          # Same file for StorePass + KeyPass must be two lines (store then key).
+          # See: https://learn.microsoft.com/dotnet/android/deployment/publishing
+          {
+            printf '%s\n' "$ANDROID_KEYSTORE_PASSWORD"
+            printf '%s\n' "$ANDROID_KEYSTORE_PASSWORD"
+          } > "$RUNNER_TEMP/syncly-keystore.pass"
           # Fail early with a clear message if alias/password/base64 are wrong.
-          STORE_PASS=$(cat "$RUNNER_TEMP/syncly-keystore.pass")
+          STORE_PASS=$(sed -n '1p' "$RUNNER_TEMP/syncly-keystore.pass")
           if ! keytool -list \
               -keystore "$RUNNER_TEMP/syncly-release.keystore" \
               -storepass "$STORE_PASS" \
@@ -131,18 +135,24 @@ jobs:
             exit 1
           fi
           unset STORE_PASS
-      - run: >
-          dotnet publish src/Syncly.Mobile/Syncly.Mobile.csproj
-          -c Release -f net10.0-android
-          -p:Version=${{ env.VERSION }}
-          -p:AndroidVersionCode=${{ env.ANDROID_VERSION_CODE }}
-          -p:AndroidPackageFormat=apk
-          -p:AndroidCreatePackagePerAbi=false
-          -p:AndroidKeyStore=true
-          -p:AndroidSigningKeyStore=$RUNNER_TEMP/syncly-release.keystore
-          -p:AndroidSigningKeyAlias=syncly
-          -p:AndroidSigningKeyPass=file:$RUNNER_TEMP/syncly-keystore.pass
-          -p:AndroidSigningStorePass=file:$RUNNER_TEMP/syncly-keystore.pass
+      - name: Publish Android APK
+        run: |
+          set -euo pipefail
+          # Resolve paths relative to the Mobile project — MSBuild looks there, not $PWD.
+          cp "$RUNNER_TEMP/syncly-release.keystore" src/Syncly.Mobile/syncly-release.keystore
+          cp "$RUNNER_TEMP/syncly-keystore.pass" src/Syncly.Mobile/syncly-keystore.pass
+          dotnet publish src/Syncly.Mobile/Syncly.Mobile.csproj \
+            -c Release -f net10.0-android \
+            -p:Version="${VERSION}" \
+            -p:AndroidVersionCode="${ANDROID_VERSION_CODE}" \
+            -p:AndroidPackageFormat=apk \
+            -p:AndroidCreatePackagePerAbi=false \
+            -p:AndroidKeyStore=true \
+            -p:AndroidSigningKeyStore=syncly-release.keystore \
+            -p:AndroidSigningKeyAlias=syncly \
+            -p:AndroidSigningKeyPass=file:syncly-keystore.pass \
+            -p:AndroidSigningStorePass=file:syncly-keystore.pass
+          rm -f src/Syncly.Mobile/syncly-release.keystore src/Syncly.Mobile/syncly-keystore.pass
       - name: Collect APK
         shell: bash
         run: |

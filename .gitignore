@@ -11,3 +11,5 @@ local/
 .local/
 *.keystore
 *.jks
+**/syncly-keystore.pass
+**/syncly-release.keystore
