@@ -99,11 +99,7 @@ internal sealed class ProtonMailbox
             return null;
 
         var http = RequireHttp();
-        var linkDoc = await http.GetFromJsonAsync<JsonElement>(
-            ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/links/{linkId}"), cancellationToken: ct);
-
-        if (!TryGetLink(linkDoc, out var node))
-            return null;
+        var node = await FetchLinkBundleAsync(linkId, ct);
 
         if (!TryUnlockFile(node, out _, out var sessionKey))
             throw new ProtonDriveException($"Could not download “{name}” from Proton Drive.");
@@ -122,7 +118,12 @@ internal sealed class ProtonMailbox
                 request.Headers.TryAddWithoutValidation("pm-storage-token", token);
 
             using var response = await http.SendAsync(request, ct);
-            response.EnsureSuccessStatusCode();
+            if (!response.IsSuccessStatusCode)
+            {
+                var detail = await response.Content.ReadAsStringAsync(ct);
+                throw new ProtonDriveException($"Could not download “{name}” from Proton Drive. {detail}");
+            }
+
             var raw = await response.Content.ReadAsByteArrayAsync(ct);
             await buffer.WriteAsync(DecryptFileBlock(raw, sessionKey), ct);
         }
@@ -211,9 +212,8 @@ internal sealed class ProtonMailbox
     private async Task UploadRevisionAsync(string linkId, ReadOnlyMemory<byte> data, CancellationToken ct)
     {
         var http = RequireHttp();
-        var linkDoc = await http.GetFromJsonAsync<JsonElement>(
-            ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/links/{linkId}"), cancellationToken: ct);
-        if (!TryGetLink(linkDoc, out var node) || !TryUnlockFile(node, out var fileKeys, out var sessionKey))
+        var node = await FetchLinkBundleAsync(linkId, ct);
+        if (!TryUnlockFile(node, out var fileKeys, out var sessionKey))
             throw new ProtonDriveException("Could not unlock the existing Proton Drive file.");
 
         var currentRevision = ReadActiveRevisionId(node);
@@ -430,29 +430,49 @@ internal sealed class ProtonMailbox
         if (_folderKeys is not null && _hashKey is not null)
             return;
 
-        var http = RequireHttp();
-        var doc = await http.GetFromJsonAsync<JsonElement>(
-            ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/links/{_rootLinkId}"),
-            cancellationToken: ct);
-
-        if (!TryGetLink(doc, out var link))
-            throw new ProtonDriveException("Proton Drive did not return the shared folder.");
-
-        var passphrase = ReadString(link, "NodePassphrase");
-        var nodeKey = ReadString(link, "NodeKey");
+        var bundle = await FetchLinkBundleAsync(_rootLinkId, ct);
+        var passphrase = ReadString(bundle.Link, "NodePassphrase");
+        var nodeKey = ReadString(bundle.Link, "NodeKey");
         if (string.IsNullOrWhiteSpace(passphrase) || string.IsNullOrWhiteSpace(nodeKey))
             throw new ProtonDriveException("Proton Drive folder is missing its encryption key.");
 
         var unlocked = ProtonPgp.DecryptWithPrivateKey(passphrase, _shareKeys);
         _folderKeys = ProtonPgp.UnlockPrivateKey(nodeKey, unlocked);
 
-        var hashArmored = ReadNestedString(link, "FolderProperties", "NodeHashKey")
-                          ?? ReadNestedString(link, "Folder", "NodeHashKey")
-                          ?? ReadString(link, "NodeHashKey");
+        var hashArmored = bundle.NodeHashKey;
         if (string.IsNullOrWhiteSpace(hashArmored))
             throw new ProtonDriveException("Proton Drive folder is missing its name hash key.");
 
         _hashKey = ProtonPgp.DecryptWithPrivateKey(hashArmored, _folderKeys);
+    }
+
+    private async Task<ProtonLinkBundle> FetchLinkBundleAsync(string linkId, CancellationToken ct)
+    {
+        var http = RequireHttp();
+        var path = ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/links");
+        using var response = await http.PostAsJsonAsync(path, new { LinkIDs = new[] { linkId } }, ct);
+        var text = await response.Content.ReadAsStringAsync(ct);
+        if (!response.IsSuccessStatusCode)
+            throw new ProtonDriveException("Could not load the Proton Drive folder. " + text);
+
+        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(text) ? "{}" : text);
+        ProtonLinkBundle? match = null;
+        ProtonLinkBundle? first = null;
+        var count = 0;
+        foreach (var bundle in EnumerateLinkBundles(doc.RootElement))
+        {
+            count++;
+            first ??= bundle;
+            var id = ReadString(bundle.Link, "LinkID") ?? ReadString(bundle.Link, "linkId");
+            if (id == linkId)
+                match = bundle;
+        }
+
+        var chosen = match ?? (count == 1 ? first : null);
+        if (chosen is null)
+            throw new ProtonDriveException("Proton Drive did not return the shared folder.");
+
+        return chosen.Value.Snapshot();
     }
 
     private async Task LoadLinkDetailsAsync(IReadOnlyList<string> ids, CancellationToken ct)
@@ -588,10 +608,11 @@ internal sealed class ProtonMailbox
         return blocks;
     }
 
-    private static bool TryReadBlockTargets(JsonElement node, out List<(string Url, string? Token)> blocks)
+    private static bool TryReadBlockTargets(ProtonLinkBundle node, out List<(string Url, string? Token)> blocks)
     {
         blocks = [];
-        if (!TryGetFileProperties(node, out var file))
+        var file = node.FileView;
+        if (file.ValueKind != JsonValueKind.Object)
             return false;
 
         if (file.TryGetProperty("ActiveRevision", out var revision)
@@ -602,13 +623,13 @@ internal sealed class ProtonMailbox
         return false;
     }
 
-    private bool TryUnlockFile(JsonElement node, out ProtonKeySet fileKeys, out byte[] sessionKey)
+    private bool TryUnlockFile(ProtonLinkBundle node, out ProtonKeySet fileKeys, out byte[] sessionKey)
     {
         fileKeys = _shareKeys;
         sessionKey = [];
 
-        var passphrase = ReadString(node, "NodePassphrase");
-        var nodeKey = ReadString(node, "NodeKey");
+        var passphrase = ReadString(node.Link, "NodePassphrase");
+        var nodeKey = ReadString(node.Link, "NodeKey");
         if (string.IsNullOrWhiteSpace(passphrase) || string.IsNullOrWhiteSpace(nodeKey))
             return false;
 
@@ -632,10 +653,7 @@ internal sealed class ProtonMailbox
             return false;
         }
 
-        if (!TryGetFileProperties(node, out var file))
-            return false;
-
-        var packet = ReadString(file, "ContentKeyPacket");
+        var packet = ReadString(node.FileView, "ContentKeyPacket");
         if (string.IsNullOrWhiteSpace(packet))
             return false;
 
@@ -673,16 +691,57 @@ internal sealed class ProtonMailbox
     private HttpClient RequireHttp() =>
         _http ?? throw new ProtonDriveException("Proton Drive session is not connected.");
 
-    private static bool TryGetLink(JsonElement root, out JsonElement link)
+    private static bool TryGetLinksContainer(JsonElement root, out JsonElement container)
     {
-        if (root.TryGetProperty("Link", out link))
-            return true;
+        foreach (var name in new[] { "Links", "links", "Files", "files", "Children", "children" })
+        {
+            if (root.TryGetProperty(name, out container)
+                && container.ValueKind is JsonValueKind.Array or JsonValueKind.Object)
+                return true;
+        }
 
-        if (root.TryGetProperty("link", out link))
-            return true;
+        container = default;
+        return false;
+    }
 
-        link = root;
-        return root.ValueKind == JsonValueKind.Object;
+    private static IEnumerable<ProtonLinkBundle> EnumerateLinkBundles(JsonElement root)
+    {
+        if (TryGetLinksContainer(root, out var container))
+        {
+            if (container.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in container.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.Object)
+                        yield return ReadBundle(item);
+                }
+            }
+            else
+            {
+                foreach (var property in container.EnumerateObject())
+                {
+                    if (property.Value.ValueKind == JsonValueKind.Object)
+                        yield return ReadBundle(property.Value);
+                }
+            }
+
+            yield break;
+        }
+
+        if (root.ValueKind == JsonValueKind.Object)
+            yield return ReadBundle(root);
+    }
+
+    private static ProtonLinkBundle ReadBundle(JsonElement item)
+    {
+        var link = item.TryGetProperty("Link", out var nested) && nested.ValueKind == JsonValueKind.Object
+            ? nested
+            : item;
+        item.TryGetProperty("Folder", out var folder);
+        item.TryGetProperty("File", out var file);
+        if (folder.ValueKind != JsonValueKind.Object && link.TryGetProperty("FolderProperties", out var folderProps))
+            folder = folderProps;
+        return new ProtonLinkBundle(link, folder, file);
     }
 
     private static IEnumerable<JsonElement> EnumerateLinks(JsonElement root)
@@ -709,13 +768,18 @@ internal sealed class ProtonMailbox
             yield return single;
     }
 
-    private static bool TryGetFileProperties(JsonElement node, out JsonElement file)
+    private static string? ReadActiveRevisionId(ProtonLinkBundle node)
     {
-        if (node.TryGetProperty("FileProperties", out file) || node.TryGetProperty("File", out file))
-            return file.ValueKind == JsonValueKind.Object;
+        var file = node.FileView;
+        if (file.ValueKind != JsonValueKind.Object)
+            return null;
 
-        file = default;
-        return false;
+        if (file.TryGetProperty("ActiveRevision", out var revision))
+            return ReadString(revision, "ID")
+                   ?? ReadString(revision, "RevisionID")
+                   ?? ReadString(revision, "ActiveRevisionID");
+
+        return ReadString(file, "ActiveRevisionID");
     }
 
     private static bool ReadBlockTargets(JsonElement blocks, List<(string Url, string? Token)> output)
@@ -785,27 +849,22 @@ internal sealed class ProtonMailbox
         return false;
     }
 
-    private static string? ReadActiveRevisionId(JsonElement node)
-    {
-        if (!TryGetFileProperties(node, out var file))
-            return null;
-
-        if (file.TryGetProperty("ActiveRevision", out var revision))
-            return ReadString(revision, "ID")
-                   ?? ReadString(revision, "RevisionID")
-                   ?? ReadString(revision, "ActiveRevisionID");
-
-        return ReadString(file, "ActiveRevisionID");
-    }
-
     private static int ReadCode(JsonElement root) =>
         root.TryGetProperty("Code", out var code) && code.TryGetInt32(out var value) ? value : -1;
 
-    private static string? ReadString(JsonElement obj, string name) =>
-        obj.TryGetProperty(name, out var el) ? el.GetString() : null;
+    private static string? ReadString(JsonElement obj, string name)
+    {
+        if (obj.ValueKind != JsonValueKind.Object)
+            return null;
+
+        return obj.TryGetProperty(name, out var el) ? el.GetString() : null;
+    }
 
     private static string? ReadNestedString(JsonElement obj, string parent, string name)
     {
+        if (obj.ValueKind != JsonValueKind.Object)
+            return null;
+
         if (!obj.TryGetProperty(parent, out var child) || child.ValueKind != JsonValueKind.Object)
             return null;
 
@@ -813,4 +872,33 @@ internal sealed class ProtonMailbox
     }
 
     private readonly record struct FolderSecrets(ProtonKeySet Keys, byte[] HashKey);
+
+    private readonly record struct ProtonLinkBundle(JsonElement Link, JsonElement Folder, JsonElement File)
+    {
+        public JsonElement FileView
+        {
+            get
+            {
+                if (File.ValueKind == JsonValueKind.Object)
+                    return File;
+                if (Link.ValueKind == JsonValueKind.Object && Link.TryGetProperty("FileProperties", out var props))
+                    return props;
+                if (Link.ValueKind == JsonValueKind.Object && Link.TryGetProperty("File", out var file))
+                    return file;
+                return default;
+            }
+        }
+
+        public string? NodeHashKey =>
+            ReadString(Folder, "NodeHashKey")
+            ?? ReadNestedString(Link, "FolderProperties", "NodeHashKey")
+            ?? ReadNestedString(Link, "Folder", "NodeHashKey")
+            ?? ReadString(Link, "NodeHashKey");
+
+        public ProtonLinkBundle Snapshot() =>
+            new(
+                Link.ValueKind == JsonValueKind.Object ? Link.Clone() : default,
+                Folder.ValueKind == JsonValueKind.Object ? Folder.Clone() : default,
+                File.ValueKind == JsonValueKind.Object ? File.Clone() : default);
+    }
 }
