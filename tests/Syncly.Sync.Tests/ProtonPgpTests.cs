@@ -58,7 +58,30 @@ public class ProtonPgpTests
             Convert.FromBase64String((string)draft.Body["ContentKeyPacket"]!),
             fileKeys.EncryptionPrivate);
         Assert.Equal(draft.SessionKey, session);
+        var packet = Convert.FromBase64String((string)draft.Body["ContentKeyPacket"]!);
         Assert.True(((string)draft.Body["ContentKeyPacket"]!).Length <= 255);
+        Assert.Equal(3, packet[2]);
+        Assert.Equal((byte)PublicKeyAlgorithmTag.ECDH, packet[11]);
+    }
+
+    [Fact]
+    public void Content_key_packet_decrypts_with_standard_openpgp()
+    {
+        var passphrase = "node-pass"u8.ToArray();
+        var (_, keys) = ProtonPgp.GenerateNodeKey(passphrase);
+        var (packet, session) = ProtonPgp.CreateContentKey(keys);
+        var block = ProtonPgp.EncryptWithSessionKey("hello"u8.ToArray(), session);
+        var message = packet.Concat(block).ToArray();
+
+        using var input = new MemoryStream(message);
+        var list = (PgpEncryptedDataList)new PgpObjectFactory(input).NextPgpObject();
+        var pk = list.GetEncryptedDataObjects().OfType<PgpPublicKeyEncryptedData>().Single();
+        using var clear = pk.GetDataStream(keys.EncryptionPrivate);
+        var literal = (PgpLiteralData)new PgpObjectFactory(clear).NextPgpObject();
+        using var stream = literal.GetInputStream();
+        var plain = new byte[5];
+        Assert.Equal(5, stream.Read(plain));
+        Assert.Equal("hello"u8.ToArray(), plain);
     }
 
     [Fact]

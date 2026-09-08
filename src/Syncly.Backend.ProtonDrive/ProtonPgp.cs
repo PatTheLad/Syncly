@@ -1,11 +1,12 @@
-using System.Reflection;
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using Org.BouncyCastle.Bcpg;
 using Org.BouncyCastle.Bcpg.OpenPgp;
-using Org.BouncyCastle.Crypto;
+using Org.BouncyCastle.Crypto.Agreement;
 using Org.BouncyCastle.Crypto.Generators;
 using Org.BouncyCastle.Crypto.Parameters;
+using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Security;
 using Org.BouncyCastle.Utilities.IO;
 
@@ -14,6 +15,8 @@ namespace Syncly.Backend.ProtonDrive;
 /// <summary>The slice of OpenPGP Proton Drive uses to wrap share keys and file contents.</summary>
 internal static class ProtonPgp
 {
+    private static readonly byte[] AnonymousSender = "Anonymous Sender    "u8.ToArray();
+
     public static byte[] DecryptWithPassword(string armored, string password) =>
         DecryptWithPassword(armored, Encoding.UTF8.GetBytes(password));
 
@@ -105,7 +108,7 @@ internal static class ProtonPgp
         var generator = new PgpKeyRingGenerator(
             PgpSignature.PositiveCertification,
             signPair,
-            "Drive key",
+            "Drive key <no-reply@proton.me>",
             SymmetricKeyAlgorithmTag.Aes256,
             ToChars(passphrase),
             true,
@@ -241,28 +244,12 @@ internal static class ProtonPgp
 
     public static (byte[] KeyPacket, byte[] SessionKey) CreateContentKey(ProtonKeySet fileKeys)
     {
-        var dummy = new byte[] { 1 };
-        using var message = new MemoryStream();
-        var encGen = new PgpEncryptedDataGenerator(SymmetricKeyAlgorithmTag.Aes256, true, new SecureRandom());
-        encGen.AddMethod(fileKeys.EncryptionPublic);
-        using (var enc = encGen.Open(message, dummy.Length))
-        {
-            var literal = new PgpLiteralDataGenerator();
-            using var lit = literal.Open(enc, PgpLiteralData.Binary, "", dummy.Length, DateTime.UtcNow);
-            lit.Write(dummy);
-        }
-
-        var bytes = message.ToArray();
-        return (ReadFirstPacket(bytes), RecoverSessionKey(bytes, fileKeys.EncryptionPrivate));
+        var sessionKey = GenerateSessionKey();
+        return (EncryptSessionKeyEcdh(sessionKey, fileKeys.EncryptionPublic), sessionKey);
     }
 
-    public static byte[] DecryptSessionKey(byte[] keyPacket, PgpPrivateKey privateKey)
-    {
-        using var message = new MemoryStream();
-        message.Write(keyPacket);
-        message.Write(DummyIntegrityPacket());
-        return RecoverSessionKey(message.ToArray(), privateKey);
-    }
+    public static byte[] DecryptSessionKey(byte[] keyPacket, PgpPrivateKey privateKey) =>
+        DecryptSessionKeyEcdh(keyPacket, privateKey);
 
     public static byte[] EncryptWithSessionKey(byte[] plaintext, byte[] sessionKey)
     {
@@ -367,79 +354,128 @@ internal static class ProtonPgp
         return Encoding.ASCII.GetString(outStream.ToArray());
     }
 
-    private static byte[] RecoverSessionKey(byte[] pgpMessage, PgpPrivateKey privateKey)
+    private static byte[] EncryptSessionKeyEcdh(byte[] sessionKey, PgpPublicKey publicKey)
     {
-        using var input = PgpUtilities.GetDecoderStream(new MemoryStream(pgpMessage));
-        var factory = new PgpObjectFactory(input);
-        if (factory.NextPgpObject() is not PgpEncryptedDataList list)
-            throw new ProtonDriveException("Proton Drive content key packet is not a session key.");
+        if (publicKey.GetKey() is not X25519PublicKeyParameters recipient)
+            throw new ProtonDriveException("The Proton Drive file key is not Curve25519.");
 
-        PgpPublicKeyEncryptedData? pk = null;
-        foreach (PgpEncryptedData candidate in list.GetEncryptedDataObjects())
-        {
-            if (candidate is PgpPublicKeyEncryptedData found)
-            {
-                pk = found;
-                break;
-            }
-        }
+        var random = new SecureRandom();
+        var ephGen = new X25519KeyPairGenerator();
+        ephGen.Init(new X25519KeyGenerationParameters(random));
+        var eph = ephGen.GenerateKeyPair();
+        var ephPub = new byte[32];
+        ((X25519PublicKeyParameters)eph.Public).Encode(ephPub);
 
-        if (pk is null)
-            throw new ProtonDriveException("Proton Drive content key packet is not a session key.");
+        var point = new byte[33];
+        point[0] = 0x40;
+        ephPub.CopyTo(point, 1);
+        var mpi = new MPInteger(new BigInteger(1, point)).GetEncoded();
 
-        var recover = typeof(PgpPublicKeyEncryptedData).GetMethod(
-            "RecoverSessionData",
-            BindingFlags.Instance | BindingFlags.NonPublic);
-        if (recover is null)
-            throw new ProtonDriveException("Could not read the Proton Drive content key.");
+        var shared = AgreeX25519((X25519PrivateKeyParameters)eph.Private, recipient);
+        var wrapped = AesWrap(Rfc6637Kek(publicKey, shared), PgpPad.PadSessionData(SessionInfo(sessionKey), false));
 
-        if (recover.Invoke(pk, [privateKey]) is not byte[] sessionInfo
-            || sessionInfo.Length < 4
-            || sessionInfo[0] != (byte)SymmetricKeyAlgorithmTag.Aes256)
+        using var body = new MemoryStream();
+        body.WriteByte(3);
+        Span<byte> keyId = stackalloc byte[8];
+        BinaryPrimitives.WriteInt64BigEndian(keyId, publicKey.KeyId);
+        body.Write(keyId);
+        body.WriteByte((byte)PublicKeyAlgorithmTag.ECDH);
+        body.Write(mpi);
+        body.WriteByte((byte)wrapped.Length);
+        body.Write(wrapped);
+
+        var bodyBytes = body.ToArray();
+        using var output = new MemoryStream();
+        using (var pOut = new BcpgOutputStream(output, PacketTag.PublicKeyEncryptedSession, bodyBytes.Length))
+            pOut.Write(bodyBytes);
+
+        return output.ToArray();
+    }
+
+    private static byte[] DecryptSessionKeyEcdh(byte[] keyPacket, PgpPrivateKey privateKey)
+    {
+        var body = ReadPacketBody(keyPacket, PacketTag.PublicKeyEncryptedSession);
+        if (body.Length < 14 || body[0] != 3 || body[9] != (byte)PublicKeyAlgorithmTag.ECDH)
+            throw new ProtonDriveException("Proton Drive content key packet is not ECDH.");
+
+        var mpiBits = (body[10] << 8) | body[11];
+        var mpiLen = (mpiBits + 7) / 8;
+        if (12 + mpiLen + 1 > body.Length)
+            throw new ProtonDriveException("Proton Drive content key packet is truncated.");
+
+        var point = body.AsSpan(12, mpiLen);
+        var ephPub = point[0] == 0x40 ? point[1..].ToArray() : point.ToArray();
+        var wrapLen = body[12 + mpiLen];
+        var wrapped = body.AsSpan(13 + mpiLen, wrapLen).ToArray();
+
+        var secret = (X25519PrivateKeyParameters)privateKey.Key;
+        var shared = AgreeX25519(secret, new X25519PublicKeyParameters(ephPub));
+        var publicKey = new PgpPublicKey(privateKey.PublicKeyPacket);
+        var padded = AesUnwrap(Rfc6637Kek(publicKey, shared), wrapped);
+        var sessionInfo = PgpPad.UnpadSessionData(padded);
+        if (sessionInfo.Length < 4 || sessionInfo[0] != (byte)SymmetricKeyAlgorithmTag.Aes256)
             throw new ProtonDriveException("Proton Drive content key is not AES-256.");
 
         return sessionInfo.AsSpan(1, sessionInfo.Length - 3).ToArray();
     }
 
-    private static byte[] ReadFirstPacket(byte[] message)
+    private static byte[] AgreeX25519(X25519PrivateKeyParameters privateKey, X25519PublicKeyParameters publicKey)
     {
-        if (message.Length < 2)
-            throw new ProtonDriveException("Proton Drive content key packet is truncated.");
-
-        var header = message[0];
-        int offset;
-        int bodyLength;
-        if ((header & 0x40) != 0)
-        {
-            offset = ReadNewLength(message, 1, out bodyLength);
-        }
-        else
-        {
-            offset = 1;
-            bodyLength = (header & 0x3) switch
-            {
-                0 => message[offset++],
-                1 => (message[offset++] << 8) | message[offset++],
-                2 => (message[offset++] << 24) | (message[offset++] << 16) | (message[offset++] << 8) | message[offset++],
-                _ => throw new ProtonDriveException("Proton Drive OpenPGP packet uses an unsupported length."),
-            };
-        }
-
-        if (offset + bodyLength > message.Length)
-            throw new ProtonDriveException("Proton Drive content key packet is truncated.");
-
-        return message.AsSpan(0, offset + bodyLength).ToArray();
+        var agreement = new X25519Agreement();
+        agreement.Init(privateKey);
+        var shared = new byte[agreement.AgreementSize];
+        agreement.CalculateAgreement(publicKey, shared, 0);
+        return shared;
     }
 
-    private static byte[] DummyIntegrityPacket()
+    private static byte[] Rfc6637Kek(PgpPublicKey publicKey, byte[] secret)
     {
-        var body = new byte[40];
-        body[0] = 1;
-        using var output = new MemoryStream();
-        using (var pOut = new BcpgOutputStream(output, PacketTag.SymmetricEncryptedIntegrityProtected, body.Length))
-            pOut.Write(body);
+        var param = Rfc6637Param(publicKey);
+        var digest = SHA256.HashData(Concat([0, 0, 0, 1], secret, param));
+        return digest[..16];
+    }
 
-        return output.ToArray();
+    private static byte[] Rfc6637Param(PgpPublicKey publicKey)
+    {
+        var ec = (ECDHPublicBcpgKey)publicKey.PublicKeyPacket.Key;
+        var oid = ec.CurveOid.GetEncoded();
+        using var param = new MemoryStream();
+        param.Write(oid, 1, oid.Length - 1);
+        param.WriteByte((byte)publicKey.Algorithm);
+        param.WriteByte(0x03);
+        param.WriteByte(0x01);
+        param.WriteByte((byte)ec.HashAlgorithm);
+        param.WriteByte((byte)ec.SymmetricKeyAlgorithm);
+        param.Write(AnonymousSender);
+        param.Write(publicKey.GetFingerprint());
+        return param.ToArray();
+    }
+
+    private static byte[] SessionInfo(byte[] sessionKey)
+    {
+        var info = new byte[sessionKey.Length + 3];
+        info[0] = (byte)SymmetricKeyAlgorithmTag.Aes256;
+        sessionKey.CopyTo(info, 1);
+        var check = 0;
+        for (var i = 0; i < sessionKey.Length; i++)
+            check += sessionKey[i];
+        info[^2] = (byte)(check >> 8);
+        info[^1] = (byte)check;
+        return info;
+    }
+
+    private static byte[] AesWrap(byte[] kek, byte[] data)
+    {
+        var wrapper = WrapperUtilities.GetWrapper("AESWRAP");
+        wrapper.Init(true, new KeyParameter(kek));
+        return wrapper.Wrap(data, 0, data.Length);
+    }
+
+    private static byte[] AesUnwrap(byte[] kek, byte[] data)
+    {
+        var wrapper = WrapperUtilities.GetWrapper("AESWRAP");
+        wrapper.Init(false, new KeyParameter(kek));
+        return wrapper.Unwrap(data, 0, data.Length);
     }
 
     private static byte[] ReadPacketBody(byte[] packet, PacketTag expected)
