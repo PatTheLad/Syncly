@@ -1,13 +1,10 @@
-using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using Org.BouncyCastle.Bcpg;
 using Org.BouncyCastle.Bcpg.OpenPgp;
-using Org.BouncyCastle.Crypto;
 using Org.BouncyCastle.Crypto.Agreement;
 using Org.BouncyCastle.Crypto.Generators;
 using Org.BouncyCastle.Crypto.Parameters;
-using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Security;
 using Org.BouncyCastle.Utilities.IO;
 
@@ -98,12 +95,12 @@ internal static class ProtonPgp
     public static (string Armored, ProtonKeySet Keys) GenerateNodeKey(byte[] passphrase)
     {
         var random = new SecureRandom();
-        // RSA primary: gopenpgp verifies those binding signatures. BC EdDSA
-        // (alg 22) bindings are often dropped, which leaves no encryption key
-        // and Proton returns 200501 on ContentKeyPacket.
-        var rsa = new RsaKeyPairGenerator();
-        rsa.Init(new KeyGenerationParameters(random, 2048));
-        var signPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaSign, rsa.GenerateKeyPair(), DateTime.UtcNow);
+        // Match gopenpgp helper.GenerateKey(..., "x25519"): EdDSA primary + ECDH
+        // Curve25519 encryption subkey. RSA primaries caused Proton 200501 on
+        // ContentKeyPacket ("Could not verify the nodeKey was used for encrypting").
+        var ed = new Ed25519KeyPairGenerator();
+        ed.Init(new Ed25519KeyGenerationParameters(random));
+        var signPair = new PgpKeyPair(PublicKeyAlgorithmTag.EdDsa_Legacy, ed.GenerateKeyPair(), DateTime.UtcNow);
 
         var x25519 = new X25519KeyPairGenerator();
         x25519.Init(new X25519KeyGenerationParameters(random));
@@ -112,12 +109,12 @@ internal static class ProtonPgp
         var primaryHashed = new PgpSignatureSubpacketGenerator();
         primaryHashed.SetKeyFlags(false, PgpKeyFlags.CanCertify | PgpKeyFlags.CanSign);
         var subHashed = new PgpSignatureSubpacketGenerator();
-        subHashed.SetKeyFlags(false, 0x04 | 0x08);
+        subHashed.SetKeyFlags(false, PgpKeyFlags.CanEncryptCommunications | PgpKeyFlags.CanEncryptStorage);
 
         var generator = new PgpKeyRingGenerator(
             PgpSignature.PositiveCertification,
             signPair,
-            "Drive key <no-reply@proton.me>",
+            "Drive key <noreply@protonmail.com>",
             SymmetricKeyAlgorithmTag.Aes256,
             ToChars(passphrase),
             true,
@@ -253,8 +250,24 @@ internal static class ProtonPgp
 
     public static (byte[] KeyPacket, byte[] SessionKey) CreateContentKey(ProtonKeySet fileKeys)
     {
-        var sessionKey = GenerateSessionKey();
-        return (EncryptSessionKeyEcdh(sessionKey, fileKeys.EncryptionPublic), sessionKey);
+        // Build the PKESK with BouncyCastle's ECDH writer (old-format packet header)
+        // so Proton/gopenpgp can verify it was encrypted to the node key. Recover the
+        // session key with our decoder — the two round-trip each other.
+        var encGen = new PgpEncryptedDataGenerator(
+            SymmetricKeyAlgorithmTag.Aes256, withIntegrityPacket: true, new SecureRandom());
+        encGen.AddMethod(fileKeys.EncryptionPublic);
+
+        using var message = new MemoryStream();
+        using (var enc = encGen.Open(message, new byte[512]))
+        {
+            var literal = new PgpLiteralDataGenerator();
+            using var lit = literal.Open(enc, PgpLiteralData.Binary, "", 1, DateTime.UtcNow);
+            lit.WriteByte(0);
+        }
+
+        var keyPacket = ReadLeadingPacket(message.ToArray());
+        var sessionKey = DecryptSessionKeyEcdh(keyPacket, fileKeys.EncryptionPrivate);
+        return (keyPacket, sessionKey);
     }
 
     public static byte[] DecryptSessionKey(byte[] keyPacket, PgpPrivateKey privateKey) =>
@@ -363,44 +376,34 @@ internal static class ProtonPgp
         return Encoding.ASCII.GetString(outStream.ToArray());
     }
 
-    private static byte[] EncryptSessionKeyEcdh(byte[] sessionKey, PgpPublicKey publicKey)
+    private static byte[] ReadLeadingPacket(byte[] message)
     {
-        if (publicKey.GetKey() is not X25519PublicKeyParameters recipient)
-            throw new ProtonDriveException("The Proton Drive file key is not Curve25519.");
+        if (message.Length < 2 || (message[0] & 0x80) == 0)
+            throw new ProtonDriveException("Proton Drive OpenPGP packet header is invalid.");
 
-        var random = new SecureRandom();
-        var ephGen = new X25519KeyPairGenerator();
-        ephGen.Init(new X25519KeyGenerationParameters(random));
-        var eph = ephGen.GenerateKeyPair();
-        var ephPub = new byte[32];
-        ((X25519PublicKeyParameters)eph.Public).Encode(ephPub);
+        int offset;
+        int length;
+        if ((message[0] & 0x40) != 0)
+        {
+            offset = ReadNewLength(message, 1, out length);
+        }
+        else
+        {
+            offset = 1;
+            length = (message[0] & 0x3) switch
+            {
+                0 => message[offset++],
+                1 => (message[offset++] << 8) | message[offset++],
+                2 => (message[offset++] << 24) | (message[offset++] << 16)
+                     | (message[offset++] << 8) | message[offset++],
+                _ => throw new ProtonDriveException("Proton Drive OpenPGP packet uses an unsupported length."),
+            };
+        }
 
-        var point = new byte[33];
-        point[0] = 0x40;
-        ephPub.CopyTo(point, 1);
-        var mpi = new MPInteger(new BigInteger(1, point)).GetEncoded();
+        if (offset + length > message.Length)
+            throw new ProtonDriveException("Proton Drive OpenPGP packet is truncated.");
 
-        var shared = AgreeX25519((X25519PrivateKeyParameters)eph.Private, recipient);
-        var wrapped = AesWrap(
-            Rfc6637Kek(publicKey, shared),
-            PgpPad.PadSessionData(SessionInfoV3(sessionKey), false));
-
-        using var body = new MemoryStream();
-        body.WriteByte(3);
-        Span<byte> keyId = stackalloc byte[8];
-        BinaryPrimitives.WriteInt64BigEndian(keyId, publicKey.KeyId);
-        body.Write(keyId);
-        body.WriteByte((byte)PublicKeyAlgorithmTag.ECDH);
-        body.Write(mpi);
-        body.WriteByte((byte)wrapped.Length);
-        body.Write(wrapped);
-
-        var bodyBytes = body.ToArray();
-        using var output = new MemoryStream();
-        using (var pOut = new BcpgOutputStream(output, PacketTag.PublicKeyEncryptedSession, bodyBytes.Length))
-            pOut.Write(bodyBytes);
-
-        return output.ToArray();
+        return message.AsSpan(0, offset + length).ToArray();
     }
 
     private static byte[] DecryptSessionKeyEcdh(byte[] keyPacket, PgpPrivateKey privateKey)
@@ -485,26 +488,6 @@ internal static class ProtonPgp
         param.Write(AnonymousSender);
         param.Write(publicKey.GetFingerprint());
         return param.ToArray();
-    }
-
-    private static byte[] SessionInfoV3(byte[] sessionKey)
-    {
-        var info = new byte[sessionKey.Length + 3];
-        info[0] = (byte)SymmetricKeyAlgorithmTag.Aes256;
-        sessionKey.CopyTo(info, 1);
-        var check = 0;
-        for (var i = 0; i < sessionKey.Length; i++)
-            check += sessionKey[i];
-        info[^2] = (byte)(check >> 8);
-        info[^1] = (byte)check;
-        return info;
-    }
-
-    private static byte[] AesWrap(byte[] kek, byte[] data)
-    {
-        var wrapper = WrapperUtilities.GetWrapper("AESWRAP");
-        wrapper.Init(true, new KeyParameter(kek));
-        return wrapper.Wrap(data, 0, data.Length);
     }
 
     private static byte[] AesUnwrap(byte[] kek, byte[] data)

@@ -62,7 +62,7 @@ public class ProtonPgpTests
         Assert.True(((string)draft.Body["ContentKeyPacket"]!).Length <= 255);
         Assert.Equal(3, packet[2]);
         Assert.Equal((byte)PublicKeyAlgorithmTag.ECDH, packet[11]);
-        Assert.Equal(PublicKeyAlgorithmTag.RsaSign, fileKeys.SigningPublic.Algorithm);
+        Assert.Equal(PublicKeyAlgorithmTag.EdDsa_Legacy, fileKeys.SigningPublic.Algorithm);
         Assert.True(fileKeys.EncryptionPublic.IsEncryptionKey);
     }
 
