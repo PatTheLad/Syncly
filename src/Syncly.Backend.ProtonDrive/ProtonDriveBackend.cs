@@ -15,6 +15,16 @@ public sealed class ProtonDriveBackend : ISyncBackend, IAsyncDisposable
     public const string ApiBase = "https://mail.proton.me/api/drive/";
 
     /// <summary>
+    /// Proton's Drive API is PascalCase. <c>PostAsJsonAsync</c> without options
+    /// uses camelCase and drops required fields such as <c>LinkIDs</c>.
+    /// </summary>
+    internal static readonly JsonSerializerOptions ApiJson = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    /// <summary>
     /// Public-link sessions have no <c>full</c>/<c>nondelinquent</c> scope.
     /// Volume routes must go through <c>drive/unauth/</c>; <c>drive/urls/</c> stays as-is.
     /// </summary>

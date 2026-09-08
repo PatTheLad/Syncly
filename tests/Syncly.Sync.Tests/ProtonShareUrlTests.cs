@@ -52,4 +52,12 @@ public class ProtonShareUrlTests
     {
         Assert.Equal(expected, ProtonDriveBackend.DataPath(input));
     }
+
+    [Fact]
+    public void Api_json_keeps_proton_pascal_case_field_names()
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(new { LinkIDs = new[] { "abc" } }, ProtonDriveBackend.ApiJson);
+        Assert.Contains("\"LinkIDs\"", json);
+        Assert.DoesNotContain("\"linkIDs\"", json);
+    }
 }

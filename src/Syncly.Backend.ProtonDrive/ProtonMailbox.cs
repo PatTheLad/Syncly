@@ -182,7 +182,7 @@ internal sealed class ProtonMailbox
         string? lastError = null;
         foreach (var path in paths)
         {
-            using var response = await http.PostAsJsonAsync(path, body, ct);
+            using var response = await http.PostAsJsonAsync(path, body, ProtonDriveBackend.ApiJson, ct);
             var text = await response.Content.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(text) ? "{}" : text);
             var root = doc.RootElement;
@@ -224,6 +224,7 @@ internal sealed class ProtonMailbox
         using var response = await http.PostAsJsonAsync(
             ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/files/{linkId}/revisions"),
             body,
+            ProtonDriveBackend.ApiJson,
             ct);
         var text = await response.Content.ReadAsStringAsync(ct);
         using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(text) ? "{}" : text);
@@ -269,7 +270,8 @@ internal sealed class ProtonMailbox
             ["ThumbnailList"] = Array.Empty<object>(),
         };
 
-        using var prepare = await http.PostAsJsonAsync(ProtonDriveBackend.DataPath("blocks"), request, ct);
+        using var prepare = await http.PostAsJsonAsync(
+            ProtonDriveBackend.DataPath("blocks"), request, ProtonDriveBackend.ApiJson, ct);
         var prepareText = await prepare.Content.ReadAsStringAsync(ct);
         using var prepareDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(prepareText) ? "{}" : prepareText);
         if (!TryReadUploadTarget(prepareDoc.RootElement, out var bareUrl, out var token))
@@ -290,6 +292,7 @@ internal sealed class ProtonMailbox
         using var sealedRevision = await http.PutAsJsonAsync(
             ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/files/{linkId}/revisions/{revisionId}"),
             commit,
+            ProtonDriveBackend.ApiJson,
             ct);
         if (!sealedRevision.IsSuccessStatusCode)
         {
@@ -450,7 +453,8 @@ internal sealed class ProtonMailbox
     {
         var http = RequireHttp();
         var path = ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/links");
-        using var response = await http.PostAsJsonAsync(path, new { LinkIDs = new[] { linkId } }, ct);
+        using var response = await http.PostAsJsonAsync(
+            path, new { LinkIDs = new[] { linkId } }, ProtonDriveBackend.ApiJson, ct);
         var text = await response.Content.ReadAsStringAsync(ct);
         if (!response.IsSuccessStatusCode)
             throw new ProtonDriveException("Could not load the Proton Drive folder. " + text);
@@ -485,6 +489,7 @@ internal sealed class ProtonMailbox
             using var response = await http.PostAsJsonAsync(
                 ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/links"),
                 new { LinkIDs = chunk },
+                ProtonDriveBackend.ApiJson,
                 ct);
 
             if (!response.IsSuccessStatusCode)
