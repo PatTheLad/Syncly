@@ -155,6 +155,11 @@ public sealed class SynclyApp : IAsyncDisposable
             Vault = vault,
             SupportsLocalFolder = options.SupportsLocalFolder,
             OnRemoteOps = ops => workspace.ProjectAsync(ops.Select(o => o.ObjectId), ct),
+            OnBlobsChanged = () =>
+            {
+                workspace.NotifyChanged();
+                return Task.CompletedTask;
+            },
             BackendFactory = CreateBackend,
             ListLocalBlobIds = () => blobs.ListIds(),
             ReadLocalBlobSealed = (id, token) => blobs.ReadSealedAsync(id, token),

@@ -111,7 +111,11 @@ public sealed class ProtonDriveBackend : ISyncBackend, IAsyncDisposable
 
     internal static HttpClient CreateClient()
     {
-        var http = new HttpClient { BaseAddress = new Uri(ApiBase) };
+        var http = new HttpClient
+        {
+            BaseAddress = new Uri(ApiBase),
+            Timeout = TimeSpan.FromMinutes(10),
+        };
         ApplyHeaders(http);
         return http;
     }

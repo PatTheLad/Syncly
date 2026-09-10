@@ -38,6 +38,9 @@ public sealed class SyncContext
     /// <summary>Called after remote ops have been applied and durably stored.</summary>
     public Func<IReadOnlyList<Op>, Task>? OnRemoteOps { get; init; }
 
+    /// <summary>Called after attachment blobs have been pulled so the editor can retry previews.</summary>
+    public Func<Task>? OnBlobsChanged { get; init; }
+
     /// <summary>Local encrypted attachment store. Null when the host has not wired blobs yet.</summary>
     public Func<IReadOnlyList<string>>? ListLocalBlobIds { get; init; }
 
@@ -270,8 +273,9 @@ public sealed class SyncEngine : IAsyncDisposable
 
             await EnsureManifestAsync(backend, _chain, ct);
             var remote = await PullAsync(backend, _chain, ct);
+            await PullBlobsAsync(backend, ct);
             await PushAsync(backend, _chain, ct);
-            await SyncBlobsAsync(backend, ct);
+            await PushBlobsAsync(backend, ct);
 
             var summary = remote == 0
                 ? $"Synced via {backend.Name}"
@@ -505,39 +509,71 @@ public sealed class SyncEngine : IAsyncDisposable
         await _context.Vault.WriteAsync(UploadedBlobsVaultKey, value, ct);
     }
 
-    private async Task SyncBlobsAsync(ISyncBackend backend, CancellationToken ct)
+    private async Task PullBlobsAsync(ISyncBackend backend, CancellationToken ct)
     {
-        if (_context.ListLocalBlobIds is null
-            || _context.ReadLocalBlobSealed is null
-            || _context.WriteLocalBlobSealed is null)
+        if (_context.WriteLocalBlobSealed is null || _context.ListLocalBlobIds is null)
             return;
 
         var localIds = _context.ListLocalBlobIds().ToHashSet(StringComparer.Ordinal);
+        var listedIds = new HashSet<string>(StringComparer.Ordinal);
         var remoteIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var name in await backend.ListAsync(ct))
         {
             var id = MailboxFiles.BlobIdOf(name);
             if (id is not null)
+            {
+                listedIds.Add(id);
                 remoteIds.Add(id);
+            }
         }
 
+        foreach (var id in ReferencedBlobIds())
+            remoteIds.Add(id);
+
+        var pulled = false;
         foreach (var id in remoteIds)
         {
             if (localIds.Contains(id))
                 continue;
 
-            var sealedBytes = await backend.ReadAsync(MailboxFiles.BlobName(id), ct);
+            byte[]? sealedBytes;
+            try
+            {
+                sealedBytes = await backend.ReadAsync(MailboxFiles.BlobName(id), ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not pull attachment {FileId}.", id);
+                continue;
+            }
+
             if (sealedBytes is null || sealedBytes.Length == 0)
                 continue;
 
             await _context.WriteLocalBlobSealed(id, sealedBytes, ct);
             localIds.Add(id);
+            _uploadedBlobs.Add(id);
+            pulled = true;
             _logger.LogInformation("Pulled attachment {FileId}.", id);
         }
 
+        foreach (var id in listedIds)
+            _uploadedBlobs.Add(id);
+
+        await PersistUploadedBlobsAsync(ct);
+        if (pulled && _context.OnBlobsChanged is { } notify)
+            await notify();
+    }
+
+    private async Task PushBlobsAsync(ISyncBackend backend, CancellationToken ct)
+    {
+        if (_context.ListLocalBlobIds is null || _context.ReadLocalBlobSealed is null)
+            return;
+
+        var localIds = _context.ListLocalBlobIds().ToHashSet(StringComparer.Ordinal);
         foreach (var id in localIds)
         {
-            if (remoteIds.Contains(id))
+            if (_uploadedBlobs.Contains(id))
                 continue;
 
             var sealedBytes = await _context.ReadLocalBlobSealed(id, ct);
@@ -545,16 +581,26 @@ public sealed class SyncEngine : IAsyncDisposable
                 continue;
 
             await backend.WriteAsync(MailboxFiles.BlobName(id), sealedBytes, ct);
-            remoteIds.Add(id);
+            _uploadedBlobs.Add(id);
             _logger.LogInformation("Pushed attachment {FileId}.", id);
         }
 
-        _uploadedBlobs.Clear();
-        foreach (var id in remoteIds)
-            _uploadedBlobs.Add(id);
-
         await PersistUploadedBlobsAsync(ct);
     }
+
+    internal static IEnumerable<string> ReferencedBlobIds(Replica replica)
+    {
+        foreach (var objectId in replica.ObjectIds)
+        {
+            foreach (var block in replica.Snapshot(objectId).Flatten())
+            {
+                if (block.Kind == BlockKind.File && block.FileId is { Length: > 0 } id)
+                    yield return id;
+            }
+        }
+    }
+
+    private IEnumerable<string> ReferencedBlobIds() => ReferencedBlobIds(_context.Replica);
 
     private static IEnumerable<string> ParseIgnoredPeers(string? stored)
     {

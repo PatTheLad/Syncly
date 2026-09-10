@@ -140,6 +140,7 @@
     private string? _loadedFileId;
     private bool _loading;
     private bool _missing;
+    private bool _reloadQueued;
 
     [Parameter, EditorRequired]
     public required BlockNode Block { get; set; }
@@ -200,12 +201,14 @@
         if (Block.Kind != BlockKind.File || Block.FileId is not { Length: > 0 } fileId)
             return;
 
-        // Keep the blob URL once loaded; retry while missing so a late sync pull can fill in.
         if (_loadedFileId == fileId && _objectUrl is not null)
             return;
 
         if (_loading)
+        {
+            _reloadQueued = true;
             return;
+        }
 
         await LoadFileAsync(fileId);
     }
@@ -213,17 +216,30 @@
     private async Task LoadFileAsync(string fileId)
     {
         _loading = true;
+        _reloadQueued = false;
         _missing = false;
-        await RevokeUrlAsync();
-        _loadedFileId = fileId;
+        try
+        {
+            await RevokeUrlAsync();
+            _loadedFileId = fileId;
 
-        var url = await Host.ResolveFileObjectUrlAsync(fileId, Block.Mime ?? "application/octet-stream");
-        if (url is null)
+            var url = await Host.ResolveFileObjectUrlAsync(fileId, Block.Mime ?? "application/octet-stream");
+            if (url is null)
+                _missing = true;
+            else
+                _objectUrl = url;
+        }
+        catch
+        {
             _missing = true;
-        else
-            _objectUrl = url;
+        }
+        finally
+        {
+            _loading = false;
+        }
 
-        _loading = false;
+        if (_reloadQueued && _objectUrl is null)
+            await LoadFileAsync(fileId);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)

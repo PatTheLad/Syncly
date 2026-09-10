@@ -439,11 +439,18 @@
         if (chain is null || blobs is null)
             return null;
 
-        var plain = await blobs.TryGetPlainAsync(fileId, chain);
-        if (plain is null)
-            return null;
+        try
+        {
+            var plain = await blobs.TryGetPlainAsync(fileId, chain);
+            if (plain is null)
+                return null;
 
-        return await Js.InvokeAsync<string>("syncly.createObjectUrl", plain, mime);
+            return await Js.InvokeAsync<string>("syncly.createObjectUrl", Convert.ToBase64String(plain), mime);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public async Task OpenAttachedFileAsync(string blockId)

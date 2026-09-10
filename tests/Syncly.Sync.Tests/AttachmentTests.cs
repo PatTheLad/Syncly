@@ -90,6 +90,20 @@ public class AttachmentTests
     }
 
     [Fact]
+    public async Task Engine_finds_file_ids_on_file_blocks()
+    {
+        await using var a = await TestNode.CreateAsync("alpha");
+        await a.AuthorAsync(x =>
+        {
+            x.CreateObject("page-1", "Shared");
+            x.UpsertBlock("page-1", "b-file", null, Crdt.FracIndex.Middle, BlockKind.File);
+            x.SetProp("page-1", "b-file", PropKeys.FileId, "fl_photo");
+        });
+
+        Assert.Equal(["fl_photo"], SyncEngine.ReferencedBlobIds(a.Replica));
+    }
+
+    [Fact]
     public async Task Attach_requires_a_sync_chain()
     {
         await using var app = await SynclyApp.StartAsync(new SynclyOptions

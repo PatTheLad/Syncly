@@ -48,6 +48,9 @@ public sealed class Workspace(
     /// <summary>Raised whenever pages or blocks changed, from either a local edit or a peer.</summary>
     public event Action? Changed;
 
+    /// <summary>Lets sync tell the UI that an attachment landed without a CRDT change.</summary>
+    public void NotifyChanged() => Changed?.Invoke();
+
     public async Task RefreshPagesAsync(CancellationToken ct = default)
     {
         _objects = await projection.ListPagesAsync(ct);

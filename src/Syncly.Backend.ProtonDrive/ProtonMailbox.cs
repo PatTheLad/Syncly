@@ -99,7 +99,8 @@ internal sealed class ProtonMailbox
     public async Task<byte[]?> ReadAsync(string name, CancellationToken ct)
     {
         await RefreshAsync(ct);
-        if (!_links.TryGetValue(name, out var linkId))
+        if (!_links.TryGetValue(name, out var linkId)
+            && !TryLinkIdByNameHash(name, out linkId))
             return null;
 
         var http = RequireHttp();
@@ -649,6 +650,20 @@ internal sealed class ProtonMailbox
         _links[name] = linkId;
         if (!string.IsNullOrWhiteSpace(hash))
             _hashes[hash] = linkId;
+    }
+
+    private bool TryLinkIdByNameHash(string name, out string linkId)
+    {
+        linkId = "";
+        if (_hashKey is null)
+            return false;
+
+        var hash = ProtonPgp.LookupHash(name, _hashKey);
+        if (!_hashes.TryGetValue(hash, out var found) || string.IsNullOrWhiteSpace(found))
+            return false;
+
+        linkId = found;
+        return true;
     }
 
     internal static List<(int Offset, int Count)> SplitFileBlocks(int length)
