@@ -6,7 +6,6 @@ public enum FilePreviewKind
     Card,
     Image,
     Video,
-    Pdf,
 }
 
 public static class FilePreview
@@ -21,10 +20,23 @@ public static class FilePreview
             return FilePreviewKind.Image;
         if (value.StartsWith("video/", StringComparison.Ordinal))
             return FilePreviewKind.Video;
-        if (value is "application/pdf")
-            return FilePreviewKind.Pdf;
 
         return FilePreviewKind.Card;
+    }
+
+    public static string CardIcon(string? mime, string? fileName)
+    {
+        var value = mime?.Trim().ToLowerInvariant() ?? "";
+        var ext = Path.GetExtension(fileName ?? "").ToLowerInvariant();
+
+        if (value is "application/pdf" || ext is ".pdf")
+            return "📄";
+        if (IsArchive(value, ext))
+            return "📦";
+        if (value.StartsWith("text/", StringComparison.Ordinal) || ext is ".txt" or ".md")
+            return "📝";
+
+        return "📎";
     }
 
     public static string GuessMime(string fileName)
@@ -46,4 +58,11 @@ public static class FilePreview
             _ => "application/octet-stream",
         };
     }
+
+    private static bool IsArchive(string mime, string ext) =>
+        mime is "application/zip"
+            or "application/x-zip-compressed"
+            or "application/x-7z-compressed"
+            or "application/vnd.rar"
+        || ext is ".zip" or ".7z" or ".rar";
 }

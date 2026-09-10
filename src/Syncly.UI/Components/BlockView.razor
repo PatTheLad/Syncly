@@ -52,14 +52,10 @@
     else if (Block.Kind == BlockKind.File)
     {
         <div class="file-block">
-            @if (_objectUrl is null && !_loading && !_missing)
-            {
-                <div class="file-pending">Loading…</div>
-            }
-            else if (_missing)
+            @if (_missing)
             {
                 <div class="file-card">
-                    <span class="file-card-icon">📎</span>
+                    <span class="file-card-icon">@FileIcon</span>
                     <div class="file-card-body">
                         <strong>@(Block.FileName ?? "Attachment")</strong>
                         <span>Waiting for file to sync…</span>
@@ -74,15 +70,14 @@
             {
                 <video class="file-media" controls src="@_objectUrl"></video>
             }
-            else if (Preview == FilePreviewKind.Pdf && _objectUrl is not null)
+            else if (NeedsInlinePreview)
             {
-                <iframe class="file-pdf" title="@(Block.FileName ?? "PDF")" src="@_objectUrl"></iframe>
-                <button type="button" class="chip muted" @onclick="() => Host.OpenAttachedFileAsync(Block.Id)">Open PDF</button>
+                <div class="file-pending">Loading…</div>
             }
             else
             {
                 <button type="button" class="file-card" @onclick="() => Host.OpenAttachedFileAsync(Block.Id)">
-                    <span class="file-card-icon">📎</span>
+                    <span class="file-card-icon">@FileIcon</span>
                     <div class="file-card-body">
                         <strong>@(Block.FileName ?? "Attachment")</strong>
                         <span>@SizeLabel · @(Block.Mime ?? "file")</span>
@@ -165,6 +160,11 @@
 
     private FilePreviewKind Preview => FilePreview.ForMime(Block.Mime);
 
+    private bool NeedsInlinePreview =>
+        Preview is FilePreviewKind.Image or FilePreviewKind.Video;
+
+    private string FileIcon => FilePreview.CardIcon(Block.Mime, Block.FileName);
+
     private string SizeLabel =>
         Block.ByteSize is { } size
             ? size >= 1024 * 1024
@@ -196,10 +196,27 @@
         _ => "Type '/' for commands",
     };
 
+    protected override void OnParametersSet()
+    {
+        if (Block.Kind != BlockKind.File || NeedsInlinePreview || Block.FileId is not { Length: > 0 } fileId)
+            return;
+
+        _loadedFileId = fileId;
+        _loading = false;
+        _missing = !Host.HasAttachedFile(fileId);
+    }
+
     protected override async Task OnParametersSetAsync()
     {
         if (Block.Kind != BlockKind.File || Block.FileId is not { Length: > 0 } fileId)
             return;
+
+        if (!NeedsInlinePreview)
+        {
+            if (_objectUrl is not null)
+                await RevokeUrlAsync();
+            return;
+        }
 
         if (_loadedFileId == fileId && _objectUrl is not null)
             return;

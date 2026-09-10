@@ -701,14 +701,6 @@ textarea {
   background: var(--bg-2);
 }
 
-.file-pdf {
-  width: 100%;
-  min-height: 420px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--bg-2);
-}
-
 .file-card {
   display: flex;
   gap: 10px;

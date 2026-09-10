@@ -10,11 +10,20 @@ public class AttachmentTests
     [Theory]
     [InlineData("image/png", FilePreviewKind.Image)]
     [InlineData("video/mp4", FilePreviewKind.Video)]
-    [InlineData("application/pdf", FilePreviewKind.Pdf)]
+    [InlineData("application/pdf", FilePreviewKind.Card)]
     [InlineData("application/zip", FilePreviewKind.Card)]
     [InlineData(null, FilePreviewKind.Card)]
     public void Preview_kind_follows_mime(string? mime, FilePreviewKind kind) =>
         Assert.Equal(kind, FilePreview.ForMime(mime));
+
+    [Theory]
+    [InlineData("application/pdf", "doc.pdf", "📄")]
+    [InlineData("application/zip", "a.zip", "📦")]
+    [InlineData("text/plain", "notes.txt", "📝")]
+    [InlineData("application/octet-stream", "blob.bin", "📎")]
+    [InlineData(null, "file.pdf", "📄")]
+    public void Card_icon_follows_mime_or_extension(string? mime, string fileName, string icon) =>
+        Assert.Equal(icon, FilePreview.CardIcon(mime, fileName));
 
     [Fact]
     public async Task BlobStore_round_trips_plaintext()

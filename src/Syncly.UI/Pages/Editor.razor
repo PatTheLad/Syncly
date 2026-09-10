@@ -453,6 +453,9 @@
         }
     }
 
+    public bool HasAttachedFile(string fileId) =>
+        State.Workspace.Blobs?.Has(fileId) == true;
+
     public async Task OpenAttachedFileAsync(string blockId)
     {
         var block = State.Workspace.Tree(PageIdOrThrow).Find(blockId);

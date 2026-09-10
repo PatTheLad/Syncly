@@ -40,6 +40,9 @@ public interface IBlockHost
     /// <summary>Decrypts an attachment and returns a blob: object URL for inline preview.</summary>
     Task<string?> ResolveFileObjectUrlAsync(string fileId, string mime);
 
+    /// <summary>True when the encrypted blob is already on disk (no decrypt).</summary>
+    bool HasAttachedFile(string fileId);
+
     /// <summary>Writes the attachment to a temp path and opens it with the OS.</summary>
     Task OpenAttachedFileAsync(string blockId);
 
