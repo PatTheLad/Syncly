@@ -98,14 +98,18 @@ internal static class ProtonPgp
     public static (string Armored, ProtonKeySet Keys) GenerateNodeKey(byte[] passphrase)
     {
         var random = new SecureRandom();
-        // Match Proton/rclone: EdDSA primary + Curve25519 ECDH encrypt subkey (gopenpgp "x25519").
-        var ed = new Ed25519KeyPairGenerator();
-        ed.Init(new Ed25519KeyGenerationParameters(random));
-        var signPair = new PgpKeyPair(PublicKeyAlgorithmTag.EdDsa_Legacy, ed.GenerateKeyPair(), DateTime.UtcNow);
+        // Proton's CreateFile verifier unlocks NodeKey with gopenpgp, then decrypts
+        // ContentKeyPacket. BouncyCastle EdDSA→X25519 rings fail that check (200501):
+        // gopenpgp drops the encryption subkey or cannot open the ECDH PKESK.
+        // RSA bindings verify. The encrypt subkey is 1024-bit so the PKESK stays
+        // ≤255 base64 characters (RSA-2048 is rejected as "too long").
+        var signRsa = new RsaKeyPairGenerator();
+        signRsa.Init(new KeyGenerationParameters(random, 2048));
+        var signPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaSign, signRsa.GenerateKeyPair(), DateTime.UtcNow);
 
-        var x25519 = new X25519KeyPairGenerator();
-        x25519.Init(new X25519KeyGenerationParameters(random));
-        var encPair = new PgpKeyPair(PublicKeyAlgorithmTag.ECDH, x25519.GenerateKeyPair(), DateTime.UtcNow);
+        var encRsa = new RsaKeyPairGenerator();
+        encRsa.Init(new KeyGenerationParameters(random, 1024));
+        var encPair = new PgpKeyPair(PublicKeyAlgorithmTag.RsaEncrypt, encRsa.GenerateKeyPair(), DateTime.UtcNow);
 
         var primaryHashed = new PgpSignatureSubpacketGenerator();
         primaryHashed.SetKeyFlags(false, PgpKeyFlags.CanCertify | PgpKeyFlags.CanSign);
@@ -115,7 +119,7 @@ internal static class ProtonPgp
         var generator = new PgpKeyRingGenerator(
             PgpSignature.PositiveCertification,
             signPair,
-            "Drive key <noreply@protonmail.com>",
+            "Drive key <no-reply@proton.me>",
             SymmetricKeyAlgorithmTag.Aes256,
             ToChars(passphrase),
             true,

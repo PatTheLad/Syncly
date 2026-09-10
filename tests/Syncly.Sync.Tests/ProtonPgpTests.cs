@@ -58,8 +58,9 @@ public class ProtonPgpTests
             Convert.FromBase64String((string)draft.Body["ContentKeyPacket"]!),
             fileKeys.EncryptionPrivate);
         Assert.Equal(draft.SessionKey, session);
-        Assert.Equal(PublicKeyAlgorithmTag.EdDsa_Legacy, fileKeys.SigningPublic.Algorithm);
-        Assert.Equal(PublicKeyAlgorithmTag.ECDH, fileKeys.EncryptionPublic.Algorithm);
+        Assert.Equal(PublicKeyAlgorithmTag.RsaSign, fileKeys.SigningPublic.Algorithm);
+        Assert.Equal(PublicKeyAlgorithmTag.RsaEncrypt, fileKeys.EncryptionPublic.Algorithm);
+        Assert.Equal(4, fileKeys.EncryptionPublic.Version);
         Assert.True(fileKeys.EncryptionPublic.IsEncryptionKey);
         Assert.InRange(((string)draft.Body["ContentKeyPacket"]!).Length, 1, 255);
     }
