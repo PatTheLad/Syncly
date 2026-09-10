@@ -372,6 +372,7 @@ internal static class ProtonPgp
                 ["MIMEType"] = "application/octet-stream",
                 ["ContentKeyPacket"] = Convert.ToBase64String(keyPacket),
                 ["ContentKeyPacketSignature"] = SignDetachedArmored(sessionKey, fileKeys),
+                ["ClientUID"] = Guid.NewGuid().ToString(),
             },
         };
     }

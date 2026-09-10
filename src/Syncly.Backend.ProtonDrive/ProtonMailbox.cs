@@ -21,6 +21,10 @@ internal sealed class ProtonMailbox
     private ProtonKeySet? _folderKeys;
     private byte[]? _hashKey;
     private readonly Dictionary<string, string> _links = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _hashes = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Proton encrypts file contents in 4 MiB plaintext blocks.</summary>
+    internal const int FileBlockBytes = 4 * 1024 * 1024;
 
     private ProtonMailbox(ProtonKeySet keys)
     {
@@ -146,20 +150,21 @@ internal sealed class ProtonMailbox
         var created = await CreateFileAsync(draft.Body, ct);
         if (created is null)
         {
-            await RefreshAsync(ct);
-            if (_links.TryGetValue(name, out existing))
-            {
-                await UploadRevisionAsync(existing, data, ct);
+            if (await TryResumeExistingAsync(name, (string)draft.Body["Hash"]!, data, ct))
                 return;
-            }
 
-            throw new ProtonDriveException("Proton Drive refused the upload. Confirm the link has Editor access.");
+            created = await CreateFileAsync(draft.Body, ct);
+            if (created is null)
+            {
+                throw new ProtonDriveException(
+                    "Proton Drive refused the upload. An incomplete file may already exist in the shared folder. Delete leftover Syncly drafts there and sync again.");
+            }
         }
 
         try
         {
             await UploadBlocksAndCommitAsync(created.Value.LinkId, created.Value.RevisionId, draft.FileKeys, draft.SessionKey, data, ct);
-            _links[name] = created.Value.LinkId;
+            RememberLink(name, (string)draft.Body["Hash"]!, created.Value.LinkId);
         }
         catch
         {
@@ -191,14 +196,14 @@ internal sealed class ProtonMailbox
             if (code is 0 or 1000 && TryReadCreatedFile(root, out var created))
                 return created;
 
-            if (code is 2500 or 2501)
+            // 2500 = name already taken (finished file or leftover draft).
+            // 2501 = not found: the volume-level route often 422s on public links;
+            // try the folder route instead of treating it as a conflict.
+            if (code is 2500)
                 return null;
 
             lastError = text;
-            if (response.IsSuccessStatusCode)
-                continue;
-
-            if ((int)response.StatusCode is 404 or 405)
+            if (response.IsSuccessStatusCode || (int)response.StatusCode is 404 or 405 or 422)
                 continue;
 
             throw new ProtonDriveException(
@@ -207,6 +212,86 @@ internal sealed class ProtonMailbox
 
         throw new ProtonDriveException(
             "Proton Drive refused the upload. Confirm the link has Editor access. " + lastError);
+    }
+
+    private async Task<bool> TryResumeExistingAsync(string name, string hash, ReadOnlyMemory<byte> data, CancellationToken ct)
+    {
+        await RefreshAsync(ct);
+        if (_links.TryGetValue(name, out var byName))
+        {
+            await UploadRevisionAsync(byName, data, ct);
+            return true;
+        }
+
+        if (_hashes.TryGetValue(hash, out var byHash))
+        {
+            await UploadRevisionAsync(byHash, data, ct);
+            RememberLink(name, hash, byHash);
+            return true;
+        }
+
+        var pending = await FindPendingAsync(hash, ct);
+        if (pending is not { } draft)
+            return false;
+
+        var node = await FetchLinkBundleAsync(draft.LinkId, ct);
+        if (!TryUnlockFile(node, out var fileKeys, out var sessionKey))
+        {
+            await TryDeleteLinkAsync(draft.LinkId, ct);
+            return false;
+        }
+
+        var revisionId = draft.RevisionId ?? ReadActiveRevisionId(node);
+        if (string.IsNullOrWhiteSpace(revisionId))
+        {
+            await UploadRevisionAsync(draft.LinkId, data, ct);
+            RememberLink(name, hash, draft.LinkId);
+            return true;
+        }
+
+        try
+        {
+            await UploadBlocksAndCommitAsync(draft.LinkId, revisionId, fileKeys, sessionKey, data, ct);
+            RememberLink(name, hash, draft.LinkId);
+            return true;
+        }
+        catch
+        {
+            await TryDeleteLinkAsync(draft.LinkId, ct);
+            return false;
+        }
+    }
+
+    private async Task<(string LinkId, string? RevisionId)?> FindPendingAsync(string hash, CancellationToken ct)
+    {
+        var http = RequireHttp();
+        using var response = await http.PostAsJsonAsync(
+            ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/links/{_rootLinkId}/checkAvailableHashes"),
+            new Dictionary<string, object?> { ["Hashes"] = new[] { hash } },
+            ProtonDriveBackend.ApiJson,
+            ct);
+        if (!response.IsSuccessStatusCode)
+            return null;
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        if (!doc.RootElement.TryGetProperty("PendingHashes", out var pending)
+            || pending.ValueKind != JsonValueKind.Array)
+            return null;
+
+        foreach (var item in pending.EnumerateArray())
+        {
+            var itemHash = ReadString(item, "Hash");
+            var linkId = ReadString(item, "LinkID") ?? ReadString(item, "LinkId");
+            if (string.IsNullOrWhiteSpace(linkId))
+                continue;
+            if (!string.IsNullOrWhiteSpace(itemHash)
+                && !string.Equals(itemHash, hash, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            return (linkId, ReadString(item, "RevisionID") ?? ReadString(item, "RevisionId"));
+        }
+
+        return null;
     }
 
     private async Task UploadRevisionAsync(string linkId, ReadOnlyMemory<byte> data, CancellationToken ct)
@@ -246,27 +331,41 @@ internal sealed class ProtonMailbox
     {
         var http = RequireHttp();
         var plaintext = data.ToArray();
-        var encrypted = ProtonPgp.EncryptWithSessionKey(plaintext, sessionKey);
-        var hash = Convert.ToBase64String(SHA256.HashData(encrypted));
-        var encSignature = ProtonPgp.EncryptToKey(ProtonPgp.SignDetached(plaintext, fileKeys), fileKeys.EncryptionPublic);
-        var verifier = await TryVerificationTokenAsync(linkId, revisionId, encrypted, ct);
+        var slices = SplitFileBlocks(plaintext.Length);
+        var prepared = new List<(int Index, byte[] Encrypted, byte[] Digest, Dictionary<string, object?> Body)>(slices.Count);
+        var verificationCode = await TryVerificationCodeAsync(linkId, revisionId, ct);
 
-        var block = new Dictionary<string, object?>
+        for (var i = 0; i < slices.Count; i++)
         {
-            ["Index"] = 1,
-            ["Size"] = encrypted.Length,
-            ["Hash"] = hash,
-            ["EncSignature"] = encSignature,
-        };
-        if (verifier is not null)
-            block["Verifier"] = new Dictionary<string, object?> { ["Token"] = Convert.ToBase64String(verifier) };
+            var (offset, count) = slices[i];
+            var chunk = count == 0 ? [] : plaintext.AsSpan(offset, count).ToArray();
+            var encrypted = ProtonPgp.EncryptWithSessionKey(chunk, sessionKey);
+            var digest = SHA256.HashData(encrypted);
+            var index = i + 1;
+            var block = new Dictionary<string, object?>
+            {
+                ["Index"] = index,
+                ["Size"] = encrypted.Length,
+                ["Hash"] = Convert.ToBase64String(digest),
+                ["EncSignature"] = ProtonPgp.EncryptToKey(ProtonPgp.SignDetached(chunk, fileKeys), fileKeys.EncryptionPublic),
+            };
+            if (verificationCode is not null)
+            {
+                block["Verifier"] = new Dictionary<string, object?>
+                {
+                    ["Token"] = Convert.ToBase64String(ProtonPgp.VerificationToken(verificationCode, encrypted)),
+                };
+            }
+
+            prepared.Add((index, encrypted, digest, block));
+        }
 
         var request = new Dictionary<string, object?>
         {
             ["VolumeID"] = _volumeId,
             ["LinkID"] = linkId,
             ["RevisionID"] = revisionId,
-            ["BlockList"] = new object[] { block },
+            ["BlockList"] = prepared.Select(b => b.Body).ToArray(),
             ["ThumbnailList"] = Array.Empty<object>(),
         };
 
@@ -274,19 +373,27 @@ internal sealed class ProtonMailbox
             ProtonDriveBackend.DataPath("blocks"), request, ProtonDriveBackend.ApiJson, ct);
         var prepareText = await prepare.Content.ReadAsStringAsync(ct);
         using var prepareDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(prepareText) ? "{}" : prepareText);
-        if (!TryReadUploadTarget(prepareDoc.RootElement, out var bareUrl, out var token))
+        if (!TryReadUploadTargets(prepareDoc.RootElement, prepared.Count, out var targets))
             throw new ProtonDriveException("Proton Drive did not accept the file block. " + prepareText);
 
-        await UploadBlockBytesAsync(http, bareUrl, token, encrypted, ct);
+        foreach (var block in prepared)
+        {
+            if (!targets.TryGetValue(block.Index, out var target))
+                throw new ProtonDriveException("Proton Drive did not accept the file block. " + prepareText);
 
+            await UploadBlockBytesAsync(http, target.Url, target.Token, block.Encrypted, ct);
+        }
+
+        var manifest = prepared.SelectMany(b => b.Digest).ToArray();
         var commit = new Dictionary<string, object?>
         {
             ["State"] = 1,
-            ["ManifestSignature"] = ProtonPgp.SignDetachedArmored(SHA256.HashData(encrypted), fileKeys),
-            ["BlockList"] = new object[]
+            ["ManifestSignature"] = ProtonPgp.SignDetachedArmored(manifest, fileKeys),
+            ["BlockList"] = prepared.Select(b => new Dictionary<string, object?>
             {
-                new Dictionary<string, object?> { ["Index"] = 1, ["Token"] = token },
-            },
+                ["Index"] = b.Index,
+                ["Token"] = targets[b.Index].Token,
+            }).ToArray(),
         };
 
         using var sealedRevision = await http.PutAsJsonAsync(
@@ -301,10 +408,9 @@ internal sealed class ProtonMailbox
         }
     }
 
-    private async Task<byte[]?> TryVerificationTokenAsync(
+    private async Task<byte[]?> TryVerificationCodeAsync(
         string linkId,
         string revisionId,
-        byte[] encrypted,
         CancellationToken ct)
     {
         var http = RequireHttp();
@@ -324,7 +430,7 @@ internal sealed class ProtonMailbox
 
         try
         {
-            return ProtonPgp.VerificationToken(Convert.FromBase64String(raw), encrypted);
+            return Convert.FromBase64String(raw);
         }
         catch (FormatException)
         {
@@ -512,7 +618,10 @@ internal sealed class ProtonMailbox
     private void ApplyLinks(JsonElement root, bool clear = true)
     {
         if (clear)
+        {
             _links.Clear();
+            _hashes.Clear();
+        }
 
         foreach (var link in EnumerateLinks(root))
         {
@@ -523,12 +632,38 @@ internal sealed class ProtonMailbox
             if (string.IsNullOrWhiteSpace(id))
                 continue;
 
+            var hash = ReadString(link, "Hash");
+            if (!string.IsNullOrWhiteSpace(hash))
+                _hashes[hash] = id;
+
             var name = DecryptName(link);
             if (name is null)
                 continue;
 
             _links[name] = id;
         }
+    }
+
+    private void RememberLink(string name, string hash, string linkId)
+    {
+        _links[name] = linkId;
+        if (!string.IsNullOrWhiteSpace(hash))
+            _hashes[hash] = linkId;
+    }
+
+    internal static List<(int Offset, int Count)> SplitFileBlocks(int length)
+    {
+        var blocks = new List<(int Offset, int Count)>();
+        if (length <= 0)
+        {
+            blocks.Add((0, 0));
+            return blocks;
+        }
+
+        for (var offset = 0; offset < length; offset += FileBlockBytes)
+            blocks.Add((offset, Math.Min(FileBlockBytes, length - offset)));
+
+        return blocks;
     }
 
     private static bool HasLinkObjects(JsonElement root) =>
@@ -836,22 +971,32 @@ internal sealed class ProtonMailbox
         return !string.IsNullOrWhiteSpace(revisionId);
     }
 
-    private static bool TryReadUploadTarget(JsonElement root, out string bareUrl, out string token)
+    private static bool TryReadUploadTargets(
+        JsonElement root,
+        int expected,
+        out Dictionary<int, (string Url, string Token)> targets)
     {
-        bareUrl = "";
-        token = "";
+        targets = new Dictionary<int, (string Url, string Token)>();
         if (!root.TryGetProperty("UploadLinks", out var links) || links.ValueKind != JsonValueKind.Array)
             return false;
 
+        var order = 0;
         foreach (var link in links.EnumerateArray())
         {
-            bareUrl = ReadString(link, "BareURL") ?? ReadString(link, "BareUrl") ?? "";
-            token = ReadString(link, "Token") ?? "";
-            if (!string.IsNullOrWhiteSpace(bareUrl) && !string.IsNullOrWhiteSpace(token))
-                return true;
+            order++;
+            var url = ReadString(link, "BareURL") ?? ReadString(link, "BareUrl") ?? "";
+            var token = ReadString(link, "Token") ?? "";
+            if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(token))
+                continue;
+
+            var index = order;
+            if (link.TryGetProperty("Index", out var indexEl) && indexEl.TryGetInt32(out var parsed) && parsed > 0)
+                index = parsed;
+
+            targets[index] = (url, token);
         }
 
-        return false;
+        return targets.Count >= expected;
     }
 
     private static int ReadCode(JsonElement root) =>

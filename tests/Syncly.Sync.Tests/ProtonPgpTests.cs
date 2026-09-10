@@ -38,7 +38,7 @@ public class ProtonPgpTests
         foreach (var key in new[]
                  {
                      "Name", "Hash", "ParentLinkID", "NodePassphrase", "NodePassphraseSignature",
-                     "NodeKey", "MIMEType", "ContentKeyPacket", "ContentKeyPacketSignature",
+                     "NodeKey", "MIMEType", "ContentKeyPacket", "ContentKeyPacketSignature", "ClientUID",
                  })
         {
             Assert.True(draft.Body.ContainsKey(key), key);
@@ -87,12 +87,16 @@ public class ProtonPgpTests
     }
 
     [Fact]
-    public void Session_key_roundtrips_a_file_block()
+    public void Session_key_roundtrips_chunked_blocks()
     {
         var key = ProtonPgp.GenerateSessionKey();
-        var plain = "syncly mailbox blob"u8.ToArray();
-        var cipher = ProtonPgp.EncryptWithSessionKey(plain, key);
-        Assert.Equal(plain, ProtonPgp.DecryptWithSessionKey(cipher, key));
+        var plain = Enumerable.Range(0, 100_000).Select(i => (byte)i).ToArray();
+        var first = ProtonPgp.EncryptWithSessionKey(plain.AsSpan(0, 60_000).ToArray(), key);
+        var second = ProtonPgp.EncryptWithSessionKey(plain.AsSpan(60_000).ToArray(), key);
+        var restored = ProtonPgp.DecryptWithSessionKey(first, key)
+            .Concat(ProtonPgp.DecryptWithSessionKey(second, key))
+            .ToArray();
+        Assert.Equal(plain, restored);
     }
 
     [Fact]

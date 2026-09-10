@@ -107,4 +107,14 @@ public class ProtonShareUrlTests
         Assert.Contains("\"LinkIDs\"", json);
         Assert.DoesNotContain("\"linkIDs\"", json);
     }
+
+    [Fact]
+    public void File_blocks_split_on_proton_s_4_mib_boundary()
+    {
+        Assert.Equal([(0, 0)], ProtonMailbox.SplitFileBlocks(0));
+        Assert.Equal([(0, 100)], ProtonMailbox.SplitFileBlocks(100));
+        Assert.Equal(
+            [(0, ProtonMailbox.FileBlockBytes), (ProtonMailbox.FileBlockBytes, 1)],
+            ProtonMailbox.SplitFileBlocks(ProtonMailbox.FileBlockBytes + 1));
+    }
 }
