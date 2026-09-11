@@ -91,11 +91,12 @@ public sealed class ProjectionStore(SynclyDatabase database)
         link.CommandText =
             """
             INSERT INTO links (source_object, source_block, target_key, target_object, label)
-            VALUES ($object, $block, $key, NULL, $label)
+            VALUES ($object, $block, $key, $target, $label)
             """;
         var linkObject = link.Parameters.Add("$object", SqliteType.Text);
         var linkBlock = link.Parameters.Add("$block", SqliteType.Text);
         var linkKey = link.Parameters.Add("$key", SqliteType.Text);
+        var linkTarget = link.Parameters.Add("$target", SqliteType.Text);
         var linkLabel = link.Parameters.Add("$label", SqliteType.Text);
         linkObject.Value = snapshot.Id;
 
@@ -125,7 +126,17 @@ public sealed class ProjectionStore(SynclyDatabase database)
             {
                 linkBlock.Value = node.Id;
                 linkKey.Value = Wikilinks.Key(wikilink.Target);
+                linkTarget.Value = DBNull.Value;
                 linkLabel.Value = (object?)wikilink.Label ?? DBNull.Value;
+                await link.ExecuteNonQueryAsync(ct);
+            }
+
+            if (node.Kind == BlockKind.PageLink && node.Target is { Length: > 0 } target)
+            {
+                linkBlock.Value = node.Id;
+                linkKey.Value = Wikilinks.Key(string.IsNullOrWhiteSpace(node.Text) ? target : node.Text);
+                linkTarget.Value = target;
+                linkLabel.Value = string.IsNullOrWhiteSpace(node.Text) ? DBNull.Value : node.Text;
                 await link.ExecuteNonQueryAsync(ct);
             }
         }
@@ -215,8 +226,12 @@ public sealed class ProjectionStore(SynclyDatabase database)
         }, ct);
     }
 
-    /// <summary>Pages whose text links to <paramref name="title"/>.</summary>
+    /// <summary>Pages whose text or PageLink cards point at this page.</summary>
+    public Task<List<Backlink>> BacklinksAsync(string title, CancellationToken ct = default) =>
+        BacklinksAsync(null, title, ct);
+
     public async Task<List<Backlink>> BacklinksAsync(
+        string? pageId,
         string title,
         CancellationToken ct = default) =>
         await database.RunAsync(async connection =>
@@ -228,10 +243,12 @@ public sealed class ProjectionStore(SynclyDatabase database)
                 FROM links l
                 JOIN objects o ON o.id = l.source_object
                 LEFT JOIN blocks b ON b.id = l.source_block
-                WHERE l.target_key = $key AND o.deleted = 0
+                WHERE o.deleted = 0
+                  AND (l.target_key = $key OR ($id IS NOT NULL AND l.target_object = $id))
                 ORDER BY o.title
                 """;
             command.Parameters.AddWithValue("$key", Wikilinks.Key(title));
+            command.Parameters.AddWithValue("$id", (object?)pageId ?? DBNull.Value);
 
             var links = new List<Backlink>();
             await using var reader = await command.ExecuteReaderAsync(ct);
@@ -254,7 +271,8 @@ public sealed class ProjectionStore(SynclyDatabase database)
                 """
                 SELECT DISTINCT l.target_key
                 FROM links l
-                WHERE NOT EXISTS (
+                WHERE l.target_object IS NULL
+                  AND NOT EXISTS (
                     SELECT 1 FROM objects o
                     WHERE o.deleted = 0 AND lower(trim(o.title)) = l.target_key
                 )

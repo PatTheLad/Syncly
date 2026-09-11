@@ -591,9 +591,12 @@ public sealed class Workspace(
         if (string.IsNullOrWhiteSpace(title))
             return [];
 
-        var links = await projection.BacklinksAsync(title, ct);
+        var links = await projection.BacklinksAsync(pageId, title, ct);
         return links.Where(l => l.ObjectId != pageId).ToList();
     }
+
+    public Task<List<string>> UnresolvedLinksAsync(CancellationToken ct = default) =>
+        projection.UnresolvedLinksAsync(ct);
 
     // ------------------------------------------------------------- plumbing
 

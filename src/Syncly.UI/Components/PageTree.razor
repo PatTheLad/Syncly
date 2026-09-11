@@ -1,10 +1,12 @@
 @namespace Syncly.UI.Components
 @inject EditorState State
+@inject IJSRuntime Js
 
 @foreach (var (page, depth, childCount) in VisibleRows())
 {
     var id = page.Id;
     var expanded = State.IsPageExpanded(id);
+    var renaming = _renamingId == id;
 
     <div @key="id"
          class="tree-row @(id == SelectedId ? "selected" : null)"
@@ -18,11 +20,29 @@
                 @onclick="() => State.TogglePageExpanded(id)">
             @(childCount > 0 ? "▶" : "")
         </button>
-        @if (!string.IsNullOrEmpty(page.Icon))
+        @if (!string.IsNullOrEmpty(page.Icon) && !renaming)
         {
             <span class="tree-icon" aria-hidden="true">@(page.Icon)</span>
         }
-        <span class="tree-label">@(page.DisplayTitle)</span>
+        @if (renaming)
+        {
+            <input id="tree-rename"
+                   class="tree-rename"
+                   value="@_renameDraft"
+                   @onclick:stopPropagation="true"
+                   @oninput="OnRenameInput"
+                   @onkeydown="OnRenameKey"
+                   @onblur="CommitRenameAsync" />
+        }
+        else
+        {
+            <span class="tree-label">@(page.DisplayTitle)</span>
+        }
+        <button type="button"
+                class="tree-menu"
+                title="Page actions"
+                @onclick:stopPropagation="true"
+                @onclick="() => OpenMenu(id)">⋮</button>
         <button type="button"
                 class="tree-add"
                 title="New sub-page"
@@ -31,7 +51,31 @@
     </div>
 }
 
+@if (_menuPageId is not null)
+{
+    <Palette Items="MenuItems()"
+             Placeholder="Page actions"
+             InputId="tree-page-menu"
+             EmptyText="No actions"
+             OnClose="CloseMenu" />
+}
+
+@if (_movingId is not null)
+{
+    <Palette Items="MoveItems()"
+             Placeholder="Move under…"
+             InputId="tree-move-menu"
+             EmptyText="No pages"
+             OnClose="() => _movingId = null" />
+}
+
 @code {
+    private string? _menuPageId;
+    private string? _movingId;
+    private string? _renamingId;
+    private string _renameDraft = "";
+    private bool _focusRename;
+
     [Parameter, EditorRequired]
     public required Workspace Workspace { get; set; }
 
@@ -46,6 +90,21 @@
 
     [Parameter]
     public EventCallback<string> OnAddChild { get; set; }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusRename)
+            return;
+
+        _focusRename = false;
+        try
+        {
+            await Js.InvokeVoidAsync("syncly.focusElement", "tree-rename", true);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
 
     private IEnumerable<(PageRef Page, int Depth, int ChildCount)> VisibleRows()
     {
@@ -71,5 +130,139 @@
     {
         State.ExpandPage(pageId);
         await OnAddChild.InvokeAsync(pageId);
+    }
+
+    private void OpenMenu(string pageId)
+    {
+        _movingId = null;
+        _menuPageId = pageId;
+    }
+
+    private Task CloseMenu()
+    {
+        _menuPageId = null;
+        return Task.CompletedTask;
+    }
+
+    private IReadOnlyList<Palette.PaletteItem> MenuItems()
+    {
+        var pageId = _menuPageId;
+        if (pageId is null)
+            return [];
+
+        return
+        [
+            new("✎", "Rename", null, () => StartRenameAsync(pageId)),
+            new("↗", "Move to…", null, () => StartMoveAsync(pageId)),
+            new("✕", "Delete", null, () => DeleteAsync(pageId)),
+        ];
+    }
+
+    private IReadOnlyList<Palette.PaletteItem> MoveItems()
+    {
+        var pageId = _movingId;
+        if (pageId is null)
+            return [];
+
+        var blocked = DescendantsAndSelf(pageId).ToHashSet(StringComparer.Ordinal);
+        var items = new List<Palette.PaletteItem>
+        {
+            new("⌂", "Top level", null, () => MoveAsync(pageId, null)),
+        };
+
+        items.AddRange(Workspace.PagesIn(State.CurrentSpaceId)
+            .Where(p => !blocked.Contains(p.Id))
+            .Select(p => new Palette.PaletteItem(
+                p.Icon is { Length: > 0 } icon ? icon : "◻",
+                p.DisplayTitle,
+                "Page",
+                () => MoveAsync(pageId, p.Id))));
+
+        return items;
+    }
+
+    private IEnumerable<string> DescendantsAndSelf(string pageId)
+    {
+        yield return pageId;
+        foreach (var child in Workspace.ChildrenOf(pageId))
+        {
+            foreach (var nested in DescendantsAndSelf(child.Id))
+                yield return nested;
+        }
+    }
+
+    private Task StartRenameAsync(string pageId)
+    {
+        _menuPageId = null;
+        var page = Workspace.Page(pageId);
+        _renamingId = pageId;
+        _renameDraft = page?.Title ?? "";
+        _focusRename = true;
+        return Task.CompletedTask;
+    }
+
+    private void OnRenameInput(ChangeEventArgs args) =>
+        _renameDraft = args.Value?.ToString() ?? "";
+
+    private async Task OnRenameKey(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter")
+        {
+            await CommitRenameAsync();
+            return;
+        }
+
+        if (args.Key == "Escape")
+            _renamingId = null;
+    }
+
+    private async Task CommitRenameAsync()
+    {
+        var pageId = _renamingId;
+        if (pageId is null)
+            return;
+
+        _renamingId = null;
+        await Workspace.RenamePageAsync(pageId, _renameDraft.Trim());
+    }
+
+    private Task StartMoveAsync(string pageId)
+    {
+        _menuPageId = null;
+        _movingId = pageId;
+        return Task.CompletedTask;
+    }
+
+    private async Task MoveAsync(string pageId, string? parentId)
+    {
+        _movingId = null;
+        await Workspace.MovePageAsync(pageId, parentId);
+        if (parentId is not null)
+            State.ExpandPage(parentId);
+    }
+
+    private async Task DeleteAsync(string pageId)
+    {
+        _menuPageId = null;
+        var title = Workspace.Page(pageId)?.DisplayTitle ?? "this page";
+        if (!await Js.InvokeAsync<bool>("syncly.confirm",
+                $"Delete “{title}”? The page is removed on every device after the next sync."))
+            return;
+
+        var wasOpen = State.CurrentPageId == pageId;
+        await Workspace.DeletePageAsync(pageId);
+
+        if (!wasOpen)
+            return;
+
+        if (State.CanGoBack)
+        {
+            State.Back();
+            return;
+        }
+
+        var next = Workspace.PagesIn(State.CurrentSpaceId).FirstOrDefault()?.Id;
+        if (next is not null)
+            State.Open(next);
     }
 }

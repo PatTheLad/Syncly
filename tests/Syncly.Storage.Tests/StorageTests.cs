@@ -219,6 +219,35 @@ public class StorageTests
     }
 
     [Fact]
+    public async Task PageLink_blocks_become_backlinks()
+    {
+        await using var temp = await TempDatabase.CreateAsync();
+        var projection = new ProjectionStore(temp.Database);
+        var replica = new Replica("dev00");
+
+        replica.Author(a =>
+        {
+            a.CreateObject("src", "Notes");
+            a.CreateObject("dst", "Destination");
+            a.UpsertBlock("src", "pl", null, FracIndex.Middle, BlockKind.PageLink);
+            a.SetProp("src", "pl", PropKeys.Target, "dst");
+            a.InsertText("src", "pl", 0, "Card label");
+        });
+
+        await projection.WriteAsync(replica.Snapshot("src"));
+        await projection.WriteAsync(replica.Snapshot("dst"));
+
+        var byId = await projection.BacklinksAsync("dst", "Destination");
+        Assert.Single(byId);
+        Assert.Equal("src", byId[0].ObjectId);
+        Assert.Equal("pl", byId[0].BlockId);
+        Assert.Equal("Card label", byId[0].Text);
+
+        Assert.DoesNotContain("card label", await projection.UnresolvedLinksAsync());
+        Assert.DoesNotContain("dst", await projection.UnresolvedLinksAsync());
+    }
+
+    [Fact]
     public async Task Peer_state_survives_a_roundtrip_and_reveals_the_stable_version()
     {
         await using var temp = await TempDatabase.CreateAsync();

@@ -139,6 +139,7 @@
     private string _query = string.Empty;
     private List<SearchHit>? _hits;
     private bool _paletteFlag;
+    private List<string> _unresolved = [];
 
     protected override void OnInitialized()
     {
@@ -175,7 +176,19 @@
         }
     }
 
-    private void Refresh() => InvokeAsync(StateHasChanged);
+    private void Refresh() => InvokeAsync(async () =>
+    {
+        try
+        {
+            _unresolved = await State.Workspace.UnresolvedLinksAsync();
+        }
+        catch
+        {
+            _unresolved = [];
+        }
+
+        StateHasChanged();
+    });
 
     private bool IsAt(string path) =>
         Nav.ToBaseRelativePath(Nav.Uri).TrimEnd('/').Equals(path, StringComparison.OrdinalIgnoreCase);
@@ -290,6 +303,17 @@
                 return Task.CompletedTask;
             }),
         };
+
+        items.AddRange(_unresolved.Take(20).Select(title =>
+            new Palette.PaletteItem(
+                "?",
+                title,
+                "Missing page",
+                async () =>
+                {
+                    var pageId = await State.Workspace.EnsurePageByTitleAsync(title);
+                    Open(pageId);
+                })));
 
         items.AddRange(State.Workspace.PagesIn(State.CurrentSpaceId).Select(page =>
             new Palette.PaletteItem(

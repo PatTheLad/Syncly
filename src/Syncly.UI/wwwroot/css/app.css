@@ -317,7 +317,8 @@ textarea {
   text-align: center;
 }
 
-.tree-add {
+.tree-add,
+.tree-menu {
   width: 22px;
   height: 22px;
   font-size: 14px;
@@ -326,12 +327,26 @@ textarea {
   opacity: 0;
 }
 
-.tree-row:hover .tree-add {
+.tree-row:hover .tree-add,
+.tree-row:hover .tree-menu {
   opacity: 1;
 }
 
-.tree-add:hover {
+.tree-add:hover,
+.tree-menu:hover {
   color: var(--ink-0);
+}
+
+.tree-rename {
+  flex: 1;
+  min-width: 0;
+  padding: 1px 4px;
+  font-size: 14px;
+  color: var(--ink-0);
+  background: var(--bg-0);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
 }
 
 .tree-empty {
@@ -1661,7 +1676,8 @@ html.phone .sidebar-scrim {
   background: rgb(0 0 0 / 45%);
 }
 
-html.phone .tree-add {
+html.phone .tree-add,
+html.phone .tree-menu {
   opacity: 1;
 }
 
