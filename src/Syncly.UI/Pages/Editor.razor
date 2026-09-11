@@ -60,7 +60,7 @@
             }
             else
             {
-                <div class="editor-inner">
+                <div id="syncly-editor-drop" class="editor-inner @(State.ReadingMode ? null : "can-drop")">
                     <div class="page-heading">
                         <button type="button"
                                 class="page-icon-btn @(_page.Icon is { Length: > 0 } ? null : "empty")"
@@ -97,10 +97,11 @@
                     {
                         <div class="row">
                             <button class="chip muted" @onclick="AppendBlockAsync">+ Add block</button>
-                            <button class="chip muted" @onclick="TriggerAttachAsync">Attach file</button>
+                            <button class="chip muted" @onclick="TriggerAttachButtonAsync">Attach file</button>
                             <InputFile id="syncly-attach"
                                        class="visually-hidden"
                                        OnChange="OnAttachInputAsync"
+                                       multiple
                                        accept="image/*,video/*,application/pdf,*/*" />
                         </div>
                     }
@@ -166,7 +167,7 @@
 @if (_slashBlockId is not null)
 {
     <Palette Items="BlockTypeItems()"
-             Placeholder="Turn into…"
+             Placeholder="Block actions"
              InputId="slash-menu"
              EmptyText="No block type matches"
              OnClose="CloseSlashAsync" />
@@ -192,9 +193,11 @@
     private string? _slashBlockId;
     private bool _iconPickerOpen;
     private string? _attachAfterBlockId;
+    private string? _replaceBlockId;
     private string _saveHint = "Saved";
     private (string BlockId, int Caret)? _focusRequest;
     private string? _loadedPageId;
+    private DotNetObjectReference<Editor>? _jsSelf;
 
     [Parameter]
     public string? PageId { get; set; }
@@ -258,6 +261,10 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        _jsSelf ??= DotNetObjectReference.Create(this);
+        if (_page is not null)
+            await Js.InvokeVoidAsync("syncly.attachDropTarget", "syncly-editor-drop", "syncly-attach", _jsSelf);
+
         if (_focusRequest is { } request)
         {
             _focusRequest = null;
@@ -473,6 +480,21 @@
         await Files.OpenAsync(block.FileName ?? "attachment", block.Mime ?? "application/octet-stream", plain);
     }
 
+    public Task PrepareAttachAfterAsync(string? blockId)
+    {
+        _attachAfterBlockId = blockId;
+        _replaceBlockId = null;
+        return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public Task OnDropFiles()
+    {
+        _attachAfterBlockId = null;
+        _replaceBlockId = null;
+        return Task.CompletedTask;
+    }
+
     public Task EditAtAsync(string blockId) => FocusBlockAsync(blockId, -1);
 
     public string? ResolveLink(string title) => State.Workspace.ResolvePageByTitle(title);
@@ -670,6 +692,7 @@
         if (blockId is null)
             return [];
 
+        var current = State.Workspace.Tree(PageIdOrThrow).Find(blockId);
         BlockKind[] kinds =
         [
             BlockKind.Paragraph, BlockKind.Heading1, BlockKind.Heading2, BlockKind.Heading3,
@@ -677,11 +700,31 @@
             BlockKind.Code, BlockKind.Divider, BlockKind.PageLink, BlockKind.File,
         ];
 
-        return kinds.Select(kind => new Palette.PaletteItem(
-            Glyph(kind),
-            kind.Label(),
+        var items = kinds
+            .Where(kind => current?.Kind != BlockKind.File || kind != BlockKind.File)
+            .Select(kind => new Palette.PaletteItem(
+                Glyph(kind),
+                kind.Label(),
+                null,
+                () => TurnIntoAsync(blockId, kind)))
+            .ToList();
+
+        if (current?.Kind == BlockKind.File)
+        {
+            items.Insert(0, new Palette.PaletteItem(
+                "↺",
+                "Replace file",
+                null,
+                () => ReplaceFromMenuAsync(blockId)));
+        }
+
+        items.Add(new Palette.PaletteItem(
+            "✕",
+            "Delete",
             null,
-            () => TurnIntoAsync(blockId, kind))).ToList();
+            () => DeleteFromMenuAsync(blockId)));
+
+        return items;
     }
 
     private static string Glyph(BlockKind kind) => kind switch
@@ -809,6 +852,27 @@
         await FocusBlockAsync(blockId, 0);
     }
 
+    private async Task TriggerAttachButtonAsync()
+    {
+        _replaceBlockId = null;
+        await TriggerAttachAsync();
+    }
+
+    private async Task ReplaceFromMenuAsync(string blockId)
+    {
+        _slashBlockId = null;
+        _attachAfterBlockId = null;
+        _replaceBlockId = blockId;
+        await TriggerAttachAsync();
+    }
+
+    private async Task DeleteFromMenuAsync(string blockId)
+    {
+        _slashBlockId = null;
+        await FlushAsync();
+        await State.Workspace.DeleteBlockAsync(PageIdOrThrow, blockId);
+    }
+
     private async Task TriggerAttachAsync()
     {
         try
@@ -816,7 +880,15 @@
             await using var picked = await Files.PickAsync();
             if (picked is not null)
             {
-                await AttachStreamAsync(picked.Content, picked.FileName, picked.MimeType);
+                if (_replaceBlockId is { } replaceId)
+                {
+                    _replaceBlockId = null;
+                    await ReplaceStreamAsync(picked.Content, picked.FileName, picked.MimeType, replaceId);
+                }
+                else
+                {
+                    await AttachStreamAsync(picked.Content, picked.FileName, picked.MimeType);
+                }
                 return;
             }
         }
@@ -831,41 +903,89 @@
 
     private async Task OnAttachInputAsync(InputFileChangeEventArgs args)
     {
-        var file = args.File;
-        if (file is null)
+        var files = args.GetMultipleFiles(10);
+        if (files.Count == 0)
             return;
+
+        var replaceId = _replaceBlockId;
+        var after = _attachAfterBlockId;
+        _replaceBlockId = null;
+        _attachAfterBlockId = null;
 
         try
         {
-            if (file.Size > BlobStore.MaxBytes)
+            foreach (var file in files)
             {
-                _saveHint = $"Files larger than {BlobStore.MaxBytes / (1024 * 1024)} MB cannot be attached yet.";
-                StateHasChanged();
-                return;
-            }
+                if (file.Size > BlobStore.MaxBytes)
+                {
+                    _saveHint = $"Files larger than {BlobStore.MaxBytes / (1024 * 1024)} MB cannot be attached yet.";
+                    StateHasChanged();
+                    continue;
+                }
 
-            await using var stream = file.OpenReadStream(BlobStore.MaxBytes);
-            await AttachStreamAsync(stream, file.Name, file.ContentType);
+                await using var stream = file.OpenReadStream(BlobStore.MaxBytes);
+                if (replaceId is not null)
+                {
+                    await ReplaceStreamAsync(stream, file.Name, file.ContentType, replaceId);
+                    after = replaceId;
+                    replaceId = null;
+                }
+                else
+                {
+                    after = await AttachStreamAsync(stream, file.Name, file.ContentType, after);
+                }
+            }
         }
         catch (Exception ex)
         {
             _saveHint = ex.Message;
             StateHasChanged();
         }
+
+        try
+        {
+            await Js.InvokeVoidAsync("syncly.clearInput", "syncly-attach");
+        }
+        catch (JSDisconnectedException)
+        {
+        }
     }
 
-    private async Task AttachStreamAsync(Stream stream, string fileName, string? mime)
+    private async Task<string?> AttachStreamAsync(Stream stream, string fileName, string? mime, string? after = null)
     {
         await FlushAsync();
         _saveHint = "Attaching…";
         StateHasChanged();
 
-        var after = _attachAfterBlockId;
+        after ??= _attachAfterBlockId;
         _attachAfterBlockId = null;
 
         try
         {
-            await State.Workspace.AttachFileAsync(PageIdOrThrow, stream, fileName, mime, after);
+            var blockId = await State.Workspace.AttachFileAsync(PageIdOrThrow, stream, fileName, mime, after);
+            _saveHint = "Saved";
+            if (App.Sync.IsConfigured)
+                _ = App.Sync.SyncNowAsync();
+            StateHasChanged();
+            return blockId;
+        }
+        catch (Exception ex)
+        {
+            _saveHint = ex.Message;
+            StateHasChanged();
+            return null;
+        }
+    }
+
+    private async Task ReplaceStreamAsync(Stream stream, string fileName, string? mime, string blockId)
+    {
+        await FlushAsync();
+        _saveHint = "Attaching…";
+        StateHasChanged();
+
+        try
+        {
+            await State.Workspace.ReplaceFileAsync(PageIdOrThrow, blockId, stream, fileName, mime);
             _saveHint = "Saved";
             if (App.Sync.IsConfigured)
                 _ = App.Sync.SyncNowAsync();
@@ -912,5 +1032,7 @@
 
         if (_saveTimer is not null)
             await _saveTimer.DisposeAsync();
+
+        _jsSelf?.Dispose();
     }
 }

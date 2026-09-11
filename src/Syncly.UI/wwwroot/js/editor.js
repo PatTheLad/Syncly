@@ -105,7 +105,15 @@
       dotnet.invokeMethodAsync('OnBlur', el.textContent ?? '');
     });
 
-    el.addEventListener('paste', (event) => {
+    el.addEventListener('paste', async (event) => {
+      const files = filesFrom(event.clipboardData);
+      if (files.length > 0) {
+        event.preventDefault();
+        await dotnet.invokeMethodAsync('OnPasteFiles');
+        assignInputFiles('syncly-attach', files);
+        return;
+      }
+
       // Paste as plain text; the block model has no place for foreign markup.
       event.preventDefault();
       const text = (event.clipboardData || window.clipboardData).getData('text');
@@ -247,6 +255,72 @@
 
   // -------------------------------------------------------------------- shell
 
+  function filesFrom(data) {
+    if (!data) return [];
+    if (data.files && data.files.length) return Array.from(data.files);
+    const out = [];
+    for (const item of data.items || []) {
+      if (item.kind === 'file') {
+        const file = item.getAsFile();
+        if (file) out.push(file);
+      }
+    }
+    return out;
+  }
+
+  function assignInputFiles(inputId, files) {
+    const input = element(inputId);
+    if (!input || !files.length) return false;
+    const transfer = new DataTransfer();
+    for (const file of files) transfer.items.add(file);
+    input.files = transfer.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }
+
+  function hasFiles(event) {
+    const types = event.dataTransfer && event.dataTransfer.types;
+    if (!types) return false;
+    return Array.from(types).includes('Files');
+  }
+
+  function attachDropTarget(elId, inputId, dotnet) {
+    const el = element(elId);
+    if (!el || el.dataset.synclyDrop === '1') return;
+    el.dataset.synclyDrop = '1';
+
+    el.addEventListener('dragenter', (event) => {
+      if (!el.classList.contains('can-drop') || !hasFiles(event)) return;
+      event.preventDefault();
+      el.classList.add('drop-hover');
+    });
+
+    el.addEventListener('dragover', (event) => {
+      if (!el.classList.contains('can-drop') || !hasFiles(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+    });
+
+    el.addEventListener('dragleave', (event) => {
+      if (!el.contains(event.relatedTarget)) el.classList.remove('drop-hover');
+    });
+
+    el.addEventListener('drop', async (event) => {
+      el.classList.remove('drop-hover');
+      if (!el.classList.contains('can-drop')) return;
+      const files = filesFrom(event.dataTransfer);
+      if (files.length === 0) return;
+      event.preventDefault();
+      if (dotnet) await dotnet.invokeMethodAsync('OnDropFiles');
+      assignInputFiles(inputId, files);
+    });
+  }
+
+  function clearInput(id) {
+    const el = element(id);
+    if (el) el.value = '';
+  }
+
   function attachShell(dotnet) {
     if (state.shell) return;
     state.shell = dotnet;
@@ -371,7 +445,9 @@
 
     window.syncly = {
     attachBlock,
+    attachDropTarget,
     attachShell,
+    clearInput,
     setText,
     focusBlock,
     focusElement,

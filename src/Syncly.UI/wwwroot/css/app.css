@@ -447,6 +447,12 @@ textarea {
   margin: 0 auto;
 }
 
+.editor-inner.can-drop.drop-hover {
+  border-radius: var(--radius);
+  outline: 2px dashed var(--line-strong);
+  outline-offset: 8px;
+}
+
 .page-heading {
   display: flex;
   gap: 12px;
@@ -699,6 +705,19 @@ textarea {
   border-radius: var(--radius-sm);
   border: 1px solid var(--line);
   background: var(--bg-2);
+}
+
+.file-media-btn {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+
+.file-media-btn:hover .file-media {
+  border-color: var(--line-strong);
 }
 
 .file-card {

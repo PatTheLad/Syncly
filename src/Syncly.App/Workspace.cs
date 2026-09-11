@@ -344,6 +344,47 @@ public sealed class Workspace(
         return blockId;
     }
 
+    /// <summary>
+    /// Stores a new encrypted blob and points an existing File block at it. The previous blob is
+    /// left on disk; mailbox GC is a later pass.
+    /// </summary>
+    public async Task ReplaceFileAsync(
+        string pageId,
+        string blockId,
+        Stream content,
+        string fileName,
+        string? mime = null,
+        CancellationToken ct = default)
+    {
+        if (blobs is null)
+            throw new InvalidOperationException("Attachments are not available.");
+
+        var chain = resolveChain?.Invoke()
+                    ?? throw new InvalidOperationException(
+                        "Create or join a sync chain in Settings before attaching files.");
+
+        var block = Tree(pageId).Find(blockId);
+        if (block is null || block.Kind != BlockKind.File)
+            throw new InvalidOperationException("That block is not a file.");
+
+        var fileId = NewId("fl");
+        await blobs.PutAsync(fileId, content, chain, ct);
+
+        var resolvedMime = string.IsNullOrWhiteSpace(mime)
+            ? FilePreview.GuessMime(fileName)
+            : mime.Trim();
+        var displayName = string.IsNullOrWhiteSpace(fileName) ? "Attachment" : Path.GetFileName(fileName);
+        var sizeText = blobs.LastPutBytes.ToString();
+
+        await CommitAsync(a =>
+        {
+            a.SetProp(pageId, blockId, PropKeys.FileId, fileId);
+            a.SetProp(pageId, blockId, PropKeys.Mime, resolvedMime);
+            a.SetProp(pageId, blockId, PropKeys.FileName, displayName);
+            a.SetProp(pageId, blockId, PropKeys.ByteSize, sizeText);
+        }, pageId, ct);
+    }
+
     public async Task<string> AppendBlockAsync(
         string pageId,
         BlockKind kind = BlockKind.Paragraph,

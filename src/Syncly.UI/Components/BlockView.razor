@@ -64,11 +64,17 @@
             }
             else if (Preview == FilePreviewKind.Image && _objectUrl is not null)
             {
-                <img class="file-media" src="@_objectUrl" alt="@(Block.FileName ?? "Image")" />
+                <button type="button"
+                        class="file-media-btn"
+                        title="Open @(Block.FileName ?? "image")"
+                        @onclick="() => Host.OpenAttachedFileAsync(Block.Id)">
+                    <img class="file-media" src="@_objectUrl" alt="@(Block.FileName ?? "Image")" />
+                </button>
             }
             else if (Preview == FilePreviewKind.Video && _objectUrl is not null)
             {
                 <video class="file-media" controls src="@_objectUrl"></video>
+                <button type="button" class="chip muted" @onclick="() => Host.OpenAttachedFileAsync(Block.Id)">Open</button>
             }
             else if (NeedsInlinePreview)
             {
@@ -339,6 +345,9 @@
     [JSInvokable]
     public Task OnMark(string shortcut, string text, int start, int end) =>
         Host.MarkAsync(Block.Id, shortcut, text, start, end);
+
+    [JSInvokable]
+    public Task OnPasteFiles() => Host.PrepareAttachAfterAsync(Block.Id);
 
     [JSInvokable]
     public Task OnSlash() => Host.SlashAsync(Block.Id);

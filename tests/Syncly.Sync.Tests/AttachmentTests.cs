@@ -126,4 +126,58 @@ public class AttachmentTests
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => app.Workspace.AttachFileAsync(pageId, stream, "a.bin"));
     }
+
+    [Fact]
+    public async Task Replace_file_keeps_the_block_and_swaps_the_blob()
+    {
+        await using var app = await SynclyApp.StartAsync(new SynclyOptions
+        {
+            DataDirectory = Path.Combine(Path.GetTempPath(), "syncly-replace", Guid.NewGuid().ToString("N")),
+            DisplayName = "test",
+        });
+
+        await app.Sync.CreateChainAsync();
+        var pageId = await app.Workspace.CreatePageAsync(null, "Notes");
+
+        await using (var first = new MemoryStream("one"u8.ToArray()))
+        {
+            var blockId = await app.Workspace.AttachFileAsync(pageId, first, "a.txt", "text/plain");
+            var original = app.Workspace.Tree(pageId).Find(blockId);
+            Assert.NotNull(original);
+            var oldFileId = original.FileId;
+
+            await using var second = new MemoryStream("two"u8.ToArray());
+            await app.Workspace.ReplaceFileAsync(pageId, blockId, second, "b.txt", "text/plain");
+
+            var replaced = app.Workspace.Tree(pageId).Find(blockId);
+            Assert.NotNull(replaced);
+            Assert.Equal(BlockKind.File, replaced.Kind);
+            Assert.Equal("b.txt", replaced.FileName);
+            Assert.Equal("text/plain", replaced.Mime);
+            Assert.NotEqual(oldFileId, replaced.FileId);
+
+            var plain = await app.Blobs.TryGetPlainAsync(replaced.FileId!, app.Sync.Chain!);
+            Assert.Equal("two"u8.ToArray(), plain);
+        }
+    }
+
+    [Fact]
+    public async Task Delete_block_removes_a_file_from_the_page()
+    {
+        await using var app = await SynclyApp.StartAsync(new SynclyOptions
+        {
+            DataDirectory = Path.Combine(Path.GetTempPath(), "syncly-delete-file", Guid.NewGuid().ToString("N")),
+            DisplayName = "test",
+        });
+
+        await app.Sync.CreateChainAsync();
+        var pageId = await app.Workspace.CreatePageAsync(null, "Notes");
+        await using var stream = new MemoryStream("keep"u8.ToArray());
+        var blockId = await app.Workspace.AttachFileAsync(pageId, stream, "keep.txt", "text/plain");
+
+        await app.Workspace.DeleteBlockAsync(pageId, blockId);
+
+        Assert.Null(app.Workspace.Tree(pageId).Find(blockId));
+        Assert.DoesNotContain(app.Workspace.Open(pageId).Flatten(), b => b.Id == blockId);
+    }
 }

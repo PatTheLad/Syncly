@@ -46,6 +46,9 @@ public interface IBlockHost
     /// <summary>Writes the attachment to a temp path and opens it with the OS.</summary>
     Task OpenAttachedFileAsync(string blockId);
 
+    /// <summary>Next paste/input attach is inserted after this block (null = end of page).</summary>
+    Task PrepareAttachAfterAsync(string? blockId);
+
     /// <summary>Leaves reading mode with the caret in this block.</summary>
     Task EditAtAsync(string blockId);
 
