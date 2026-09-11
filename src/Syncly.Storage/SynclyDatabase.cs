@@ -161,6 +161,7 @@ public sealed class SynclyDatabase : IAsyncDisposable
         await EnsureColumnAsync("objects", "type", "TEXT NOT NULL DEFAULT 'page'", ct);
         await EnsureColumnAsync("objects", "space_id", "TEXT NULL", ct);
         await EnsureColumnAsync("objects", "color", "TEXT NULL", ct);
+        await EnsureColumnAsync("objects", "position", "TEXT NULL", ct);
         await ExecuteAsync("CREATE INDEX IF NOT EXISTS ix_objects_space ON objects (space_id);", ct);
     }
 

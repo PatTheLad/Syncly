@@ -174,6 +174,17 @@ internal sealed class ProtonMailbox
         }
     }
 
+    public async Task DeleteAsync(string name, CancellationToken ct)
+    {
+        await RefreshAsync(ct);
+        if (!_links.TryGetValue(name, out var linkId)
+            && !TryLinkIdByNameHash(name, out linkId))
+            return;
+
+        await TryDeleteLinkAsync(linkId, ct);
+        _links.Remove(name);
+    }
+
     private async Task<(string LinkId, string RevisionId)?> CreateFileAsync(
         Dictionary<string, object?> body,
         CancellationToken ct)

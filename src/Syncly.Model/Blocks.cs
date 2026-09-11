@@ -61,6 +61,7 @@ public static class PropKeys
     public const string Mime = "mime";
     public const string FileName = "fileName";
     public const string ByteSize = "byteSize";
+    public const string Position = "position";
 }
 
 public static class ObjectTypes
@@ -116,6 +117,7 @@ public sealed class ObjectSnapshot
     public string? SpaceId { get; init; }
     public string Type { get; init; } = ObjectTypes.Page;
     public string? Color { get; init; }
+    public string? Position { get; init; }
     public bool IsDeleted { get; init; }
     public DateTimeOffset UpdatedAt { get; init; }
     public DateTimeOffset CreatedAt { get; init; }
@@ -135,7 +137,8 @@ public sealed record PageRef(
     string? ParentId,
     string? SpaceId = null,
     string Type = ObjectTypes.Page,
-    string? Color = null)
+    string? Color = null,
+    string? Position = null)
 {
     public string DisplayTitle => string.IsNullOrWhiteSpace(Title)
         ? (Type == ObjectTypes.Space ? "Untitled space" : "Untitled")

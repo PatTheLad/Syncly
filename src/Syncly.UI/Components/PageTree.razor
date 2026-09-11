@@ -13,16 +13,16 @@
     var renaming = _renamingId == id;
 
     <div @key="id"
-         class="tree-row @(id == SelectedId ? "selected" : null) @(_hoverId == id ? "drop-hover" : null)"
+         class="tree-row @(id == SelectedId ? "selected" : null) @RowDropClass(id)"
          style="padding-left: @(6 + depth * 14)px"
          draggable="@(renaming ? "false" : "true")"
          data-page="@id"
          @onclick="() => OnSelect.InvokeAsync(id)"
          @ondragstart="() => OnDragStart(id)"
-         @ondragover="() => OnRowDragOver(id)"
+         @ondragover="e => OnRowDragOver(id, e)"
          @ondragover:preventDefault
          @ondragover:stopPropagation
-         @ondrop="() => OnRowDrop(id)"
+         @ondrop="e => OnRowDrop(id, e)"
          @ondrop:preventDefault
          @ondrop:stopPropagation
          @ondragend="OnDragEnd">
@@ -92,6 +92,7 @@
     private bool _focusRename;
     private string? _dragId;
     private string? _hoverId;
+    private string? _hoverEdge;
     private bool _dropRoot;
 
     [Parameter, EditorRequired]
@@ -265,6 +266,7 @@
     {
         _dragId = null;
         _hoverId = null;
+        _hoverEdge = null;
         _dropRoot = false;
     }
 
@@ -272,21 +274,70 @@
         _dragId is { Length: > 0 } dragged
         && !DescendantsAndSelf(dragged).Contains(targetId, StringComparer.Ordinal);
 
-    private void OnRowDragOver(string targetId)
+    private string? RowDropClass(string id)
     {
-        _dropRoot = false;
-        _hoverId = CanDropOn(targetId) ? targetId : null;
+        if (_hoverId != id)
+            return null;
+
+        return _hoverEdge switch
+        {
+            "before" => "drop-before",
+            "after" => "drop-after",
+            _ => "drop-into",
+        };
     }
 
-    private async Task OnRowDrop(string targetId)
+    private async Task OnRowDragOver(string targetId, DragEventArgs e)
+    {
+        _dropRoot = false;
+        if (!CanDropOn(targetId))
+        {
+            _hoverId = null;
+            _hoverEdge = null;
+            return;
+        }
+
+        _hoverId = targetId;
+        var edge = await DropHintAsync(targetId, e);
+        if (_hoverEdge == edge)
+            return;
+
+        _hoverEdge = edge;
+    }
+
+    private async Task OnRowDrop(string targetId, DragEventArgs e)
     {
         var dragged = _dragId;
         var allowed = dragged is not null && CanDropOn(targetId);
+        var edge = allowed ? await DropHintAsync(targetId, e) : null;
         OnDragEnd();
-        if (dragged is null || !allowed)
+        if (dragged is null || !allowed || edge is null)
             return;
 
-        await MoveAsync(dragged, targetId);
+        if (edge == "into")
+        {
+            await MoveAsync(dragged, targetId);
+            return;
+        }
+
+        var parentId = Workspace.Page(targetId)?.ParentId;
+        await Workspace.MovePageAsync(dragged, parentId, targetId, after: edge == "after");
+    }
+
+    private async Task<string> DropHintAsync(string pageId, DragEventArgs e)
+    {
+        try
+        {
+            return await Js.InvokeAsync<string>("syncly.treeDropHint", pageId, e.ClientX, e.ClientY);
+        }
+        catch (JSDisconnectedException)
+        {
+            return "into";
+        }
+        catch (JSException)
+        {
+            return "into";
+        }
     }
 
     private void OnRootDragOver()
@@ -295,6 +346,7 @@
             return;
 
         _hoverId = null;
+        _hoverEdge = null;
         _dropRoot = true;
     }
 

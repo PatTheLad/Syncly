@@ -88,6 +88,7 @@ public sealed class TestNode : IAsyncDisposable
             ListLocalBlobIds = () => blobs.ListIds(),
             ReadLocalBlobSealed = (id, token) => blobs.ReadSealedAsync(id, token),
             WriteLocalBlobSealed = (id, bytes, token) => blobs.PutSealedAsync(id, bytes, token),
+            DeleteLocalBlob = id => blobs.Delete(id),
         };
 
         node.Blobs = blobs;

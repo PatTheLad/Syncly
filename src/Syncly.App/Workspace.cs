@@ -4,6 +4,7 @@ using Syncly.Crdt;
 using Syncly.Model;
 using Syncly.Security;
 using Syncly.Storage;
+using Syncly.Sync;
 
 namespace Syncly.App;
 
@@ -73,10 +74,16 @@ public sealed class Workspace(
     public IReadOnlyList<PageRef> ChildrenOf(string? parentId, string? spaceId = null)
     {
         spaceId ??= CurrentSpaceId;
-        return Pages
-            .Where(p => p.ParentId == parentId && BelongsTo(p, spaceId))
+        var siblings = Pages.Where(p => p.ParentId == parentId && BelongsTo(p, spaceId)).ToList();
+        var positioned = siblings
+            .Where(p => !string.IsNullOrEmpty(p.Position))
+            .OrderBy(p => p.Position, StringComparer.Ordinal)
+            .ThenBy(p => p.Id, StringComparer.Ordinal);
+        var unpositioned = siblings
+            .Where(p => string.IsNullOrEmpty(p.Position))
             .OrderBy(p => p.DisplayTitle, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            .ThenBy(p => p.Id, StringComparer.Ordinal);
+        return positioned.Concat(unpositioned).ToList();
     }
 
     private static bool BelongsTo(PageRef page, string spaceId) =>
@@ -96,9 +103,13 @@ public sealed class Workspace(
                     ?? CurrentSpaceId
                     ?? DefaultSpaceId;
 
+        await EnsureSiblingPositionsAsync(parentId, ct, space);
+        var last = ChildrenOf(parentId, space).LastOrDefault()?.Position;
+
         await CommitAsync(a =>
         {
             a.CreateObject(pageId, title, parentId, ObjectTypes.Page, space);
+            a.SetProp(pageId, pageId, PropKeys.Position, FracIndex.Between(last, null));
             a.UpsertBlock(pageId, NewId("bl"), null, FracIndex.Middle, BlockKind.Paragraph);
         }, pageId, ct);
 
@@ -220,7 +231,46 @@ public sealed class Workspace(
         CommitAsync(a => a.SetProp(pageId, pageId, PropKeys.Icon, icon), pageId, ct);
 
     public Task MovePageAsync(string pageId, string? parentId, CancellationToken ct = default) =>
-        CommitAsync(a => a.SetProp(pageId, pageId, PropKeys.Parent, parentId), pageId, ct);
+        MovePageAsync(pageId, parentId, relativeId: null, after: false, ct);
+
+    /// <summary>
+    /// Reparents a page and places it among the destination siblings. Pass
+    /// <paramref name="relativeId"/> to insert before that sibling, or <paramref name="after"/>
+    /// to insert after it. Omitting both appends at the end.
+    /// </summary>
+    public async Task MovePageAsync(
+        string pageId,
+        string? parentId,
+        string? relativeId,
+        bool after,
+        CancellationToken ct = default)
+    {
+        if (pageId == parentId || pageId == relativeId || WouldCycle(pageId, parentId))
+            return;
+
+        var space = Page(pageId)?.SpaceId
+                    ?? (parentId is not null ? Page(parentId)?.SpaceId : null)
+                    ?? CurrentSpaceId;
+        await EnsureSiblingPositionsAsync(parentId, ct, space);
+
+        var siblings = ChildrenOf(parentId, space).Where(p => p.Id != pageId).ToList();
+        var index = siblings.Count;
+        if (relativeId is { Length: > 0 })
+        {
+            var at = siblings.FindIndex(p => p.Id == relativeId);
+            if (at >= 0)
+                index = after ? at + 1 : at;
+        }
+
+        var low = index > 0 ? siblings[index - 1].Position : null;
+        var high = index < siblings.Count ? siblings[index].Position : null;
+
+        await CommitAsync(a =>
+        {
+            a.SetProp(pageId, pageId, PropKeys.Parent, parentId);
+            a.SetProp(pageId, pageId, PropKeys.Position, FracIndex.Between(low, high));
+        }, pageId, ct);
+    }
 
     /// <summary>
     /// Deletes a page and re-parents its children, so a sub-page never becomes unreachable just
@@ -229,12 +279,23 @@ public sealed class Workspace(
     public async Task DeletePageAsync(string pageId, CancellationToken ct = default)
     {
         var page = Page(pageId);
-        var children = ChildrenOf(pageId);
+        var destParent = page?.ParentId;
+        var space = page?.SpaceId ?? CurrentSpaceId;
+        var children = ChildrenOf(pageId, space);
+
+        await EnsureSiblingPositionsAsync(destParent, ct, space);
+        var dest = ChildrenOf(destParent, space).Where(p => p.Id != pageId).ToList();
+        var low = dest.LastOrDefault()?.Position;
 
         await CommitAsync(a =>
         {
             foreach (var child in children)
-                a.SetProp(child.Id, child.Id, PropKeys.Parent, page?.ParentId);
+            {
+                var position = FracIndex.Between(low, null);
+                a.SetProp(child.Id, child.Id, PropKeys.Parent, destParent);
+                a.SetProp(child.Id, child.Id, PropKeys.Position, position);
+                low = position;
+            }
 
             a.SetProp(pageId, pageId, PropKeys.Deleted, "true");
         }, [pageId, .. children.Select(c => c.Id)], ct);
@@ -346,7 +407,7 @@ public sealed class Workspace(
 
     /// <summary>
     /// Stores a new encrypted blob and points an existing File block at it. The previous blob is
-    /// left on disk; mailbox GC is a later pass.
+    /// dropped locally once nothing references it.
     /// </summary>
     public async Task ReplaceFileAsync(
         string pageId,
@@ -420,6 +481,22 @@ public sealed class Workspace(
         var tail = block.Text[caret..];
         var newId = NewId("bl");
 
+        if (block.Kind is BlockKind.File or BlockKind.PageLink or BlockKind.Divider)
+        {
+            var after = tree.PositionAfter(block);
+            await CommitAsync(a =>
+            {
+                if (tail.Length > 0)
+                    a.DeleteText(pageId, blockId, caret, tail.Length);
+
+                a.UpsertBlock(pageId, newId, block.ParentId, after, BlockKind.Paragraph);
+                if (tail.Length > 0)
+                    a.InsertText(pageId, newId, 0, tail);
+            }, pageId, ct);
+
+            return newId;
+        }
+
         // A list item continues the list; anything else drops back to plain text.
         var kind = block.Kind is BlockKind.Bullet or BlockKind.Numbered or BlockKind.Todo
             ? block.Kind
@@ -452,6 +529,9 @@ public sealed class Workspace(
         var tree = Tree(pageId);
         var block = tree.Find(blockId);
         if (block is null)
+            return null;
+
+        if (block.Kind is BlockKind.File or BlockKind.PageLink or BlockKind.Divider)
             return null;
 
         // A nested or styled block first gives up its indent and type; only a plain top-level
@@ -598,6 +678,39 @@ public sealed class Workspace(
     public Task<List<string>> UnresolvedLinksAsync(CancellationToken ct = default) =>
         projection.UnresolvedLinksAsync(CurrentSpaceId, DefaultSpaceId, ct);
 
+    /// <summary>
+    /// Writes FracIndex keys for a sibling group that still sorts by title, so the first reorder
+    /// (or a new page in that group) does not shuffle existing pages.
+    /// </summary>
+    private async Task EnsureSiblingPositionsAsync(string? parentId, CancellationToken ct, string? spaceId = null)
+    {
+        var siblings = ChildrenOf(parentId, spaceId ?? CurrentSpaceId);
+        if (siblings.Count == 0 || siblings.All(p => !string.IsNullOrEmpty(p.Position)))
+            return;
+
+        var keys = FracIndex.Sequence(siblings.Count);
+        await CommitAsync(a =>
+        {
+            for (var i = 0; i < siblings.Count; i++)
+                a.SetProp(siblings[i].Id, siblings[i].Id, PropKeys.Position, keys[i]);
+        }, siblings.Select(s => s.Id).ToList(), ct);
+    }
+
+    private bool WouldCycle(string pageId, string? parentId)
+    {
+        var cursor = parentId;
+        var guard = 0;
+        while (cursor is not null && guard++ < 1_000)
+        {
+            if (cursor == pageId)
+                return true;
+
+            cursor = Page(cursor)?.ParentId;
+        }
+
+        return false;
+    }
+
     // ------------------------------------------------------------- plumbing
 
     /// <summary>Applies ops that arrived from a peer to the read model.</summary>
@@ -630,6 +743,7 @@ public sealed class Workspace(
                 await projection.WriteAsync(replica.Snapshot(objectId), ct);
 
             _objects = await projection.ListPagesAsync(ct);
+            SweepLocalBlobs();
         }
         catch (Exception ex)
         {
@@ -642,6 +756,14 @@ public sealed class Workspace(
         }
 
         Changed?.Invoke();
+    }
+
+    private void SweepLocalBlobs()
+    {
+        if (blobs is null)
+            return;
+
+        blobs.DeleteUnreferenced(SyncEngine.ReferencedBlobIds(replica));
     }
 
     public static string NewId(string prefix) => $"{prefix}_{Guid.NewGuid():N}"[..19];

@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Syncly.Crdt;
@@ -47,6 +46,8 @@ public sealed class SyncContext
     public Func<string, CancellationToken, Task<byte[]?>>? ReadLocalBlobSealed { get; init; }
 
     public Func<string, byte[], CancellationToken, Task>? WriteLocalBlobSealed { get; init; }
+
+    public Action<string>? DeleteLocalBlob { get; init; }
 }
 
 /// <summary>
@@ -196,10 +197,23 @@ public sealed class SyncEngine : IAsyncDisposable
 
     public async Task<SyncChain> RotateChainAsync(CancellationToken ct = default)
     {
+        var previous = _chain;
         var chain = SyncChain.Create();
+        if (previous is not null)
+            await ResealLocalBlobsAsync(previous, chain, ct);
+
         await SetChainAsync(chain, ct);
         _uploaded = new VersionVector();
         await _context.Vault.WriteAsync(UploadedVaultKey, "", ct);
+        _uploadedBlobs.Clear();
+        await PersistUploadedBlobsAsync(ct);
+
+        if (_backend is not null)
+            await _backend.WriteAsync(MailboxFiles.ChainManifest, DevicePackCodec.Manifest(chain), ct);
+
+        if (IsConfigured)
+            await SyncNowAsync(ct);
+
         return chain;
     }
 
@@ -329,6 +343,14 @@ public sealed class SyncEngine : IAsyncDisposable
                 _logger.LogInformation("Collected {Count} tombstones.", removed);
         }
 
+        var mailbox = stable is not null;
+        if (!mailbox)
+        {
+            var peers = await _context.Peers.ListAsync(ct);
+            mailbox = peers.Count == 0;
+        }
+
+        await SweepOrphanBlobsAsync(mailbox ? _backend : null, ct);
         await _snapshots.WriteAsync(_context.Replica.Documents.ToList(), _context.Replica.Version, ct);
     }
 
@@ -481,9 +503,8 @@ public sealed class SyncEngine : IAsyncDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Could not decrypt {File}.", name);
-                throw new CryptographicException(
-                    "Could not decrypt a pack in the mailbox. Check that both devices use the same chain code.");
+                _logger.LogWarning(ex, "Could not decrypt {File}; skipping.", name);
+                continue;
             }
 
             remote++;
@@ -536,16 +557,12 @@ public sealed class SyncEngine : IAsyncDisposable
             return 0;
 
         var localIds = _context.ListLocalBlobIds().ToHashSet(StringComparer.Ordinal);
-        var listedIds = new HashSet<string>(StringComparer.Ordinal);
         var remoteIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var name in await backend.ListAsync(ct))
         {
             var id = MailboxFiles.BlobIdOf(name);
             if (id is not null)
-            {
-                listedIds.Add(id);
                 remoteIds.Add(id);
-            }
         }
 
         foreach (var id in ReferencedBlobIds())
@@ -586,9 +603,6 @@ public sealed class SyncEngine : IAsyncDisposable
             pulled = true;
             _logger.LogInformation("Pulled attachment {FileId}.", id);
         }
-
-        foreach (var id in listedIds)
-            _uploadedBlobs.Add(id);
 
         await PersistUploadedBlobsAsync(ct);
         if (pulled && _context.OnBlobsChanged is { } notify)
@@ -655,7 +669,7 @@ public sealed class SyncEngine : IAsyncDisposable
             ? "Could not upload 1 attachment."
             : $"Could not upload {count} attachments.";
 
-    internal static IEnumerable<string> ReferencedBlobIds(Replica replica)
+    public static IEnumerable<string> ReferencedBlobIds(Replica replica)
     {
         foreach (var objectId in replica.ObjectIds)
         {
@@ -668,6 +682,72 @@ public sealed class SyncEngine : IAsyncDisposable
     }
 
     private IEnumerable<string> ReferencedBlobIds() => ReferencedBlobIds(_context.Replica);
+
+    private async Task ResealLocalBlobsAsync(SyncChain from, SyncChain to, CancellationToken ct)
+    {
+        if (_context.ListLocalBlobIds is null
+            || _context.ReadLocalBlobSealed is null
+            || _context.WriteLocalBlobSealed is null)
+            return;
+
+        foreach (var id in _context.ListLocalBlobIds())
+        {
+            try
+            {
+                var sealedBytes = await _context.ReadLocalBlobSealed(id, ct);
+                if (sealedBytes is null || sealedBytes.Length == 0)
+                    continue;
+
+                var plain = BlobCipher.Decrypt(from, sealedBytes);
+                await _context.WriteLocalBlobSealed(id, BlobCipher.Encrypt(to, plain), ct);
+                _logger.LogInformation("Re-sealed attachment {FileId}.", id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not re-seal attachment {FileId}.", id);
+            }
+        }
+    }
+
+    private async Task SweepOrphanBlobsAsync(ISyncBackend? mailbox, CancellationToken ct)
+    {
+        var keep = ReferencedBlobIds().ToHashSet(StringComparer.Ordinal);
+
+        if (_context.ListLocalBlobIds is not null && _context.DeleteLocalBlob is not null)
+        {
+            foreach (var id in _context.ListLocalBlobIds())
+            {
+                if (keep.Contains(id))
+                    continue;
+
+                _context.DeleteLocalBlob(id);
+                _uploadedBlobs.Remove(id);
+            }
+        }
+
+        if (mailbox is not null)
+        {
+            foreach (var name in await mailbox.ListAsync(ct))
+            {
+                var id = MailboxFiles.BlobIdOf(name);
+                if (id is null || keep.Contains(id))
+                    continue;
+
+                try
+                {
+                    await mailbox.DeleteAsync(name, ct);
+                    _uploadedBlobs.Remove(id);
+                    _logger.LogInformation("Removed unused mailbox attachment {FileId}.", id);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Could not delete mailbox attachment {FileId}.", id);
+                }
+            }
+        }
+
+        await PersistUploadedBlobsAsync(ct);
+    }
 
     private static IEnumerable<string> ParseIgnoredPeers(string? stored)
     {

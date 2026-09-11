@@ -57,7 +57,7 @@ public sealed class SynclyApp : IAsyncDisposable
 {
     private const string ProjectionVersionKey = "projection.version";
     private const string ProjectionSchemaKey = "projection.schema";
-    private const string ProjectionSchema = "2";
+    private const string ProjectionSchema = "3";
 
     private SynclyApp(
         SynclyDatabase database,
@@ -167,6 +167,7 @@ public sealed class SynclyApp : IAsyncDisposable
             ListLocalBlobIds = () => blobs.ListIds(),
             ReadLocalBlobSealed = (id, token) => blobs.ReadSealedAsync(id, token),
             WriteLocalBlobSealed = (id, bytes, token) => blobs.PutSealedAsync(id, bytes, token),
+            DeleteLocalBlob = id => blobs.Delete(id),
         };
 
         engine = new SyncEngine(

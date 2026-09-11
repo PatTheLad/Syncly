@@ -101,6 +101,16 @@ public sealed class ProtonDriveBackend : ISyncBackend, IAsyncDisposable
         await session.WriteAsync(name, data, ct);
     }
 
+    public async Task DeleteAsync(string name, CancellationToken ct = default)
+    {
+        var session = await EnsureSessionAsync(ct);
+        if (!session.CanEdit)
+            throw new ProtonDriveException(
+                "This Proton Drive link is view-only. Recreate it with Editor access.");
+
+        await session.DeleteAsync(name, ct);
+    }
+
     public async ValueTask DisposeAsync()
     {
         _session?.Dispose();
@@ -224,6 +234,8 @@ internal sealed class ProtonSession : IDisposable
 
     public Task WriteAsync(string name, ReadOnlyMemory<byte> data, CancellationToken ct) =>
         _mailbox.WriteAsync(name, data, ct);
+
+    public Task DeleteAsync(string name, CancellationToken ct) => _mailbox.DeleteAsync(name, ct);
 
     public void Dispose() { }
 

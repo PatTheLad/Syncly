@@ -178,6 +178,21 @@ public class StorageTests
     }
 
     [Fact]
+    public async Task Projection_persists_page_position()
+    {
+        await using var temp = await TempDatabase.CreateAsync();
+        var projection = new ProjectionStore(temp.Database);
+        var replica = Seed();
+        replica.Author(a => a.SetProp(Page, Page, PropKeys.Position, "a0"));
+
+        await projection.WriteAsync(replica.Snapshot(Page));
+        var pages = await projection.ListPagesAsync();
+
+        Assert.Single(pages);
+        Assert.Equal("a0", pages[0].Position);
+    }
+
+    [Fact]
     public async Task Full_text_search_finds_blocks_and_titles()
     {
         await using var temp = await TempDatabase.CreateAsync();
@@ -247,6 +262,27 @@ public class StorageTests
     }
 
     [Fact]
+    public async Task Search_finds_attachment_captions()
+    {
+        await using var temp = await TempDatabase.CreateAsync();
+        var projection = new ProjectionStore(temp.Database);
+        var replica = new Replica("dev00");
+        replica.Author(a =>
+        {
+            a.CreateObject("p", "Files");
+            a.UpsertBlock("p", "f1", null, FracIndex.Sequence(1)[0], BlockKind.File);
+            a.SetProp("p", "f1", PropKeys.FileName, "scan.pdf");
+            a.InsertText("p", "f1", 0, "Q3 **receipt**");
+        });
+        await projection.WriteAsync(replica.Snapshot("p"));
+
+        var hits = await projection.SearchAsync("receipt");
+        Assert.Single(hits);
+        Assert.Equal("f1", hits[0].BlockId);
+        Assert.DoesNotContain("**", hits[0].Snippet);
+    }
+
+    [Fact]
     public async Task Search_stays_inside_the_requested_space()
     {
         await using var temp = await TempDatabase.CreateAsync();
@@ -279,6 +315,15 @@ public class StorageTests
     {
         Assert.Equal("fuzzy", SearchBody.From("**fuzzy**"));
         Assert.Equal("the spec Sync Design", SearchBody.From("[[Sync Design|the spec]]"));
+        Assert.Equal("scan.pdf Q3 receipt", SearchBody.ForBlock(new BlockNode
+        {
+            Id = "f1",
+            ObjectId = "p",
+            Position = "a",
+            Kind = BlockKind.File,
+            Text = "Q3 **receipt**",
+            Props = new Dictionary<string, string?> { [PropKeys.FileName] = "scan.pdf" },
+        }));
         Assert.Equal("&lt;script&gt;<mark>x</mark>", SearchBody.SanitizeSnippet("<script><mark>x</mark>"));
     }
 

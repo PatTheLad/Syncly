@@ -131,7 +131,7 @@
                             </div>
                         }
 
-                        <div class="card-sub">Chain @_shortId · rotating makes old cloud blobs unreadable.</div>
+                        <div class="card-sub">Chain @_shortId · rotating re-encrypts files on this device and re-uploads them. Other devices must scan the new code.</div>
                         <div class="row wrap">
                             <button class="chip danger" @onclick="RotateAsync">Rotate chain</button>
                             <button class="chip" @onclick="LeaveChainAsync">Leave chain</button>
@@ -462,7 +462,7 @@
     private async Task RotateAsync()
     {
         if (!await Js.InvokeAsync<bool>("syncly.confirm",
-                "Rotate the chain? Other devices must scan the new code, and old cloud files become unreadable."))
+                "Rotate the chain? Other devices must scan the new code. This device re-encrypts attachments and uploads them on the next sync."))
             return;
 
         _chainError = false;

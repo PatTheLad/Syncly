@@ -14,6 +14,8 @@ public interface ISyncBackend
 
     Task WriteAsync(string name, ReadOnlyMemory<byte> data, CancellationToken ct = default);
 
+    Task DeleteAsync(string name, CancellationToken ct = default) => Task.CompletedTask;
+
     Task TestAsync(CancellationToken ct = default) => Task.CompletedTask;
 }
 
@@ -54,6 +56,15 @@ public sealed class LocalFolderBackend : ISyncBackend
         var temp = path + ".tmp";
         await File.WriteAllBytesAsync(temp, data.ToArray(), ct);
         File.Move(temp, path, overwrite: true);
+    }
+
+    public Task DeleteAsync(string name, CancellationToken ct = default)
+    {
+        var path = SafePath(name);
+        if (File.Exists(path))
+            File.Delete(path);
+
+        return Task.CompletedTask;
     }
 
     public Task TestAsync(CancellationToken ct = default)

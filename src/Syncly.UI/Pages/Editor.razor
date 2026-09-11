@@ -184,12 +184,15 @@
     private (string BlockId, int Caret)? _focusRequest;
     private string? _revealRequest;
     private string? _loadedPageId;
+    private string? _focusedBlockId;
     private DotNetObjectReference<Editor>? _jsSelf;
 
     [Parameter]
     public string? PageId { get; set; }
 
     public bool Reading => State.ReadingMode;
+
+    public string? FocusedBlockId => _focusedBlockId;
 
     protected override void OnInitialized()
     {
@@ -234,14 +237,19 @@
             _titleDraft = _snapshot.Title;
             _iconPickerOpen = false;
             _panelOpen = false;
+            _focusedBlockId = null;
         }
         else if (_pendingTitle is null)
         {
             _titleDraft = _snapshot.Title;
         }
 
+        if (State.ReadingMode)
+            _focusedBlockId = null;
+
         if (State.FocusBlockId is { } requested)
         {
+            _focusedBlockId = requested;
             _focusRequest = (requested, State.FocusCaret);
             State.ClearFocusRequest();
         }
@@ -300,7 +308,18 @@
         await FlushAsync();
     }
 
-    public Task FocusAsync(string blockId) => Task.CompletedTask;
+    public async Task FocusAsync(string blockId)
+    {
+        if (_focusedBlockId == blockId && !State.ReadingMode)
+            return;
+
+        if (_pendingText.Count > 0)
+            await FlushAsync();
+
+        _focusedBlockId = blockId;
+        _focusRequest = (blockId, -1);
+        StateHasChanged();
+    }
 
     public async Task SplitAsync(string blockId, string text, int caret)
     {
@@ -1046,11 +1065,13 @@
     private async Task StopEditingAsync()
     {
         await FlushAsync();
+        _focusedBlockId = null;
         State.SetReadingMode(true);
     }
 
     private async Task FocusBlockAsync(string blockId, int caret)
     {
+        _focusedBlockId = blockId;
         State.SetReadingMode(false);
         _focusRequest = (blockId, caret);
         StateHasChanged();

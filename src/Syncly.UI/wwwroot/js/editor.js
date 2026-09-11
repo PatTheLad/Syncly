@@ -390,14 +390,15 @@
       }
     });
 
-    // Wikilinks are rendered as anchors; routing them stays in C#.
+    // Capture so a wikilink click does not also focus the surrounding preview block.
     document.addEventListener('click', (event) => {
       const link = event.target.closest('a.wikilink');
       if (!link) return;
 
       event.preventDefault();
+      event.stopPropagation();
       dotnet.invokeMethodAsync('OnOpenLink', link.dataset.page ?? link.textContent ?? '');
-    });
+    }, true);
   }
 
   function setMenuOpen(open) {
@@ -417,6 +418,19 @@
 
   function isNarrow() {
     return window.matchMedia('(max-width: 720px)').matches;
+  }
+
+  function treeDropHint(pageId, clientX, clientY) {
+    const row = document.querySelector(`.tree-row[data-page="${CSS.escape(pageId)}"]`);
+    if (!row) return 'after';
+
+    const hit = document.elementFromPoint(clientX, clientY);
+    if (hit && row.contains(hit) && hit.closest('.tree-label, .tree-icon'))
+      return 'into';
+
+    const rect = row.getBoundingClientRect();
+    if (rect.height <= 0) return 'after';
+    return clientY < rect.top + rect.height / 2 ? 'before' : 'after';
   }
 
   function confirmDialog(message) {
@@ -491,6 +505,7 @@
     setPaletteOpen,
     isNarrow,
     confirm: confirmDialog,
+    treeDropHint,
     scanQr,
     click(id) {
       const el = element(id);

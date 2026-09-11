@@ -57,10 +57,17 @@ public static partial class SearchBody
 
     public static string ForBlock(BlockNode node)
     {
-        if (node.Kind == BlockKind.File)
-            return node.FileName ?? string.Empty;
+        if (node.Kind != BlockKind.File)
+            return From(node.Text);
 
-        return From(node.Text);
+        var name = node.FileName ?? string.Empty;
+        var caption = From(node.Text);
+        if (name.Length == 0)
+            return caption;
+        if (caption.Length == 0)
+            return name;
+
+        return name + " " + caption;
     }
 
     /// <summary>

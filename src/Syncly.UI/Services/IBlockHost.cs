@@ -8,6 +8,9 @@ public interface IBlockHost
 {
     bool Reading { get; }
 
+    /// <summary>The text block currently showing source markers. Null means every block is preview.</summary>
+    string? FocusedBlockId { get; }
+
     Task TextChangedAsync(string blockId, string text, int caret);
 
     Task CommitTextAsync(string blockId, string text);

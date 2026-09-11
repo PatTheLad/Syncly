@@ -72,6 +72,33 @@ public sealed class BlobStore(string dataDirectory)
         File.Move(temp, path, overwrite: true);
     }
 
+    public bool Delete(string fileId)
+    {
+        var path = PathFor(fileId);
+        if (!File.Exists(path))
+            return false;
+
+        File.Delete(path);
+        return true;
+    }
+
+    /// <summary>Drops local blobs that no current File block points at.</summary>
+    public int DeleteUnreferenced(IEnumerable<string> keepIds)
+    {
+        var keep = keepIds.ToHashSet(StringComparer.Ordinal);
+        var removed = 0;
+        foreach (var id in ListIds())
+        {
+            if (keep.Contains(id))
+                continue;
+
+            if (Delete(id))
+                removed++;
+        }
+
+        return removed;
+    }
+
     public async Task<byte[]?> ReadSealedAsync(string fileId, CancellationToken ct = default)
     {
         var path = PathFor(fileId);

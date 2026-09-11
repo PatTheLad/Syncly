@@ -94,6 +94,157 @@ public class WorkspaceSpaceTests
         Assert.Equal(Workspace.DefaultSpaceId, b.Replica.Snapshot(pageId).SpaceId);
     }
 
+    [Fact]
+    public async Task ChildrenOf_orders_by_creation_position()
+    {
+        await using var app = await StartAsync();
+        var workspace = app.Workspace;
+
+        var charlie = await workspace.CreatePageAsync(null, "Charlie");
+        var alpha = await workspace.CreatePageAsync(null, "Alpha");
+        var bravo = await workspace.CreatePageAsync(null, "Bravo");
+
+        Assert.Equal(
+            [charlie, alpha, bravo],
+            workspace.ChildrenOf(null).Select(p => p.Id));
+    }
+
+    [Fact]
+    public async Task MovePage_reorders_siblings_and_can_nest()
+    {
+        await using var app = await StartAsync();
+        var workspace = app.Workspace;
+
+        var first = await workspace.CreatePageAsync(null, "A");
+        var second = await workspace.CreatePageAsync(null, "B");
+        var third = await workspace.CreatePageAsync(null, "C");
+
+        await workspace.MovePageAsync(first, null, third, after: true);
+        Assert.Equal(
+            [second, third, first],
+            workspace.ChildrenOf(null).Select(p => p.Id));
+
+        await workspace.MovePageAsync(first, null, second, after: false);
+        Assert.Equal(
+            [first, second, third],
+            workspace.ChildrenOf(null).Select(p => p.Id));
+
+        await workspace.MovePageAsync(first, second);
+        Assert.Equal([second, third], workspace.ChildrenOf(null).Select(p => p.Id));
+        Assert.Equal([first], workspace.ChildrenOf(second).Select(p => p.Id));
+        Assert.Equal(second, workspace.Page(first)?.ParentId);
+    }
+
+    [Fact]
+    public async Task First_reorder_backfills_empty_positions_in_title_order()
+    {
+        await using var app = await StartAsync();
+        var workspace = app.Workspace;
+
+        var charlie = await workspace.CreatePageAsync(null, "Charlie");
+        var alpha = await workspace.CreatePageAsync(null, "Alpha");
+        var bravo = await workspace.CreatePageAsync(null, "Bravo");
+        await ClearPositionsAsync(app, charlie, alpha, bravo);
+
+        Assert.Equal(
+            [alpha, bravo, charlie],
+            workspace.ChildrenOf(null).Select(p => p.Id));
+        Assert.True(workspace.ChildrenOf(null).All(p => string.IsNullOrEmpty(p.Position)));
+
+        await workspace.MovePageAsync(bravo, null, alpha, after: false);
+
+        Assert.Equal(
+            [bravo, alpha, charlie],
+            workspace.ChildrenOf(null).Select(p => p.Id));
+        Assert.True(workspace.ChildrenOf(null).All(p => !string.IsNullOrEmpty(p.Position)));
+    }
+
+    [Fact]
+    public async Task Two_devices_reorder_without_losing_pages()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "syncly-mailbox", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+
+        await using var a = await StartAsync();
+        await using var b = await StartAsync();
+        await PairFolderAsync(a, b, folder);
+
+        var first = await a.Workspace.CreatePageAsync(null, "A");
+        var second = await a.Workspace.CreatePageAsync(null, "B");
+        var third = await a.Workspace.CreatePageAsync(null, "C");
+
+        await a.Sync.SyncNowAsync();
+        await b.Sync.SyncNowAsync();
+        await WaitUntil(
+            () => b.Workspace.ChildrenOf(null).Count == 3,
+            "bravo to receive the three pages");
+
+        await a.Workspace.MovePageAsync(first, null, third, after: true);
+        await a.Sync.SyncNowAsync();
+        await b.Sync.SyncNowAsync();
+        await WaitUntil(
+            () => b.Workspace.ChildrenOf(null).Select(p => p.Id).SequenceEqual([second, third, first]),
+            "bravo to see alpha's reorder");
+
+        await Task.WhenAll(
+            a.Workspace.MovePageAsync(second, null, first, after: true),
+            b.Workspace.MovePageAsync(third, null, second, after: false));
+
+        await a.Sync.SyncNowAsync();
+        await b.Sync.SyncNowAsync();
+        await a.Sync.SyncNowAsync();
+        await WaitUntil(
+            () => a.Workspace.ChildrenOf(null).Select(p => p.Id)
+                .SequenceEqual(b.Workspace.ChildrenOf(null).Select(p => p.Id)),
+            "both devices to agree on sibling order");
+
+        Assert.Equal(3, a.Workspace.ChildrenOf(null).Count);
+        Assert.Equal(
+            a.Workspace.ChildrenOf(null).Select(p => p.Id).OrderBy(id => id, StringComparer.Ordinal),
+            b.Workspace.ChildrenOf(null).Select(p => p.Id).OrderBy(id => id, StringComparer.Ordinal));
+        Assert.Contains(first, a.Workspace.ChildrenOf(null).Select(p => p.Id));
+        Assert.Contains(second, a.Workspace.ChildrenOf(null).Select(p => p.Id));
+        Assert.Contains(third, a.Workspace.ChildrenOf(null).Select(p => p.Id));
+    }
+
+    private static async Task PairFolderAsync(SynclyApp a, SynclyApp b, string folder)
+    {
+        var chain = await a.Sync.CreateChainAsync();
+        var prefs = new SyncPreferences
+        {
+            Backend = SyncBackendKind.Folder,
+            FolderPath = folder,
+        };
+        await a.Sync.SavePreferencesAsync(prefs);
+        await b.Sync.JoinChainAsync(chain.Words);
+        await b.Sync.SavePreferencesAsync(prefs);
+    }
+
+    private static async Task ClearPositionsAsync(SynclyApp app, params string[] pageIds)
+    {
+        var ops = app.Replica.Author(author =>
+        {
+            foreach (var id in pageIds)
+                author.SetProp(id, id, PropKeys.Position, null);
+        });
+        await app.OpLog.AppendAsync(ops);
+        await app.Workspace.ProjectAsync(pageIds);
+    }
+
+    private static async Task WaitUntil(Func<bool> condition, string what, int timeoutMs = 15_000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition())
+                return;
+
+            await Task.Delay(25);
+        }
+
+        Assert.Fail($"Timed out waiting for {what}.");
+    }
+
     private static async Task<SynclyApp> StartAsync()
     {
         var dir = Path.Combine(Path.GetTempPath(), "syncly-space-tests", Guid.NewGuid().ToString("N"));

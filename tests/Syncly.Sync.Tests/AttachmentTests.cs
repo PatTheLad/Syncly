@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Syncly.App;
 using Syncly.Model;
 using Syncly.Security;
@@ -173,6 +174,8 @@ public class AttachmentTests
                 ? Task.FromException(new IOException("refused"))
                 : inner.WriteAsync(name, data, ct);
 
+        public Task DeleteAsync(string name, CancellationToken ct = default) => inner.DeleteAsync(name, ct);
+
         public Task TestAsync(CancellationToken ct = default) => inner.TestAsync(ct);
     }
 
@@ -236,6 +239,8 @@ public class AttachmentTests
 
             var plain = await app.Blobs.TryGetPlainAsync(replaced.FileId!, app.Sync.Chain!);
             Assert.Equal("two"u8.ToArray(), plain);
+            Assert.False(app.Blobs.Has(oldFileId!));
+            Assert.True(app.Blobs.Has(replaced.FileId!));
         }
     }
 
@@ -252,10 +257,90 @@ public class AttachmentTests
         var pageId = await app.Workspace.CreatePageAsync(null, "Notes");
         await using var stream = new MemoryStream("keep"u8.ToArray());
         var blockId = await app.Workspace.AttachFileAsync(pageId, stream, "keep.txt", "text/plain");
+        var fileId = app.Workspace.Tree(pageId).Find(blockId)!.FileId;
 
         await app.Workspace.DeleteBlockAsync(pageId, blockId);
 
         Assert.Null(app.Workspace.Tree(pageId).Find(blockId));
         Assert.DoesNotContain(app.Workspace.Open(pageId).Flatten(), b => b.Id == blockId);
+        Assert.False(app.Blobs.Has(fileId!));
+    }
+
+    [Fact]
+    public async Task Orphan_mailbox_blob_is_collected_after_peers_sync()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "syncly-mailbox", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        var chain = SyncChain.Create();
+
+        await using var a = await TestNode.CreateAsync("alpha");
+        await using var b = await TestNode.CreateAsync("bravo");
+        await a.UseMailboxAsync(folder, chain);
+        await b.UseMailboxAsync(folder, chain);
+
+        const string oldId = "fl_old";
+        const string newId = "fl_new";
+        await using (var stream = new MemoryStream([1, 2, 3]))
+            await a.Blobs.PutAsync(oldId, stream, chain);
+
+        await a.AuthorAsync(x =>
+        {
+            x.CreateObject("page-1", "Shared");
+            x.UpsertBlock("page-1", "b-file", null, Crdt.FracIndex.Middle, BlockKind.File);
+            x.SetProp("page-1", "b-file", PropKeys.FileId, oldId);
+        });
+
+        await a.Engine.SyncNowAsync();
+        await b.Engine.SyncNowAsync();
+        Assert.True(File.Exists(Path.Combine(folder, MailboxFiles.BlobName(oldId))));
+
+        await using (var stream = new MemoryStream([4, 5, 6]))
+            await a.Blobs.PutAsync(newId, stream, chain);
+
+        await a.AuthorAsync(x => x.SetProp("page-1", "b-file", PropKeys.FileId, newId));
+        await a.Engine.SyncNowAsync();
+        await b.Engine.SyncNowAsync();
+        await a.Engine.CollectAsync();
+
+        Assert.False(a.Blobs.Has(oldId));
+        Assert.True(a.Blobs.Has(newId));
+        Assert.False(File.Exists(Path.Combine(folder, MailboxFiles.BlobName(oldId))));
+        Assert.True(File.Exists(Path.Combine(folder, MailboxFiles.BlobName(newId))));
+    }
+
+    [Fact]
+    public async Task Rotate_chain_reseals_local_and_mailbox_blobs()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "syncly-mailbox", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        var chain = SyncChain.Create();
+
+        await using var a = await TestNode.CreateAsync("alpha");
+        await a.UseMailboxAsync(folder, chain);
+
+        const string fileId = "fl_rotate";
+        var payload = new byte[] { 7, 8, 9 };
+        await using (var stream = new MemoryStream(payload))
+            await a.Blobs.PutAsync(fileId, stream, chain);
+
+        await a.AuthorAsync(x =>
+        {
+            x.CreateObject("page-1", "Shared");
+            x.UpsertBlock("page-1", "b-file", null, Crdt.FracIndex.Middle, BlockKind.File);
+            x.SetProp("page-1", "b-file", PropKeys.FileId, fileId);
+        });
+
+        await a.Engine.SyncNowAsync();
+        var rotated = await a.Engine.RotateChainAsync();
+
+        Assert.NotEqual(chain.ChainId, rotated.ChainId);
+        Assert.Equal(payload, await a.Blobs.TryGetPlainAsync(fileId, rotated));
+        await Assert.ThrowsAnyAsync<CryptographicException>(
+            () => a.Blobs.TryGetPlainAsync(fileId, chain));
+
+        var mailbox = await File.ReadAllBytesAsync(Path.Combine(folder, MailboxFiles.BlobName(fileId)));
+        Assert.Equal(payload, BlobCipher.Decrypt(rotated, mailbox));
+        Assert.Equal(rotated.ChainId, DevicePackCodec.ReadChainId(
+            await File.ReadAllBytesAsync(Path.Combine(folder, MailboxFiles.ChainManifest))));
     }
 }
