@@ -1,0 +1,62 @@
+@namespace Syncly.UI.Components
+@using Syncly.Model
+
+<div class="panel-section">
+    <h3>Outline</h3>
+    @if (Outline.Count == 0)
+    {
+        <div class="panel-empty">No headings yet.</div>
+    }
+    else
+    {
+        @foreach (var heading in Outline)
+        {
+            <button type="button"
+                    class="outline-item level-@((int)heading.Kind)"
+                    @key="heading.Id"
+                    @onclick="() => OnHeading.InvokeAsync(heading.Id)">
+                @heading.Text
+            </button>
+        }
+    }
+</div>
+
+<div class="panel-section">
+    <h3>Backlinks</h3>
+    @if (Backlinks.Count == 0)
+    {
+        <div class="panel-empty">
+            Nothing links here yet. Type <code>[[@PageTitle]]</code> on another page.
+        </div>
+    }
+    else
+    {
+        @foreach (var link in Backlinks)
+        {
+            <button type="button"
+                    class="backlink"
+                    @key="link.BlockId"
+                    @onclick="() => OnBacklink.InvokeAsync(link.ObjectId)">
+                <strong>@link.Title</strong>
+                <span>@link.Text</span>
+            </button>
+        }
+    }
+</div>
+
+@code {
+    [Parameter]
+    public IReadOnlyList<BlockNode> Outline { get; set; } = [];
+
+    [Parameter]
+    public IReadOnlyList<Backlink> Backlinks { get; set; } = [];
+
+    [Parameter]
+    public string PageTitle { get; set; } = "Untitled";
+
+    [Parameter]
+    public EventCallback<string> OnHeading { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnBacklink { get; set; }
+}

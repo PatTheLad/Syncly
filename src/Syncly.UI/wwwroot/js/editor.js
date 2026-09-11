@@ -196,11 +196,21 @@
           dotnet.invokeMethodAsync('OnMark', event.key, text, caret, end);
           break;
 
+        case 's':
+        case 'S':
+          if ((!event.ctrlKey && !event.metaKey) || !event.shiftKey) { handled = false; break; }
+          event.preventDefault();
+          event.stopPropagation();
+          dotnet.invokeMethodAsync('OnMark', 's', text, caret, end);
+          break;
+
         default:
           handled = false;
       }
 
-      if (!handled && event.key === '/' && text.length === 0) {
+      if (!handled && event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey
+          && (text.length === 0 || caret === 0)) {
+        event.preventDefault();
         dotnet.invokeMethodAsync('OnSlash');
       }
     });
@@ -346,7 +356,7 @@
         return;
       }
 
-      if (meta && event.key.toLowerCase() === 's') {
+      if (meta && event.key.toLowerCase() === 's' && !event.shiftKey) {
         event.preventDefault();
         dotnet.invokeMethodAsync('OnSyncNow');
         return;

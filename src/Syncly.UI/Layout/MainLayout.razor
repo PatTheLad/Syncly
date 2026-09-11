@@ -138,6 +138,7 @@
     private CancellationTokenSource? _updateCts;
     private string _query = string.Empty;
     private List<SearchHit>? _hits;
+    private bool _paletteFlag;
 
     protected override void OnInitialized()
     {
@@ -149,17 +150,29 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender)
-            return;
+        if (firstRender)
+        {
+            _self = DotNetObjectReference.Create(this);
+            await Js.InvokeVoidAsync("syncly.attachShell", _self);
+            await State.Workspace.RefreshPagesAsync();
+            _updateCts = new CancellationTokenSource();
+            _ = PollUpdatesAsync(_updateCts.Token);
 
-        _self = DotNetObjectReference.Create(this);
-        await Js.InvokeVoidAsync("syncly.attachShell", _self);
-        await State.Workspace.RefreshPagesAsync();
-        _updateCts = new CancellationTokenSource();
-        _ = PollUpdatesAsync(_updateCts.Token);
+            if (await Js.InvokeAsync<bool>("syncly.isNarrow"))
+                State.SetSidebar(false);
+        }
 
-        if (await Js.InvokeAsync<bool>("syncly.isNarrow"))
-            State.SetSidebar(false);
+        if (_paletteFlag != State.PaletteOpen)
+        {
+            _paletteFlag = State.PaletteOpen;
+            try
+            {
+                await Js.InvokeVoidAsync("syncly.setPaletteOpen", State.PaletteOpen);
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
     }
 
     private void Refresh() => InvokeAsync(StateHasChanged);

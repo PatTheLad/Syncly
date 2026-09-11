@@ -39,6 +39,7 @@
                     <button class="chip" title="Ctrl+E" @onclick="StopEditingAsync">Done</button>
                 }
 
+                <button class="chip panel-toggle" title="Outline and backlinks" @onclick="() => _panelOpen = true">Outline</button>
                 <button class="chip" title="New sub-page" @onclick="() => NewSubPageAsync()">Sub-page</button>
                 <button class="chip danger" @onclick="DeletePageAsync">Delete</button>
             </div>
@@ -112,48 +113,32 @@
         @if (_page is not null)
         {
             <aside class="panel">
-                <div class="panel-section">
-                    <h3>Outline</h3>
-                    @if (Outline().Count == 0)
-                    {
-                        <div class="panel-empty">No headings yet.</div>
-                    }
-                    else
-                    {
-                        @foreach (var heading in Outline())
-                        {
-                            <button class="outline-item level-@((int)heading.Kind)"
-                                    @key="heading.Id"
-                                    @onclick="() => FocusBlockAsync(heading.Id, -1)">
-                                @heading.Text
-                            </button>
-                        }
-                    }
-                </div>
-
-                <div class="panel-section">
-                    <h3>Backlinks</h3>
-                    @if (_backlinks.Count == 0)
-                    {
-                        <div class="panel-empty">
-                            Nothing links here yet. Type <code>[[@_page.DisplayTitle]]</code> on another page.
-                        </div>
-                    }
-                    else
-                    {
-                        @foreach (var link in _backlinks)
-                        {
-                            <button class="backlink" @key="link.BlockId" @onclick="() => State.Open(link.ObjectId)">
-                                <strong>@link.Title</strong>
-                                <span>@link.Text</span>
-                            </button>
-                        }
-                    }
-                </div>
+                <EditorMetaPanel Outline="Outline()"
+                                 Backlinks="_backlinks"
+                                 PageTitle="_page.DisplayTitle"
+                                 OnHeading="id => FocusBlockAsync(id, -1)"
+                                 OnBacklink="OpenBacklink" />
             </aside>
         }
     </div>
 </div>
+
+@if (_panelOpen && _page is not null)
+{
+    <div class="overlay page-panel-sheet" @onclick="ClosePanelSheet">
+        <div class="panel sheet-panel" @onclick:stopPropagation="true">
+            <div class="sheet-head">
+                <h3>On this page</h3>
+                <button type="button" class="chip" @onclick="ClosePanelSheet">Close</button>
+            </div>
+            <EditorMetaPanel Outline="Outline()"
+                             Backlinks="_backlinks"
+                             PageTitle="_page.DisplayTitle"
+                             OnHeading="FocusHeadingFromSheetAsync"
+                             OnBacklink="OpenBacklinkFromSheet" />
+        </div>
+    </div>
+}
 
 @if (_link is { Options.Count: > 0 } picker)
 {
@@ -192,6 +177,7 @@
     private string? _pendingTitle;
     private string? _slashBlockId;
     private bool _iconPickerOpen;
+    private bool _panelOpen;
     private string? _attachAfterBlockId;
     private string? _replaceBlockId;
     private string _saveHint = "Saved";
@@ -239,13 +225,14 @@
 
         _page = State.Workspace.Page(pageId);
         _snapshot = State.Workspace.Open(pageId);
+        _backlinks = await State.Workspace.BacklinksAsync(pageId);
 
         if (_loadedPageId != pageId)
         {
             _loadedPageId = pageId;
             _titleDraft = _snapshot.Title;
             _iconPickerOpen = false;
-            _backlinks = await State.Workspace.BacklinksAsync(pageId);
+            _panelOpen = false;
         }
         else if (_pendingTitle is null)
         {
@@ -376,6 +363,7 @@
             "b" => InlineMarkup.Bold,
             "i" => InlineMarkup.Italic,
             "u" => InlineMarkup.Underline,
+            "s" => InlineMarkup.Strikethrough,
             _ => null,
         };
 
@@ -705,7 +693,7 @@
             .Select(kind => new Palette.PaletteItem(
                 Glyph(kind),
                 kind.Label(),
-                null,
+                Hint(kind),
                 () => TurnIntoAsync(blockId, kind)))
             .ToList();
 
@@ -741,6 +729,20 @@
         BlockKind.PageLink => "↗",
         BlockKind.File => "📎",
         _ => "¶",
+    };
+
+    private static string? Hint(BlockKind kind) => kind switch
+    {
+        BlockKind.Heading1 => "# ",
+        BlockKind.Heading2 => "## ",
+        BlockKind.Heading3 => "### ",
+        BlockKind.Bullet => "- ",
+        BlockKind.Numbered => "1. ",
+        BlockKind.Todo => "[] ",
+        BlockKind.Quote => "> ",
+        BlockKind.Code => "```",
+        BlockKind.Divider => "---",
+        _ => null,
     };
 
     private async Task TurnIntoAsync(string blockId, BlockKind kind)
@@ -836,13 +838,43 @@
 
     private async Task DeletePageAsync()
     {
+        var title = _page?.DisplayTitle ?? "this page";
+        if (!await Js.InvokeAsync<bool>("syncly.confirm", $"Delete “{title}”? The page is removed on every device after the next sync."))
+            return;
+
         var pageId = PageIdOrThrow;
         await State.Workspace.DeletePageAsync(pageId);
 
         _loadedPageId = null;
         _page = null;
+        _panelOpen = false;
         State.Back();
         await SyncFromStateAsync();
+    }
+
+    private Task ClosePanelSheet()
+    {
+        _panelOpen = false;
+        return Task.CompletedTask;
+    }
+
+    private async Task FocusHeadingFromSheetAsync(string blockId)
+    {
+        _panelOpen = false;
+        await FocusBlockAsync(blockId, -1);
+    }
+
+    private Task OpenBacklink(string pageId)
+    {
+        State.Open(pageId);
+        return Task.CompletedTask;
+    }
+
+    private Task OpenBacklinkFromSheet(string pageId)
+    {
+        _panelOpen = false;
+        State.Open(pageId);
+        return Task.CompletedTask;
     }
 
     private async Task AppendBlockAsync()

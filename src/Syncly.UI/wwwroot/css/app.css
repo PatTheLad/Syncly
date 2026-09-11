@@ -910,6 +910,38 @@ textarea {
   color: var(--ink-3);
 }
 
+.panel-toggle {
+  display: none;
+}
+
+.page-panel-sheet {
+  align-items: flex-end;
+  justify-content: stretch;
+  padding: 0;
+}
+
+.page-panel-sheet .sheet-panel {
+  width: 100%;
+  max-height: min(72vh, 640px);
+  padding-bottom: calc(18px + var(--safe-bottom));
+  overflow-y: auto;
+  border-left: none;
+  border-top: 1px solid var(--line-strong);
+  border-radius: 16px 16px 0 0;
+}
+
+.sheet-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.sheet-head h3 {
+  margin: 0;
+}
+
 /* --------------------------------------------------------------- overlays */
 
 .overlay {
@@ -1666,8 +1698,16 @@ html.phone .field.port {
   width: 72px;
 }
 
+html.phone .panel-toggle {
+  display: inline-flex;
+}
+
 html.phone .panel {
   display: none;
+}
+
+html.phone .overlay.page-panel-sheet {
+  padding-top: 0;
 }
 
 html.phone .overlay,
