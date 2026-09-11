@@ -325,6 +325,14 @@ public class StorageTests
             Props = new Dictionary<string, string?> { [PropKeys.FileName] = "scan.pdf" },
         }));
         Assert.Equal("&lt;script&gt;<mark>x</mark>", SearchBody.SanitizeSnippet("<script><mark>x</mark>"));
+        Assert.Equal("SELECT * FROM **t**", SearchBody.ForBlock(new BlockNode
+        {
+            Id = "c1",
+            ObjectId = "p",
+            Position = "b",
+            Kind = BlockKind.Code,
+            Text = "SELECT * FROM **t**",
+        }));
     }
 
     [Fact]

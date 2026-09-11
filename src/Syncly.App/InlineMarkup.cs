@@ -124,9 +124,23 @@ public static partial class InlineMarkup
         return (wrapped, start + marker.Length, end + marker.Length);
     }
 
-    /// <summary>Markdown shortcuts typed at the start of a block, e.g. <c>"# "</c>.</summary>
-    public static (BlockKind Kind, int Consumed)? MatchShortcut(string text)
+    public readonly record struct BlockShortcut(BlockKind Kind, int Consumed, string? Language = null);
+
+    /// <summary>Markdown shortcuts typed at the start of a block, e.g. <c>"# "</c> or <c>```csharp </c>.</summary>
+    public static BlockShortcut? MatchShortcut(string text)
     {
+        if (text.StartsWith("```", StringComparison.Ordinal))
+        {
+            var i = 3;
+            while (i < text.Length && !char.IsWhiteSpace(text[i]))
+                i++;
+            if (i >= text.Length)
+                return null;
+
+            var language = CodeHighlight.Canonical(text[3..i]);
+            return new BlockShortcut(BlockKind.Code, i + 1, language);
+        }
+
         ReadOnlySpan<(string Prefix, BlockKind Kind)> shortcuts =
         [
             ("# ", BlockKind.Heading1),
@@ -138,13 +152,12 @@ public static partial class InlineMarkup
             ("[] ", BlockKind.Todo),
             ("[ ] ", BlockKind.Todo),
             ("> ", BlockKind.Quote),
-            ("``` ", BlockKind.Code),
             ("--- ", BlockKind.Divider),
         ];
 
         foreach (var (prefix, kind) in shortcuts)
             if (text.StartsWith(prefix, StringComparison.Ordinal))
-                return (kind, prefix.Length);
+                return new BlockShortcut(kind, prefix.Length);
 
         return null;
     }

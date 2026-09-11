@@ -115,6 +115,49 @@
                     @onclick="OpenMenuAsync">⋮</button>
         }
     }
+    else if (Block.Kind == BlockKind.Code)
+    {
+        <div class="code-shell">
+            @if (Host.Reading)
+            {
+                <span class="code-lang">@CodeHighlight.Label(Block.Language)</span>
+            }
+            else
+            {
+                <button type="button"
+                        class="code-lang"
+                        title="Code language"
+                        @onclick:stopPropagation="true"
+                        @onclick="() => Host.PickCodeLanguageAsync(Block.Id)">
+                    @CodeHighlight.Label(Block.Language)
+                </button>
+            }
+            @if (Host.Reading)
+            {
+                <div class="block-text"
+                     title="Double-click to edit"
+                     @ondblclick="() => Host.EditAtAsync(Block.Id)">
+                    @((MarkupString)CodeHighlight.ToHtml(Block.Text, Block.Language))
+                </div>
+            }
+            else if (!ShowsSource)
+            {
+                <div class="block-text block-preview"
+                     title="Click to edit"
+                     @onclick="() => Host.FocusAsync(Block.Id)">
+                    @((MarkupString)CodeHighlight.ToHtml(Block.Text, Block.Language))
+                </div>
+            }
+            else
+            {
+                <div @ref="_element"
+                     class="block-text"
+                     contenteditable="true"
+                     spellcheck="false"
+                     data-placeholder="@Placeholder"></div>
+            }
+        </div>
+    }
     else if (Host.Reading)
     {
         <div class="block-text @(Block.Checked ? "done" : null)"
@@ -228,7 +271,7 @@
     private string Placeholder => Block.Kind switch
     {
         BlockKind.Heading1 or BlockKind.Heading2 or BlockKind.Heading3 => "Heading",
-        BlockKind.Code => "Code",
+        BlockKind.Code => CodeHighlight.Label(Block.Language),
         BlockKind.Quote => "Quote",
         BlockKind.File => "Caption",
         _ => "Type '/' for commands",

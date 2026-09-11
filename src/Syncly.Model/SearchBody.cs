@@ -57,6 +57,9 @@ public static partial class SearchBody
 
     public static string ForBlock(BlockNode node)
     {
+        if (node.Kind == BlockKind.Code)
+            return node.Text;
+
         if (node.Kind != BlockKind.File)
             return From(node.Text);
 

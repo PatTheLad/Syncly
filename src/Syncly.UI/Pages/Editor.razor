@@ -158,6 +158,15 @@
              OnClose="CloseSlashAsync" />
 }
 
+@if (_langBlockId is not null)
+{
+    <Palette Items="LanguageItems()"
+             Placeholder="Code language"
+             InputId="code-lang-menu"
+             EmptyText="No language matches"
+             OnClose="CloseLanguageAsync" />
+}
+
 @if (_iconPickerOpen && _page is not null)
 {
     <IconPicker Current="_page.Icon"
@@ -176,6 +185,7 @@
     private string? _titleDraft;
     private string? _pendingTitle;
     private string? _slashBlockId;
+    private string? _langBlockId;
     private bool _iconPickerOpen;
     private bool _panelOpen;
     private string? _attachAfterBlockId;
@@ -445,6 +455,7 @@
     {
         await CloseLinkPickerAsync();
         await CloseSlashAsync();
+        await CloseLanguageAsync();
     }
 
     public Task ToggleTodoAsync(string blockId) =>
@@ -682,7 +693,7 @@
 
     // ------------------------------------------------------------- shortcuts
 
-    private (BlockKind Kind, int Consumed)? ShortcutFor(string blockId, string text)
+    private InlineMarkup.BlockShortcut? ShortcutFor(string blockId, string text)
     {
         if (State.Workspace.Tree(PageIdOrThrow).Find(blockId)?.Kind != BlockKind.Paragraph)
             return null;
@@ -690,18 +701,21 @@
         return InlineMarkup.MatchShortcut(text);
     }
 
-    private async Task ApplyShortcutAsync(string blockId, string text, (BlockKind Kind, int Consumed) shortcut)
+    private async Task ApplyShortcutAsync(string blockId, string text, InlineMarkup.BlockShortcut shortcut)
     {
         _pendingText.Remove(blockId);
         var rest = text[shortcut.Consumed..];
+        var pageId = PageIdOrThrow;
 
-        await State.Workspace.SetBlockKindAsync(PageIdOrThrow, blockId, shortcut.Kind);
-        await State.Workspace.SetBlockTextAsync(PageIdOrThrow, blockId, rest);
+        await State.Workspace.SetBlockKindAsync(pageId, blockId, shortcut.Kind);
+        if (shortcut.Kind == BlockKind.Code)
+            await State.Workspace.SetBlockLanguageAsync(pageId, blockId, shortcut.Language);
+        await State.Workspace.SetBlockTextAsync(pageId, blockId, rest);
         await Js.InvokeVoidAsync("syncly.setText", $"blk-{blockId}", rest, 0);
 
         if (shortcut.Kind == BlockKind.Divider)
         {
-            var next = await State.Workspace.SplitBlockAsync(PageIdOrThrow, blockId, 0);
+            var next = await State.Workspace.SplitBlockAsync(pageId, blockId, 0);
             await FocusBlockAsync(next, 0);
         }
     }
@@ -772,7 +786,7 @@
         BlockKind.Numbered => "1. ",
         BlockKind.Todo => "[] ",
         BlockKind.Quote => "> ",
-        BlockKind.Code => "```",
+        BlockKind.Code => "```csharp",
         BlockKind.Divider => "---",
         _ => null,
     };
@@ -827,6 +841,44 @@
     private Task CloseSlashAsync()
     {
         _slashBlockId = null;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    public Task PickCodeLanguageAsync(string blockId)
+    {
+        _slashBlockId = null;
+        _langBlockId = blockId;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private IReadOnlyList<Palette.PaletteItem> LanguageItems()
+    {
+        var blockId = _langBlockId;
+        if (blockId is null)
+            return [];
+
+        var items = CodeHighlight.Languages
+            .Select(lang => new Palette.PaletteItem(
+                "{}",
+                lang.Label,
+                lang.Id,
+                () => SetLanguageAsync(blockId, lang.Id)))
+            .ToList();
+        items.Add(new Palette.PaletteItem("¶", "Plain", null, () => SetLanguageAsync(blockId, null)));
+        return items;
+    }
+
+    private async Task SetLanguageAsync(string blockId, string? language)
+    {
+        _langBlockId = null;
+        await State.Workspace.SetBlockLanguageAsync(PageIdOrThrow, blockId, language);
+    }
+
+    private Task CloseLanguageAsync()
+    {
+        _langBlockId = null;
         StateHasChanged();
         return Task.CompletedTask;
     }

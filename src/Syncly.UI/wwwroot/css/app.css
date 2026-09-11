@@ -684,6 +684,39 @@ textarea {
   border-radius: var(--radius-sm);
 }
 
+.code-shell {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.code-lang {
+  align-self: flex-start;
+  padding: 1px 7px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-3);
+  border-radius: var(--radius-sm);
+}
+
+button.code-lang:hover {
+  color: var(--ink-1);
+  background: var(--bg-3);
+}
+
+.tok-kw { color: #c4b5fd; }
+.tok-type { color: #93c5fd; }
+.tok-str { color: #86efac; }
+.tok-cmt { color: var(--ink-3); font-style: italic; }
+.tok-num { color: #fdba74; }
+.tok-fn { color: #fde68a; }
+.tok-tag { color: #93c5fd; }
+.tok-attr { color: #fde68a; }
+.tok-at { color: #f9a8d4; }
+
 .block.todo .block-text.done {
   color: var(--ink-3);
   text-decoration: line-through;

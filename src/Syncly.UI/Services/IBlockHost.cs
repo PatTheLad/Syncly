@@ -59,5 +59,7 @@ public interface IBlockHost
 
     Task BlurAsync(string blockId, string text);
 
+    Task PickCodeLanguageAsync(string blockId);
+
     string? ResolveLink(string title);
 }

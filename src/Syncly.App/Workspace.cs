@@ -335,7 +335,22 @@ public sealed class Workspace(
         string blockId,
         BlockKind kind,
         CancellationToken ct = default) =>
-        CommitAsync(a => a.UpsertBlock(pageId, blockId, null, null, kind), pageId, ct);
+        CommitAsync(a =>
+        {
+            a.UpsertBlock(pageId, blockId, null, null, kind);
+            if (kind != BlockKind.Code)
+                a.SetProp(pageId, blockId, PropKeys.Language, null);
+        }, pageId, ct);
+
+    public Task SetBlockLanguageAsync(
+        string pageId,
+        string blockId,
+        string? language,
+        CancellationToken ct = default) =>
+        CommitAsync(
+            a => a.SetProp(pageId, blockId, PropKeys.Language, CodeHighlight.Canonical(language)),
+            pageId,
+            ct);
 
     public Task ToggleTodoAsync(string pageId, string blockId, CancellationToken ct = default)
     {
