@@ -109,6 +109,32 @@ public class SyncEngineTests
     }
 
     [Fact]
+    public async Task Revoked_peer_ops_are_not_applied()
+    {
+        var folder = NewFolder();
+        var chain = SyncChain.Create();
+
+        await using var a = await TestNode.CreateAsync("alpha");
+        await using var b = await TestNode.CreateAsync("bravo");
+        await a.UseMailboxAsync(folder, chain);
+        await b.UseMailboxAsync(folder, chain);
+
+        await a.AuthorAsync(x => SeedPage(x, "Shared"));
+        await a.Engine.SyncNowAsync();
+        await b.Engine.SyncNowAsync();
+        Assert.Equal("hello", b.Replica.BlockText(Page, "b1"));
+
+        await b.Engine.IgnorePeerAsync(a.Identity.DeviceId);
+
+        await a.AuthorAsync(x => x.InsertText(Page, "b1", 5, " world"));
+        await a.Engine.SyncNowAsync();
+        await b.Engine.SyncNowAsync();
+
+        Assert.Equal("hello", b.Replica.BlockText(Page, "b1"));
+        Assert.Equal(SyncPhase.Idle, b.Engine.Status.Phase);
+    }
+
+    [Fact]
     public async Task Page_icon_round_trips_through_the_mailbox()
     {
         var folder = NewFolder();

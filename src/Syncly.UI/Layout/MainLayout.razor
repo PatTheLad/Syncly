@@ -24,7 +24,7 @@
 
         <div class="rail-spacer"></div>
 
-        <div class="rail-dot @(IsLive ? "live" : null)" title="@SyncSummary"></div>
+        <div class="rail-dot @StatusClass" title="@SyncTooltip"></div>
         <button type="button" class="rail-item" title="Toggle sidebar" @onclick="State.ToggleSidebar">☰</button>
     </nav>
 
@@ -80,7 +80,13 @@
         <div class="sidebar-foot">
             <div class="row">
                 <span class="status-dot @StatusClass"></span>
-                <span class="card-sub grow">@SyncSummary</span>
+                <div class="grow">
+                    <div class="card-sub">@SyncSummary</div>
+                    @if (App.Sync.Status.Detail is { Length: > 0 } detail)
+                    {
+                        <div class="card-sub">@detail</div>
+                    }
+                </div>
                 <button class="chip muted" title="Sync now (Ctrl+S)" @onclick="SyncNowAsync">↻</button>
             </div>
             @if (Updater.Available is { } update)
@@ -279,8 +285,6 @@
         }
     }
 
-    private bool IsLive => App.Sync.Status.Phase == SyncPhase.Idle && App.Sync.IsConfigured;
-
     private string StatusClass => App.Sync.Status.Phase switch
     {
         SyncPhase.Idle when App.Sync.IsConfigured => "live",
@@ -290,6 +294,11 @@
     };
 
     private string SyncSummary => App.Sync.Status.Summary;
+
+    private string SyncTooltip =>
+        App.Sync.Status.Detail is { Length: > 0 } detail
+            ? $"{App.Sync.Status.Summary} — {detail}"
+            : App.Sync.Status.Summary;
 
     private IReadOnlyList<Palette.PaletteItem> PaletteItems()
     {

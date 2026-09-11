@@ -99,6 +99,84 @@ public class AttachmentTests
     }
 
     [Fact]
+    public async Task Missing_attachment_leaves_idle_with_waiting_detail()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "syncly-mailbox", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        var chain = SyncChain.Create();
+
+        await using var a = await TestNode.CreateAsync("alpha");
+        await using var b = await TestNode.CreateAsync("bravo");
+        await a.UseMailboxAsync(folder, chain);
+        await b.UseMailboxAsync(folder, chain);
+
+        const string fileId = "fl_missing";
+        var payload = new byte[] { 9, 8, 7 };
+
+        await using (var stream = new MemoryStream(payload))
+            await a.Blobs.PutAsync(fileId, stream, chain);
+
+        await a.AuthorAsync(x =>
+        {
+            x.CreateObject("page-1", "Shared");
+            x.UpsertBlock("page-1", "b-file", null, Crdt.FracIndex.Middle, BlockKind.File);
+            x.SetProp("page-1", "b-file", PropKeys.FileId, fileId);
+        });
+
+        await a.Engine.SyncNowAsync();
+        File.Delete(Path.Combine(folder, MailboxFiles.BlobName(fileId)));
+
+        await b.Engine.SyncNowAsync();
+
+        Assert.Equal(SyncPhase.Idle, b.Engine.Status.Phase);
+        Assert.Equal(SyncEngine.WaitingAttachmentsDetail(1), b.Engine.Status.Detail);
+        Assert.False(b.Blobs.Has(fileId));
+    }
+
+    [Fact]
+    public async Task Failed_blob_upload_fails_sync_after_trying()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "syncly-mailbox", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        var chain = SyncChain.Create();
+
+        await using var a = await TestNode.CreateAsync(
+            "alpha",
+            backendFactory: prefs =>
+                prefs.Backend == SyncBackendKind.Folder && !string.IsNullOrWhiteSpace(prefs.FolderPath)
+                    ? new BlobWriteFailBackend(new LocalFolderBackend(prefs.FolderPath))
+                    : null);
+
+        await a.UseMailboxAsync(folder, chain);
+
+        const string fileId = "fl_upload";
+        await using (var stream = new MemoryStream([1, 2, 3]))
+            await a.Blobs.PutAsync(fileId, stream, chain);
+
+        await a.Engine.SyncNowAsync();
+
+        Assert.Equal(SyncPhase.Failed, a.Engine.Status.Phase);
+        Assert.Equal(SyncEngine.UploadFailedDetail(1), a.Engine.Status.Detail);
+        Assert.False(File.Exists(Path.Combine(folder, MailboxFiles.BlobName(fileId))));
+    }
+
+    private sealed class BlobWriteFailBackend(ISyncBackend inner) : ISyncBackend
+    {
+        public string Name => inner.Name;
+
+        public Task<IReadOnlyList<string>> ListAsync(CancellationToken ct = default) => inner.ListAsync(ct);
+
+        public Task<byte[]?> ReadAsync(string name, CancellationToken ct = default) => inner.ReadAsync(name, ct);
+
+        public Task WriteAsync(string name, ReadOnlyMemory<byte> data, CancellationToken ct = default) =>
+            MailboxFiles.IsBlob(name)
+                ? Task.FromException(new IOException("refused"))
+                : inner.WriteAsync(name, data, ct);
+
+        public Task TestAsync(CancellationToken ct = default) => inner.TestAsync(ct);
+    }
+
+    [Fact]
     public async Task Engine_finds_file_ids_on_file_blocks()
     {
         await using var a = await TestNode.CreateAsync("alpha");

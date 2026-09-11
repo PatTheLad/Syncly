@@ -182,6 +182,14 @@ textarea {
   background: var(--ok);
 }
 
+.rail-dot.working {
+  background: var(--ink-0);
+}
+
+.rail-dot.failed {
+  background: var(--danger);
+}
+
 /* ---------------------------------------------------------------- sidebar */
 
 .sidebar {

@@ -182,7 +182,7 @@
 
                 <div class="card">
                     <div class="card-title">Devices</div>
-                    <div class="card-sub">Other devices that have written to this mailbox. Revoking hides them here; they stay ignored even if they keep syncing.</div>
+                    <div class="card-sub">Other devices that have written to this mailbox. Revoking hides them here and ignores new packs they write. Notes already on this device stay.</div>
                     @if (_peers.Count == 0)
                     {
                         <div class="card-sub">No other devices yet. Sync after they join the chain.</div>
@@ -327,7 +327,7 @@
 
     private string StatusClass => App.Sync.Status.Phase switch
     {
-        SyncPhase.Idle => "live",
+        SyncPhase.Idle when App.Sync.IsConfigured => "live",
         SyncPhase.Syncing => "working",
         SyncPhase.Failed => "failed",
         _ => "",
@@ -547,7 +547,7 @@
     private async Task RevokePeerAsync(string deviceId, string displayName)
     {
         if (!await Js.InvokeAsync<bool>("syncly.confirm",
-                $"Revoke {displayName}? They disappear from this list and stay ignored even if they keep writing packs. Your notes are unchanged."))
+                $"Revoke {displayName}? They disappear from this list. New edits they sync will not merge here. Notes already on this device stay."))
             return;
 
         await App.IgnorePeerAsync(deviceId);

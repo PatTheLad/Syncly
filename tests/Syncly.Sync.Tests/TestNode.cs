@@ -58,7 +58,10 @@ public sealed class TestNode : IAsyncDisposable
 
     public SyncEngine Engine { get; private set; } = null!;
 
-    public static async Task<TestNode> CreateAsync(string name, SyncOptions? options = null)
+    public static async Task<TestNode> CreateAsync(
+        string name,
+        SyncOptions? options = null,
+        Func<SyncPreferences, ISyncBackend?>? backendFactory = null)
     {
         var directory = Path.Combine(Path.GetTempPath(), "syncly-sync-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
@@ -81,6 +84,7 @@ public sealed class TestNode : IAsyncDisposable
                 LocalChangeDebounce = TimeSpan.FromMilliseconds(30),
                 AutoSyncInterval = TimeSpan.FromHours(1),
             },
+            BackendFactory = backendFactory,
             ListLocalBlobIds = () => blobs.ListIds(),
             ReadLocalBlobSealed = (id, token) => blobs.ReadSealedAsync(id, token),
             WriteLocalBlobSealed = (id, bytes, token) => blobs.PutSealedAsync(id, bytes, token),

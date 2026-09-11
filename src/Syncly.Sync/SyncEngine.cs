@@ -273,15 +273,35 @@ public sealed class SyncEngine : IAsyncDisposable
 
             await EnsureManifestAsync(backend, _chain, ct);
             var remote = await PullAsync(backend, _chain, ct);
-            await PullBlobsAsync(backend, ct);
+            var waiting = await PullBlobsAsync(backend, ct);
             await PushAsync(backend, _chain, ct);
-            await PushBlobsAsync(backend, ct);
+            var uploadFailed = await PushBlobsAsync(backend, ct);
 
             var summary = remote == 0
                 ? $"Synced via {backend.Name}"
                 : $"Synced via {backend.Name} · {remote} device(s)";
 
-            SetStatus(SyncPhase.Idle, summary, null, backend.Name, DateTimeOffset.UtcNow, remote, rememberRemote: false);
+            if (uploadFailed > 0)
+            {
+                SetStatus(
+                    SyncPhase.Failed,
+                    "Sync failed",
+                    UploadFailedDetail(uploadFailed),
+                    backend.Name,
+                    _status.LastSuccessAt,
+                    remote,
+                    rememberRemote: false);
+                return;
+            }
+
+            SetStatus(
+                SyncPhase.Idle,
+                summary,
+                WaitingAttachmentsDetail(waiting),
+                backend.Name,
+                DateTimeOffset.UtcNow,
+                remote,
+                rememberRemote: false);
         }
         catch (OperationCanceledException)
         {
@@ -475,7 +495,8 @@ public sealed class SyncEngine : IAsyncDisposable
 
     private async Task ApplyPackAsync(DevicePack pack, CancellationToken ct)
     {
-        if (pack.Ops.Count > 0)
+        var ignored = _ignoredPeers.Contains(pack.DeviceId);
+        if (!ignored && pack.Ops.Count > 0)
         {
             var result = _context.Replica.Apply(pack.Ops);
             if (result.Applied.Count > 0)
@@ -487,7 +508,7 @@ public sealed class SyncEngine : IAsyncDisposable
         }
 
         var theirs = VersionVectorText.Parse(pack.Version);
-        if (!_ignoredPeers.Contains(pack.DeviceId))
+        if (!ignored)
         {
             await _context.Peers.TrustAsync(
                 new TrustedDevice(pack.DeviceId, pack.DisplayName, "", DateTimeOffset.UtcNow), ct);
@@ -509,10 +530,10 @@ public sealed class SyncEngine : IAsyncDisposable
         await _context.Vault.WriteAsync(UploadedBlobsVaultKey, value, ct);
     }
 
-    private async Task PullBlobsAsync(ISyncBackend backend, CancellationToken ct)
+    private async Task<int> PullBlobsAsync(ISyncBackend backend, CancellationToken ct)
     {
         if (_context.WriteLocalBlobSealed is null || _context.ListLocalBlobIds is null)
-            return;
+            return 0;
 
         var localIds = _context.ListLocalBlobIds().ToHashSet(StringComparer.Ordinal);
         var listedIds = new HashSet<string>(StringComparer.Ordinal);
@@ -550,7 +571,16 @@ public sealed class SyncEngine : IAsyncDisposable
             if (sealedBytes is null || sealedBytes.Length == 0)
                 continue;
 
-            await _context.WriteLocalBlobSealed(id, sealedBytes, ct);
+            try
+            {
+                await _context.WriteLocalBlobSealed(id, sealedBytes, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not store attachment {FileId}.", id);
+                continue;
+            }
+
             localIds.Add(id);
             _uploadedBlobs.Add(id);
             pulled = true;
@@ -563,30 +593,67 @@ public sealed class SyncEngine : IAsyncDisposable
         await PersistUploadedBlobsAsync(ct);
         if (pulled && _context.OnBlobsChanged is { } notify)
             await notify();
+
+        return ReferencedBlobIds().Distinct(StringComparer.Ordinal).Count(id => !localIds.Contains(id));
     }
 
-    private async Task PushBlobsAsync(ISyncBackend backend, CancellationToken ct)
+    private async Task<int> PushBlobsAsync(ISyncBackend backend, CancellationToken ct)
     {
         if (_context.ListLocalBlobIds is null || _context.ReadLocalBlobSealed is null)
-            return;
+            return 0;
 
+        var failed = 0;
         var localIds = _context.ListLocalBlobIds().ToHashSet(StringComparer.Ordinal);
         foreach (var id in localIds)
         {
             if (_uploadedBlobs.Contains(id))
                 continue;
 
-            var sealedBytes = await _context.ReadLocalBlobSealed(id, ct);
+            byte[]? sealedBytes;
+            try
+            {
+                sealedBytes = await _context.ReadLocalBlobSealed(id, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not read attachment {FileId} for upload.", id);
+                failed++;
+                continue;
+            }
+
             if (sealedBytes is null || sealedBytes.Length == 0)
                 continue;
 
-            await backend.WriteAsync(MailboxFiles.BlobName(id), sealedBytes, ct);
+            try
+            {
+                await backend.WriteAsync(MailboxFiles.BlobName(id), sealedBytes, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not upload attachment {FileId}.", id);
+                failed++;
+                continue;
+            }
+
             _uploadedBlobs.Add(id);
             _logger.LogInformation("Pushed attachment {FileId}.", id);
         }
 
         await PersistUploadedBlobsAsync(ct);
+        return failed;
     }
+
+    internal static string? WaitingAttachmentsDetail(int count) =>
+        count <= 0
+            ? null
+            : count == 1
+                ? "1 attachment waiting"
+                : $"{count} attachments waiting";
+
+    internal static string UploadFailedDetail(int count) =>
+        count == 1
+            ? "Could not upload 1 attachment."
+            : $"Could not upload {count} attachments.";
 
     internal static IEnumerable<string> ReferencedBlobIds(Replica replica)
     {
@@ -682,6 +749,7 @@ public sealed class SyncEngine : IAsyncDisposable
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Sync maintenance pass failed.");
+                SetStatus(SyncPhase.Failed, "Sync failed", ex.Message);
             }
         }
     }
