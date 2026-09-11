@@ -36,7 +36,7 @@
             <button type="button"
                     class="backlink"
                     @key="link.BlockId"
-                    @onclick="() => OnBacklink.InvokeAsync(link.ObjectId)">
+                    @onclick="() => OnBacklink.InvokeAsync(link)">
                 <strong>@link.Title</strong>
                 <span>@link.Text</span>
             </button>
@@ -58,5 +58,5 @@
     public EventCallback<string> OnHeading { get; set; }
 
     [Parameter]
-    public EventCallback<string> OnBacklink { get; set; }
+    public EventCallback<Backlink> OnBacklink { get; set; }
 }

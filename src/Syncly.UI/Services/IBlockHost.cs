@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Components.Web;
+
 namespace Syncly.UI.Services;
 
 /// <summary>
@@ -60,6 +62,16 @@ public interface IBlockHost
     Task BlurAsync(string blockId, string text);
 
     Task PickCodeLanguageAsync(string blockId);
+
+    void BeginBlockDrag(string blockId);
+
+    void EndBlockDrag();
+
+    Task BlockDragOverAsync(string targetId, DragEventArgs e);
+
+    Task DropBlockAsync(string targetId, DragEventArgs e);
+
+    string? BlockDropClass(string blockId);
 
     string? ResolveLink(string title);
 }

@@ -94,6 +94,17 @@ public static partial class SearchBody
             .Replace(close, "</mark>", StringComparison.Ordinal);
     }
 
+    /// <summary>Snippet text without highlight tags, for places that cannot render HTML.</summary>
+    public static string PlainSnippet(string snippet)
+    {
+        if (string.IsNullOrEmpty(snippet))
+            return string.Empty;
+
+        return snippet
+            .Replace("<mark>", string.Empty, StringComparison.Ordinal)
+            .Replace("</mark>", string.Empty, StringComparison.Ordinal);
+    }
+
     private static string StripMarks(string text)
     {
         text = CodePattern.Replace(text, m => m.Groups["t"].Value);

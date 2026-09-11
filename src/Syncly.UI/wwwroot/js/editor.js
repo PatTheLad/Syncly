@@ -212,7 +212,7 @@
       }
 
       if (!handled && event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey
-          && (text.length === 0 || caret === 0)) {
+          && text.length === 0) {
         event.preventDefault();
         dotnet.invokeMethodAsync('OnSlash');
       }
@@ -378,9 +378,15 @@
         return;
       }
 
-      if (meta && event.key.toLowerCase() === 's' && !event.shiftKey) {
+      if (meta && event.key.toLowerCase() === 'f') {
         event.preventDefault();
-        dotnet.invokeMethodAsync('OnSyncNow');
+        dotnet.invokeMethodAsync('OnFind');
+        return;
+      }
+
+      if (meta && event.key.toLowerCase() === 'd') {
+        event.preventDefault();
+        dotnet.invokeMethodAsync('OnDailyNote');
         return;
       }
 
@@ -429,6 +435,14 @@
       return 'into';
 
     const rect = row.getBoundingClientRect();
+    if (rect.height <= 0) return 'after';
+    return clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+  }
+
+  function blockDropHint(blockId, clientX, clientY) {
+    const el = document.getElementById('blk-' + blockId);
+    if (!el) return 'after';
+    const rect = el.getBoundingClientRect();
     if (rect.height <= 0) return 'after';
     return clientY < rect.top + rect.height / 2 ? 'before' : 'after';
   }
@@ -506,6 +520,7 @@
     isNarrow,
     confirm: confirmDialog,
     treeDropHint,
+    blockDropHint,
     scanQr,
     click(id) {
       const el = element(id);

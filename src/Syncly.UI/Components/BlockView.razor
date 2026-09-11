@@ -4,10 +4,21 @@
 @inject IJSRuntime Js
 @inject EditorState State
 
-<div id="@ElementId" class="block @KindClass" @key="Block.Id">
+<div id="@ElementId"
+     class="block @KindClass @BlockDropClass"
+     @key="Block.Id"
+     @ondragover="OnDragOverAsync"
+     @ondragover:preventDefault
+     @ondrop="OnDropAsync"
+     @ondrop:preventDefault>
     @if (!Host.Reading && Block.Kind is not (BlockKind.Divider or BlockKind.PageLink or BlockKind.File))
     {
-        <button class="block-handle" title="Block actions" @onclick="OpenMenuAsync">⋮</button>
+        <button class="block-handle"
+                title="Drag to reorder, click for actions"
+                draggable="true"
+                @onclick="OpenMenuAsync"
+                @ondragstart="OnDragStart"
+                @ondragend="OnDragEnd">⋮</button>
     }
 
     @if (Block.Kind == BlockKind.Todo)
@@ -24,7 +35,7 @@
     }
     else if (Block.Kind == BlockKind.Numbered)
     {
-        <span class="block-marker">@(Index + 1).</span>
+        <span class="block-marker">@(NumberedMarker).</span>
     }
 
     @if (Block.Kind == BlockKind.Divider)
@@ -218,6 +229,13 @@
     public required IBlockHost Host { get; set; }
 
     public string ElementId => $"blk-{Block.Id}";
+
+    private int NumberedMarker =>
+        Block.Kind == BlockKind.Numbered
+            ? State.Workspace.Tree(Block.ObjectId).NumberedMarker(Block)
+            : Index + 1;
+
+    private string? BlockDropClass => Host.BlockDropClass(Block.Id);
 
     /// <summary>
     /// Source (markers visible) only for the focused text block, or a file caption while editing.
@@ -434,6 +452,14 @@
     public Task OnEscape() => Host.EscapeAsync();
 
     private Task OpenMenuAsync() => Host.SlashAsync(Block.Id);
+
+    private void OnDragStart() => Host.BeginBlockDrag(Block.Id);
+
+    private void OnDragEnd() => Host.EndBlockDrag();
+
+    private Task OnDragOverAsync(DragEventArgs e) => Host.BlockDragOverAsync(Block.Id, e);
+
+    private Task OnDropAsync(DragEventArgs e) => Host.DropBlockAsync(Block.Id, e);
 
     private Task OpenTargetAsync()
     {

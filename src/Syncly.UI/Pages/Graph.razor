@@ -1,0 +1,103 @@
+@page "/graph"
+@namespace Syncly.UI.Pages
+@implements IDisposable
+@inject EditorState State
+@inject NavigationManager Nav
+
+<div class="graph-page">
+    <div class="graph-head">
+        <div>
+            <div class="graph-title">Graph</div>
+            <div class="card-sub">Pages in @(State.CurrentSpace?.DisplayTitle ?? "this space"), linked by [[wikilinks]] and page cards.</div>
+        </div>
+        <span class="chip muted">@_graph.Nodes.Count page(s)</span>
+    </div>
+
+    @if (_graph.Nodes.Count == 0)
+    {
+        <div class="empty-state">
+            <h2>No pages yet</h2>
+            <p>Create a page, then connect it with <code>[[wikilinks]]</code>.</p>
+        </div>
+    }
+    else
+    {
+        <svg class="graph-canvas" viewBox="0 0 1000 1000" role="img" aria-label="Page graph">
+            @foreach (var edge in _graph.Edges)
+            {
+                var from = Node(edge.From);
+                var to = Node(edge.To);
+                if (from is null || to is null)
+                    continue;
+                <line class="graph-edge"
+                      x1="@Px(from.X)" y1="@Px(from.Y)"
+                      x2="@Px(to.X)" y2="@Px(to.Y)" />
+            }
+
+            @foreach (var node in _graph.Nodes)
+            {
+                var current = node.Id == State.CurrentPageId;
+                <g class="graph-node @(current ? "current" : null) @(node.Missing ? "missing" : null)"
+                   @key="node.Id"
+                   transform="translate(@Px(node.X) @Px(node.Y))"
+                   @onclick="() => OpenAsync(node)">
+                    <circle r="18" />
+                    <text y="5">@(node.Icon is { Length: > 0 } icon ? icon : node.Title.Length == 0 ? "?" : char.ToUpperInvariant(node.Title.Trim()[0]).ToString())</text>
+                    <text class="graph-label" y="34">@Truncate(node.Title)</text>
+                </g>
+            }
+        </svg>
+    }
+</div>
+
+@code {
+    private PageGraph _graph = new([], []);
+
+    protected override void OnInitialized()
+    {
+        State.Changed += Refresh;
+        State.Workspace.Changed += Refresh;
+    }
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private void Refresh() => _ = InvokeAsync(LoadAsync);
+
+    private async Task LoadAsync()
+    {
+        _graph = await State.Workspace.GraphAsync();
+        StateHasChanged();
+    }
+
+    private GraphNode? Node(string id) =>
+        _graph.Nodes.FirstOrDefault(n => n.Id == id);
+
+    private static int Px(double unit) => (int)Math.Round(unit * 1000);
+
+    private static string Truncate(string title)
+    {
+        var text = string.IsNullOrWhiteSpace(title) ? "Untitled" : title;
+        return text.Length <= 22 ? text : text[..21] + "…";
+    }
+
+    private async Task OpenAsync(GraphNode node)
+    {
+        if (node.Missing)
+        {
+            var pageId = await State.Workspace.EnsurePageByTitleAsync(node.Title);
+            State.Open(pageId);
+        }
+        else
+        {
+            State.Open(node.Id);
+        }
+
+        Nav.NavigateTo("");
+    }
+
+    public void Dispose()
+    {
+        State.Changed -= Refresh;
+        State.Workspace.Changed -= Refresh;
+    }
+}

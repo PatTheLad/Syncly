@@ -19,6 +19,8 @@
 
         <button class="rail-item @(IsAt("") ? "active" : null)" title="Notes (Ctrl+K to jump)"
                 @onclick='() => Go("")'>✎</button>
+        <button class="rail-item @(IsAt("graph") ? "active" : null)" title="Graph"
+                @onclick='() => Go("graph")'>◎</button>
         <button class="rail-item @(IsAt("settings") ? "active" : null)" title="Settings"
                 @onclick='() => Go("settings")'>⚙</button>
 
@@ -41,7 +43,7 @@
         </div>
 
         <div class="sidebar-search">
-            <input placeholder="Search" value="@_query" @oninput="OnSearchAsync" />
+            <input id="sidebar-search" placeholder="Search" value="@_query" @oninput="OnSearchAsync" />
         </div>
 
         @if (_hits is { Count: > 0 })
@@ -129,9 +131,10 @@
 @if (State.PaletteOpen)
 {
     <Palette Items="PaletteItems()"
-             Placeholder="Jump to a page or run a command"
+             Placeholder="Jump, search, or run a command"
              InputId="command-palette"
-             OnClose="() => State.TogglePalette(false)" />
+             OnQuery="OnPaletteQuery"
+             OnClose="ClosePalette" />
 }
 
 @if (State.SpaceSwitcherOpen)
@@ -146,6 +149,7 @@
     private List<SearchHit>? _hits;
     private bool _paletteFlag;
     private List<string> _unresolved = [];
+    private List<SearchHit> _paletteHits = [];
 
     protected override void OnInitialized()
     {
@@ -254,6 +258,34 @@
             : await State.Workspace.SearchAsync(_query);
     }
 
+    private async Task OnPaletteQuery(string query)
+    {
+        _paletteHits = query.Trim().Length == 0
+            ? []
+            : await State.Workspace.SearchAsync(query);
+        StateHasChanged();
+    }
+
+    private void ClosePalette()
+    {
+        _paletteHits = [];
+        State.TogglePalette(false);
+    }
+
+    private async Task OpenDailyAsync()
+    {
+        var pageId = await State.Workspace.OpenOrCreateDailyAsync();
+        Open(pageId);
+        State.SetReadingMode(false);
+    }
+
+    private async Task DuplicateCurrentAsync(string pageId)
+    {
+        var copyId = await State.Workspace.DuplicatePageAsync(pageId);
+        Open(copyId);
+        State.SetReadingMode(false);
+    }
+
     private Task SyncNowAsync() => App.Sync.SyncNowAsync();
 
     private Task UpdateAsync() => Updater.ApplyAsync();
@@ -310,7 +342,13 @@
                 State.ToggleSpaceSwitcher(true);
                 return Task.CompletedTask;
             }),
+            new("◎", "Graph", null, () =>
+            {
+                Go("graph");
+                return Task.CompletedTask;
+            }),
             new("↻", "Sync now", "Ctrl+S", SyncNowAsync),
+            new("📅", "Today's note", "Ctrl+D", OpenDailyAsync),
             new("👁", State.ReadingMode ? "Edit this page" : "Reading mode", "Ctrl+E", () =>
             {
                 State.ToggleReadingMode();
@@ -322,6 +360,31 @@
                 return Task.CompletedTask;
             }),
         };
+
+        if (State.CurrentPageId is { } current)
+        {
+            items.Add(new("⧉", "Duplicate this page", null, () => DuplicateCurrentAsync(current)));
+        }
+
+        items.AddRange(_paletteHits
+            .Where(hit => hit.BlockId.Length > 0)
+            .Select(hit =>
+            {
+                var snippet = SearchBody.PlainSnippet(hit.Snippet);
+                if (snippet.Length > 80)
+                    snippet = snippet[..80] + "…";
+                var title = string.IsNullOrWhiteSpace(hit.Title) ? "Untitled" : hit.Title;
+                return new Palette.PaletteItem(
+                    "⌕",
+                    title,
+                    snippet,
+                    () =>
+                    {
+                        OpenHit(hit);
+                        return Task.CompletedTask;
+                    },
+                    Pin: true);
+            }));
 
         items.AddRange(_unresolved.Take(20).Select(title =>
             new Palette.PaletteItem(
@@ -361,8 +424,26 @@
     public Task OnSyncNow() => SyncNowAsync();
 
     [JSInvokable]
+    public Task OnDailyNote() => OpenDailyAsync();
+
+    [JSInvokable]
+    public async Task OnFind()
+    {
+        State.SetSidebar(true);
+        State.TogglePalette(false);
+        try
+        {
+            await Js.InvokeVoidAsync("syncly.focusElement", "sidebar-search", true);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    [JSInvokable]
     public void OnEscape()
     {
+        _paletteHits = [];
         State.TogglePalette(false);
         State.ToggleSpaceSwitcher(false);
     }

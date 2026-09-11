@@ -589,6 +589,14 @@ textarea {
   animation: search-flash 1.4s ease-out;
 }
 
+.block.drop-before {
+  box-shadow: inset 0 2px 0 var(--line-strong);
+}
+
+.block.drop-after {
+  box-shadow: inset 0 -2px 0 var(--line-strong);
+}
+
 @keyframes search-flash {
   0% { background: rgb(255 255 255 / 16%); }
   100% { background: transparent; }
@@ -1924,5 +1932,90 @@ html.phone .icon-grid {
   margin-top: 8px;
   width: 100%;
   justify-content: center;
+}
+
+.graph-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-1);
+}
+
+.graph-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.graph-title {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.graph-canvas {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  background: var(--bg-0);
+}
+
+.graph-edge {
+  stroke: var(--line-strong);
+  stroke-width: 2;
+}
+
+.graph-node {
+  cursor: pointer;
+}
+
+.graph-node circle {
+  fill: var(--bg-3);
+  stroke: var(--line-strong);
+  stroke-width: 1.5;
+}
+
+.graph-node text {
+  fill: var(--ink-0);
+  font-size: 12px;
+  font-weight: 650;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.graph-node .graph-label {
+  fill: var(--ink-1);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.graph-node.current circle {
+  fill: var(--ink-0);
+  stroke: var(--ink-0);
+}
+
+.graph-node.current text {
+  fill: var(--accent-ink);
+}
+
+.graph-node.current .graph-label {
+  fill: var(--ink-0);
+}
+
+.graph-node.missing circle {
+  fill: transparent;
+  stroke-dasharray: 3 3;
+}
+
+.graph-node.missing text,
+.graph-node.missing .graph-label {
+  fill: var(--ink-3);
+}
+
+.block-handle {
+  cursor: grab;
 }
 

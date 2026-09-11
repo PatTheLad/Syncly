@@ -38,6 +38,31 @@ public sealed class BlockTree
 
     public int IndexAmongSiblings(BlockNode block) => IndexOf(Siblings(block.ParentId), block.Id);
 
+    /// <summary>
+    /// 1-based index in the current run of numbered siblings, restarting after a non-numbered block.
+    /// </summary>
+    public int NumberedMarker(BlockNode block)
+    {
+        if (block.Kind != BlockKind.Numbered)
+            return 0;
+
+        var n = 0;
+        foreach (var sibling in Siblings(block.ParentId))
+        {
+            if (sibling.Kind != BlockKind.Numbered)
+            {
+                n = 0;
+                continue;
+            }
+
+            n++;
+            if (sibling.Id == block.Id)
+                return n;
+        }
+
+        return 1;
+    }
+
     public BlockNode? PreviousSibling(BlockNode block)
     {
         var siblings = Siblings(block.ParentId);

@@ -42,7 +42,7 @@
     private List<PaletteItem> _matches = [];
 
     /// <summary>One row: an icon, a label, an optional hint, and what to do when chosen.</summary>
-    public sealed record PaletteItem(string Glyph, string Label, string? Hint, Func<Task> Run)
+    public sealed record PaletteItem(string Glyph, string Label, string? Hint, Func<Task> Run, bool Pin = false)
     {
         public string SearchText => $"{Label} {Hint}".ToLowerInvariant();
     }
@@ -88,8 +88,8 @@
     {
         var terms = _query.Trim().ToLowerInvariant();
         _matches = terms.Length == 0
-            ? Items.ToList()
-            : Items.Where(i => i.SearchText.Contains(terms, StringComparison.Ordinal)).ToList();
+            ? Items.Where(i => !i.Pin).ToList()
+            : Items.Where(i => i.Pin || i.SearchText.Contains(terms, StringComparison.Ordinal)).ToList();
 
         _active = Math.Clamp(_active, 0, Math.Max(_matches.Count - 1, 0));
     }

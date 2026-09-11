@@ -675,6 +675,42 @@ public sealed class Workspace(
         await CommitAsync(a => a.UpsertBlock(pageId, blockId, block.ParentId, position, null), pageId, ct);
     }
 
+    /// <summary>Places <paramref name="blockId"/> before or after <paramref name="relativeId"/>.</summary>
+    public async Task ReorderBlockAsync(
+        string pageId,
+        string blockId,
+        string relativeId,
+        bool after,
+        CancellationToken ct = default)
+    {
+        if (blockId == relativeId)
+            return;
+
+        var tree = Tree(pageId);
+        var block = tree.Find(blockId);
+        var relative = tree.Find(relativeId);
+        if (block is null || relative is null)
+            return;
+
+        var parentId = relative.ParentId;
+        if (block.DescendantsAndSelf().Any(n => n.Id == relativeId))
+            return;
+
+        var siblings = tree.Siblings(parentId).Where(s => s.Id != blockId).ToList();
+        var at = siblings.FindIndex(s => s.Id == relativeId);
+        if (at < 0)
+            return;
+
+        var index = after ? at + 1 : at;
+        var low = index > 0 ? siblings[index - 1].Position : null;
+        var high = index < siblings.Count ? siblings[index].Position : null;
+
+        await CommitAsync(
+            a => a.UpsertBlock(pageId, blockId, parentId, FracIndex.Between(low, high), null),
+            pageId,
+            ct);
+    }
+
     // ----------------------------------------------------------------- search
 
     public Task<List<SearchHit>> SearchAsync(string query, CancellationToken ct = default) =>
@@ -692,6 +728,113 @@ public sealed class Workspace(
 
     public Task<List<string>> UnresolvedLinksAsync(CancellationToken ct = default) =>
         projection.UnresolvedLinksAsync(CurrentSpaceId, DefaultSpaceId, ct);
+
+    public async Task<string> DuplicatePageAsync(string pageId, CancellationToken ct = default)
+    {
+        var source = Open(pageId);
+        var page = Page(pageId);
+        var space = page?.SpaceId ?? CurrentSpaceId ?? DefaultSpaceId;
+        var parentId = page?.ParentId;
+        var title = string.IsNullOrWhiteSpace(source.Title) ? "Untitled copy" : $"{source.Title} copy";
+        var newId = NewId("pg");
+
+        await EnsureSiblingPositionsAsync(parentId, ct, space);
+        var last = ChildrenOf(parentId, space).LastOrDefault()?.Position;
+        var map = source.Flatten().ToDictionary(b => b.Id, _ => NewId("bl"), StringComparer.Ordinal);
+
+        await CommitAsync(a =>
+        {
+            a.CreateObject(newId, title, parentId, ObjectTypes.Page, space);
+            a.SetProp(newId, newId, PropKeys.Position, FracIndex.Between(last, null));
+            if (source.Icon is { Length: > 0 } icon)
+                a.SetProp(newId, newId, PropKeys.Icon, icon);
+
+            var blocks = source.Flatten().ToList();
+            if (blocks.Count == 0)
+            {
+                a.UpsertBlock(newId, NewId("bl"), null, FracIndex.Middle, BlockKind.Paragraph);
+                return;
+            }
+
+            foreach (var block in blocks)
+            {
+                var nid = map[block.Id];
+                var parent = block.ParentId is { } pid && map.TryGetValue(pid, out var mapped)
+                    ? mapped
+                    : null;
+                a.UpsertBlock(newId, nid, parent, block.Position, block.Kind);
+                if (block.Text.Length > 0)
+                    a.InsertText(newId, nid, 0, block.Text);
+
+                foreach (var (key, value) in block.Props)
+                {
+                    if (key == PropKeys.Deleted)
+                        continue;
+                    a.SetProp(newId, nid, key, value);
+                }
+            }
+        }, newId, ct);
+
+        return newId;
+    }
+
+    public async Task<string> OpenOrCreateDailyAsync(CancellationToken ct = default)
+    {
+        var title = DateTime.Now.ToString("yyyy-MM-dd");
+        var existing = PagesIn(CurrentSpaceId).FirstOrDefault(p =>
+            string.Equals(p.Title, title, StringComparison.Ordinal));
+        if (existing is not null)
+            return existing.Id;
+
+        return await CreatePageAsync(null, title, CurrentSpaceId, ct);
+    }
+
+    public async Task<PageGraph> GraphAsync(CancellationToken ct = default)
+    {
+        var space = CurrentSpaceId;
+        var pages = PagesIn(space);
+        var byId = pages.ToDictionary(p => p.Id, StringComparer.Ordinal);
+        var byKey = new Dictionary<string, PageRef>(StringComparer.Ordinal);
+        foreach (var page in pages)
+        {
+            var key = Wikilinks.Key(page.Title);
+            if (key.Length > 0)
+                byKey.TryAdd(key, page);
+        }
+
+        var links = await projection.ListLinksAsync(space, DefaultSpaceId, ct);
+        var nodes = new Dictionary<string, GraphNode>(StringComparer.Ordinal);
+        var edges = new HashSet<(string From, string To)>();
+
+        foreach (var page in pages)
+            nodes[page.Id] = new GraphNode(page.Id, page.DisplayTitle, page.Icon, 0, 0, false, false);
+
+        foreach (var link in links)
+        {
+            if (!byId.ContainsKey(link.SourceId))
+                continue;
+
+            string? targetId = null;
+            if (link.TargetId is { Length: > 0 } id && byId.ContainsKey(id))
+                targetId = id;
+            else if (byKey.TryGetValue(link.TargetKey, out var named))
+                targetId = named.Id;
+
+            if (targetId is null)
+            {
+                var missingId = "missing:" + link.TargetKey;
+                nodes.TryAdd(missingId, new GraphNode(missingId, link.TargetKey, null, 0, 0, false, true));
+                targetId = missingId;
+            }
+
+            if (targetId == link.SourceId)
+                continue;
+
+            edges.Add((link.SourceId, targetId));
+        }
+
+        return GraphLayout.Arrange([.. nodes.Values], [.. edges.Select(e => new GraphEdge(e.From, e.To))]);
+    }
 
     /// <summary>
     /// Writes FracIndex keys for a sibling group that still sorts by title, so the first reorder

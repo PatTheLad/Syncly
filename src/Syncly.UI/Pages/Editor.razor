@@ -195,6 +195,9 @@
     private string? _revealRequest;
     private string? _loadedPageId;
     private string? _focusedBlockId;
+    private string? _dragBlockId;
+    private string? _blockHoverId;
+    private string? _blockHoverEdge;
     private DotNetObjectReference<Editor>? _jsSelf;
 
     [Parameter]
@@ -883,6 +886,75 @@
         return Task.CompletedTask;
     }
 
+    public void BeginBlockDrag(string blockId)
+    {
+        _dragBlockId = blockId;
+        _blockHoverId = null;
+        _blockHoverEdge = null;
+    }
+
+    public void EndBlockDrag()
+    {
+        _dragBlockId = null;
+        _blockHoverId = null;
+        _blockHoverEdge = null;
+        StateHasChanged();
+    }
+
+    public async Task BlockDragOverAsync(string targetId, DragEventArgs e)
+    {
+        if (_dragBlockId is null || _dragBlockId == targetId)
+        {
+            _blockHoverId = null;
+            return;
+        }
+
+        _blockHoverId = targetId;
+        try
+        {
+            _blockHoverEdge = await Js.InvokeAsync<string>("syncly.blockDropHint", targetId, e.ClientX, e.ClientY);
+        }
+        catch (JSException)
+        {
+            _blockHoverEdge = "after";
+        }
+        catch (JSDisconnectedException)
+        {
+            _blockHoverEdge = "after";
+        }
+    }
+
+    public async Task DropBlockAsync(string targetId, DragEventArgs e)
+    {
+        var dragged = _dragBlockId;
+        var edge = "after";
+        try
+        {
+            edge = await Js.InvokeAsync<string>("syncly.blockDropHint", targetId, e.ClientX, e.ClientY);
+        }
+        catch (JSException)
+        {
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+
+        EndBlockDrag();
+        if (dragged is null || dragged == targetId)
+            return;
+
+        await FlushAsync();
+        await State.Workspace.ReorderBlockAsync(PageIdOrThrow, dragged, targetId, after: edge == "after");
+    }
+
+    public string? BlockDropClass(string blockId)
+    {
+        if (_blockHoverId != blockId)
+            return null;
+
+        return _blockHoverEdge == "before" ? "drop-before" : "drop-after";
+    }
+
     // ----------------------------------------------------------------- pages
 
     private string PageIdOrThrow =>
@@ -948,16 +1020,16 @@
         await FocusBlockAsync(blockId, -1);
     }
 
-    private Task OpenBacklink(string pageId)
+    private Task OpenBacklink(Backlink link)
     {
-        State.Open(pageId);
+        State.Open(link.ObjectId, string.IsNullOrEmpty(link.BlockId) ? null : link.BlockId);
         return Task.CompletedTask;
     }
 
-    private Task OpenBacklinkFromSheet(string pageId)
+    private Task OpenBacklinkFromSheet(Backlink link)
     {
         _panelOpen = false;
-        State.Open(pageId);
+        State.Open(link.ObjectId, string.IsNullOrEmpty(link.BlockId) ? null : link.BlockId);
         return Task.CompletedTask;
     }
 

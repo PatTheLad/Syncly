@@ -11,9 +11,10 @@ Edit locally → encrypt with the chain code → write {deviceId}.syncly → oth
 
 ## What it is
 
-Pages are trees of blocks — paragraphs, headings, bullets, to-dos, quotes, code, dividers — the way
-Obsidian and Anytype work. Pages nest, `[[wikilinks]]` connect them, and every page shows what links
-back to it.
+Pages are trees of blocks — paragraphs, headings, bullets, to-dos, quotes, code, dividers, page
+links, and file attachments — the way Obsidian and Anytype work. Pages nest, sit in **spaces**,
+`[[wikilinks]]` connect them, backlinks and a **graph** show the web, and every page shows what
+links here.
 
 Syncly does not last-write-wins your notes. Every edit is a small operation in an append-only log,
 and the log is a CRDT, so two devices editing the same paragraph while offline both keep their
@@ -99,18 +100,22 @@ Installed copies check that feed on startup. When a newer release exists, the sh
 
 | Key | Does |
 |-----|------|
-| `Ctrl`+`K` | Command palette: jump to a page, new page, sync now |
+| `Ctrl`+`K` | Command palette: commands, page titles, and full-text hits |
+| `Ctrl`+`F` | Focus sidebar search |
 | `Ctrl`+`E` | Reading mode — pages open read-only until you ask to edit |
 | `Ctrl`+`N` / `Ctrl`+`S` | New page / sync now |
+| `Ctrl`+`D` | Open or create today's note (`yyyy-MM-dd`) in the current space |
 | `/` | Block menu on an empty block |
-| `# `, `- `, `1. `, `[] `, `> `, `--- ` | Turn the block into that type as you type |
+| `# `, `- `, `1. `, `[] `, `> `, `--- `, ` ```lang ` | Turn the block into that type as you type |
 | `Enter` / `Backspace` | Split a block / merge it into the one above |
 | `Tab` / `Shift`+`Tab` | Indent / outdent |
-| `Alt`+`↑` / `Alt`+`↓` | Move a block |
+| `Alt`+`↑` / `Alt`+`↓` | Move a block (or drag the ⋮ handle) |
 | `Ctrl`+`B` / `Ctrl`+`I` / `Ctrl`+`U` | Bold, italic, underline |
+| `Ctrl`+`Shift`+`S` | Strikethrough |
 
-Marks are stored in the text itself (`**bold**`, `__underline__`), so two people formatting
-overlapping words merge as text instead of fighting over a range.
+Marks are stored in the text itself (`**bold**`, `__underline__`, `~~strike~~`), so two people
+formatting overlapping words merge as text instead of fighting over a range. Unfocused blocks show
+formatted preview; the focused block shows source. Duplicate a page from the tree ⋮ menu or Ctrl+K.
 
 ## Upgrading from v1
 
@@ -119,5 +124,4 @@ body lines become blocks, and leaves the old table untouched as a backup.
 
 ## Not in this pass
 
-Graph view, extra cloud providers beyond Proton Drive, encryption at rest of the local database,
-and file attachments.
+Extra cloud providers beyond Proton Drive, and encryption at rest of the local database.

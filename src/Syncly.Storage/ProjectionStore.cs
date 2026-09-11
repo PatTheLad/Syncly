@@ -287,6 +287,46 @@ public sealed class ProjectionStore(SynclyDatabase database)
             return links;
         }, ct);
 
+    public async Task<List<GraphLink>> ListLinksAsync(
+        string? spaceId = null,
+        string defaultSpaceId = "spc_default",
+        CancellationToken ct = default) =>
+        await database.RunAsync(async connection =>
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = spaceId is null
+                ?
+                """
+                SELECT l.source_object, l.target_object, l.target_key
+                FROM links l
+                JOIN objects o ON o.id = l.source_object
+                WHERE o.deleted = 0 AND o.type = 'page'
+                """
+                :
+                """
+                SELECT l.source_object, l.target_object, l.target_key
+                FROM links l
+                JOIN objects o ON o.id = l.source_object
+                WHERE o.deleted = 0 AND o.type = 'page'
+                  AND (o.space_id = $space OR ($space = $default AND o.space_id IS NULL))
+                """;
+            if (spaceId is not null)
+            {
+                command.Parameters.AddWithValue("$space", spaceId);
+                command.Parameters.AddWithValue("$default", defaultSpaceId);
+            }
+
+            var links = new List<GraphLink>();
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+                links.Add(new GraphLink(
+                    reader.GetString(0),
+                    reader.IsDBNull(1) ? null : reader.GetString(1),
+                    reader.GetString(2)));
+
+            return links;
+        }, ct);
+
     /// <summary>
     /// Distinct wikilink targets that do not match any existing page title.
     /// When <paramref name="spaceId"/> is set, only links from pages in that space count

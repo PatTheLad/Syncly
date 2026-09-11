@@ -172,6 +172,7 @@
         return
         [
             new("✎", "Rename", null, () => StartRenameAsync(pageId)),
+            new("⧉", "Duplicate", null, () => DuplicateAsync(pageId)),
             new("↗", "Move to…", null, () => StartMoveAsync(pageId)),
             new("✕", "Delete", null, () => DeleteAsync(pageId)),
         ];
@@ -243,6 +244,16 @@
 
         _renamingId = null;
         await Workspace.RenamePageAsync(pageId, _renameDraft.Trim());
+    }
+
+    private async Task DuplicateAsync(string pageId)
+    {
+        _menuPageId = null;
+        var copyId = await Workspace.DuplicatePageAsync(pageId);
+        var parent = Workspace.Page(copyId)?.ParentId;
+        if (parent is not null)
+            State.ExpandPage(parent);
+        await OnSelect.InvokeAsync(copyId);
     }
 
     private Task StartMoveAsync(string pageId)
