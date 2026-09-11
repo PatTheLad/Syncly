@@ -335,6 +335,13 @@
     if (state.shell) return;
     state.shell = dotnet;
 
+    document.addEventListener('dragstart', (event) => {
+      const row = event.target.closest?.('.tree-row[data-page]');
+      if (!row || !event.dataTransfer) return;
+      event.dataTransfer.setData('text/plain', row.dataset.page);
+      event.dataTransfer.effectAllowed = 'move';
+    });
+
     document.addEventListener('keydown', (event) => {
       const meta = event.ctrlKey || event.metaKey;
 

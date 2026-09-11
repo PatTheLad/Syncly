@@ -219,6 +219,39 @@ public class StorageTests
     }
 
     [Fact]
+    public async Task Unresolved_links_are_scoped_to_a_space()
+    {
+        await using var temp = await TempDatabase.CreateAsync();
+        var projection = new ProjectionStore(temp.Database);
+        var replica = new Replica("dev00");
+
+        replica.Author(a =>
+        {
+            a.CreateObject("pg-a", "Alpha", spaceId: "spc_a");
+            a.CreateObject("pg-b", "Beta", spaceId: "spc_b");
+            a.UpsertBlock("pg-a", "ba", null, FracIndex.Middle, BlockKind.Paragraph);
+            a.InsertText("pg-a", "ba", 0, "see [[Ghost A]]");
+            a.UpsertBlock("pg-b", "bb", null, FracIndex.Middle, BlockKind.Paragraph);
+            a.InsertText("pg-b", "bb", 0, "see [[Ghost B]]");
+        });
+
+        await projection.WriteAsync(replica.Snapshot("pg-a"));
+        await projection.WriteAsync(replica.Snapshot("pg-b"));
+
+        var inA = await projection.UnresolvedLinksAsync("spc_a");
+        Assert.Contains("ghost a", inA);
+        Assert.DoesNotContain("ghost b", inA);
+
+        var inB = await projection.UnresolvedLinksAsync("spc_b");
+        Assert.Contains("ghost b", inB);
+        Assert.DoesNotContain("ghost a", inB);
+
+        var all = await projection.UnresolvedLinksAsync();
+        Assert.Contains("ghost a", all);
+        Assert.Contains("ghost b", all);
+    }
+
+    [Fact]
     public async Task PageLink_blocks_become_backlinks()
     {
         await using var temp = await TempDatabase.CreateAsync();

@@ -596,7 +596,7 @@ public sealed class Workspace(
     }
 
     public Task<List<string>> UnresolvedLinksAsync(CancellationToken ct = default) =>
-        projection.UnresolvedLinksAsync(ct);
+        projection.UnresolvedLinksAsync(CurrentSpaceId, DefaultSpaceId, ct);
 
     // ------------------------------------------------------------- plumbing
 

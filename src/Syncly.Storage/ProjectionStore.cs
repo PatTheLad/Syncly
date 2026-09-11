@@ -262,12 +262,20 @@ public sealed class ProjectionStore(SynclyDatabase database)
             return links;
         }, ct);
 
-    /// <summary>Distinct wikilink targets that do not match any existing page title.</summary>
-    public async Task<List<string>> UnresolvedLinksAsync(CancellationToken ct = default) =>
+    /// <summary>
+    /// Distinct wikilink targets that do not match any existing page title.
+    /// When <paramref name="spaceId"/> is set, only links from pages in that space count
+    /// (null space_id belongs to <paramref name="defaultSpaceId"/>).
+    /// </summary>
+    public async Task<List<string>> UnresolvedLinksAsync(
+        string? spaceId = null,
+        string defaultSpaceId = "spc_default",
+        CancellationToken ct = default) =>
         await database.RunAsync(async connection =>
         {
             await using var command = connection.CreateCommand();
-            command.CommandText =
+            command.CommandText = spaceId is null
+                ?
                 """
                 SELECT DISTINCT l.target_key
                 FROM links l
@@ -276,7 +284,25 @@ public sealed class ProjectionStore(SynclyDatabase database)
                     SELECT 1 FROM objects o
                     WHERE o.deleted = 0 AND lower(trim(o.title)) = l.target_key
                 )
+                """
+                :
+                """
+                SELECT DISTINCT l.target_key
+                FROM links l
+                JOIN objects src ON src.id = l.source_object
+                WHERE l.target_object IS NULL
+                  AND src.deleted = 0
+                  AND (src.space_id = $space OR ($space = $default AND src.space_id IS NULL))
+                  AND NOT EXISTS (
+                    SELECT 1 FROM objects o
+                    WHERE o.deleted = 0 AND lower(trim(o.title)) = l.target_key
+                  )
                 """;
+            if (spaceId is not null)
+            {
+                command.Parameters.AddWithValue("$space", spaceId);
+                command.Parameters.AddWithValue("$default", defaultSpaceId);
+            }
 
             var targets = new List<string>();
             await using var reader = await command.ExecuteReaderAsync(ct);

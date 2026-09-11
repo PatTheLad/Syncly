@@ -355,6 +355,17 @@ textarea {
   color: var(--ink-3);
 }
 
+.tree-drop {
+  min-height: 48px;
+  border-radius: var(--radius-sm);
+}
+
+.tree-drop.drop-hover,
+.tree-row.drop-hover {
+  outline: 2px dashed var(--line-strong);
+  outline-offset: -2px;
+}
+
 .sidebar-foot {
   padding: 10px 12px;
   border-top: 1px solid var(--line);

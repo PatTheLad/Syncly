@@ -2,6 +2,10 @@
 @inject EditorState State
 @inject IJSRuntime Js
 
+<div class="tree-drop @(_dropRoot ? "drop-hover" : null)"
+     @ondragover="OnRootDragOver"
+     @ondragover:preventDefault
+     @ondrop="OnRootDrop">
 @foreach (var (page, depth, childCount) in VisibleRows())
 {
     var id = page.Id;
@@ -9,9 +13,19 @@
     var renaming = _renamingId == id;
 
     <div @key="id"
-         class="tree-row @(id == SelectedId ? "selected" : null)"
+         class="tree-row @(id == SelectedId ? "selected" : null) @(_hoverId == id ? "drop-hover" : null)"
          style="padding-left: @(6 + depth * 14)px"
-         @onclick="() => OnSelect.InvokeAsync(id)">
+         draggable="@(renaming ? "false" : "true")"
+         data-page="@id"
+         @onclick="() => OnSelect.InvokeAsync(id)"
+         @ondragstart="() => OnDragStart(id)"
+         @ondragover="() => OnRowDragOver(id)"
+         @ondragover:preventDefault
+         @ondragover:stopPropagation
+         @ondrop="() => OnRowDrop(id)"
+         @ondrop:preventDefault
+         @ondrop:stopPropagation
+         @ondragend="OnDragEnd">
         <button type="button"
                 class="tree-twisty @(expanded ? "open" : null)"
                 disabled="@(childCount == 0)"
@@ -50,6 +64,7 @@
                 @onclick="() => AddChildAsync(id)">+</button>
     </div>
 }
+</div>
 
 @if (_menuPageId is not null)
 {
@@ -75,6 +90,9 @@
     private string? _renamingId;
     private string _renameDraft = "";
     private bool _focusRename;
+    private string? _dragId;
+    private string? _hoverId;
+    private bool _dropRoot;
 
     [Parameter, EditorRequired]
     public required Workspace Workspace { get; set; }
@@ -239,6 +257,55 @@
         await Workspace.MovePageAsync(pageId, parentId);
         if (parentId is not null)
             State.ExpandPage(parentId);
+    }
+
+    private void OnDragStart(string pageId) => _dragId = pageId;
+
+    private void OnDragEnd()
+    {
+        _dragId = null;
+        _hoverId = null;
+        _dropRoot = false;
+    }
+
+    private bool CanDropOn(string targetId) =>
+        _dragId is { Length: > 0 } dragged
+        && !DescendantsAndSelf(dragged).Contains(targetId, StringComparer.Ordinal);
+
+    private void OnRowDragOver(string targetId)
+    {
+        _dropRoot = false;
+        _hoverId = CanDropOn(targetId) ? targetId : null;
+    }
+
+    private async Task OnRowDrop(string targetId)
+    {
+        var dragged = _dragId;
+        var allowed = dragged is not null && CanDropOn(targetId);
+        OnDragEnd();
+        if (dragged is null || !allowed)
+            return;
+
+        await MoveAsync(dragged, targetId);
+    }
+
+    private void OnRootDragOver()
+    {
+        if (_dragId is null)
+            return;
+
+        _hoverId = null;
+        _dropRoot = true;
+    }
+
+    private async Task OnRootDrop()
+    {
+        var dragged = _dragId;
+        OnDragEnd();
+        if (dragged is null)
+            return;
+
+        await MoveAsync(dragged, null);
     }
 
     private async Task DeleteAsync(string pageId)
