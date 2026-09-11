@@ -613,6 +613,7 @@ textarea {
   color: var(--ink-3);
   text-align: center;
   opacity: 0;
+  cursor: grab;
   transition: opacity 120ms ease;
 }
 
@@ -1935,87 +1936,231 @@ html.phone .icon-grid {
 }
 
 .graph-page {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: var(--bg-1);
+  background: #03010a;
+  overflow: hidden;
 }
 
 .graph-head {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  right: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--line);
+  padding: 14px 20px 28px;
+  background: linear-gradient(to bottom, rgb(3 1 10 / 82%), rgb(3 1 10 / 0%));
+  border-bottom: none;
+  pointer-events: none;
+}
+
+.graph-head .chip {
+  pointer-events: auto;
 }
 
 .graph-title {
   font-size: 16px;
   font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.graph-head .card-sub {
+  color: #9aa0c8;
 }
 
 .graph-canvas {
   flex: 1;
   min-height: 0;
   width: 100%;
-  background: var(--bg-0);
+  height: 100%;
+  background: #03010a;
 }
 
-.graph-edge {
-  stroke: var(--line-strong);
-  stroke-width: 2;
+.graph-empty {
+  margin-top: 72px;
 }
 
-.graph-node {
-  cursor: pointer;
-}
-
-.graph-node circle {
-  fill: var(--bg-3);
-  stroke: var(--line-strong);
-  stroke-width: 1.5;
-}
-
-.graph-node text {
-  fill: var(--ink-0);
-  font-size: 12px;
-  font-weight: 650;
-  text-anchor: middle;
+.graph-nebula {
+  fill: #6b4cff;
+  opacity: 0.09;
   pointer-events: none;
 }
 
-.graph-node .graph-label {
-  fill: var(--ink-1);
+.graph-nebula.two {
+  fill: #ff5b8a;
+  opacity: 0.07;
+}
+
+.graph-nebula.three {
+  fill: #3ec7ff;
+  opacity: 0.06;
+}
+
+.graph-speck {
+  fill: #f4f1ff;
+  pointer-events: none;
+}
+
+.graph-orbit {
+  fill: none;
+  stroke: rgb(180 190 255 / 18%);
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.graph-orbit.depth-0 {
+  stroke: rgb(255 210 120 / 28%);
+  stroke-width: 1.2;
+}
+
+.graph-orbit.depth-1 {
+  stroke: rgb(160 200 255 / 22%);
+}
+
+.graph-orbit.depth-2,
+.graph-orbit.depth-3,
+.graph-orbit.depth-4 {
+  stroke: rgb(160 160 180 / 16%);
+  stroke-dasharray: 3 5;
+}
+
+.graph-link {
+  fill: none;
+  stroke: rgb(170 140 255 / 28%);
+  stroke-width: 1.1;
+  stroke-dasharray: 5 7;
+  pointer-events: none;
+}
+
+.graph-body.quiet .graph-glyph,
+.graph-body.quiet .graph-label {
+  display: none;
+}
+
+.planet-ring.hidden {
+  display: none;
+}
+
+.graph-hit {
+  fill: transparent;
+}
+
+.star-halo {
+  fill: #ffd36a;
+  opacity: 0.16;
+  animation: star-breathe 5.5s ease-in-out infinite;
+}
+
+.star-glow {
+  fill: #ffe29a;
+  opacity: 0.42;
+}
+
+.star-core {
+  fill: url(#graph-star-core);
+  stroke: #fff6d2;
+  stroke-width: 1.2;
+}
+
+.planet-core {
+  stroke: rgb(255 255 255 / 22%);
+  stroke-width: 1;
+}
+
+.planet-lit {
+  fill: rgb(255 255 255 / 28%);
+  pointer-events: none;
+}
+
+.planet-ring {
+  fill: none;
+  stroke: rgb(230 220 200 / 55%);
+  stroke-width: 1.6;
+  pointer-events: none;
+}
+
+.moon-core {
+  fill: #d5d8e8;
+  stroke: #9aa0b8;
+  stroke-width: 0.8;
+}
+
+.moon-crater {
+  fill: #b7bccf;
+  pointer-events: none;
+}
+
+.asteroid-rock {
+  fill: #8a7a68;
+  stroke: #c4b49a;
+  stroke-width: 0.7;
+}
+
+.meteor-core {
+  fill: #e8b07a;
+  opacity: 0.95;
+}
+
+.dust-core {
+  fill: transparent;
+  stroke: rgb(200 210 255 / 55%);
+  stroke-width: 1.2;
+  stroke-dasharray: 3 3;
+}
+
+.graph-body text {
+  fill: #f4f1ff;
+  font-size: 11px;
+  font-weight: 650;
+  text-anchor: middle;
+  pointer-events: none;
+  paint-order: stroke fill;
+  stroke: #03010a;
+  stroke-width: 3px;
+}
+
+.graph-body .graph-label {
+  fill: #c8c6e0;
   font-size: 11px;
   font-weight: 500;
 }
 
-.graph-node.current circle {
-  fill: var(--ink-0);
-  stroke: var(--ink-0);
+.graph-body.body-moon .graph-label,
+.graph-body.body-dust .graph-label {
+  font-size: 10px;
+  fill: #9aa0c8;
 }
 
-.graph-node.current text {
-  fill: var(--accent-ink);
+.graph-body.current .star-halo {
+  opacity: 0.34;
 }
 
-.graph-node.current .graph-label {
-  fill: var(--ink-0);
+.graph-body.current .star-core,
+.graph-body.current .planet-core,
+.graph-body.current .moon-core {
+  stroke: #ffffff;
+  stroke-width: 2;
 }
 
-.graph-node.missing circle {
-  fill: transparent;
-  stroke-dasharray: 3 3;
+.graph-body.current .graph-label {
+  fill: #ffffff;
 }
 
-.graph-node.missing text,
-.graph-node.missing .graph-label {
-  fill: var(--ink-3);
+.graph-body.missing .graph-label,
+.graph-body.missing .graph-glyph {
+  fill: #7c82a8;
 }
 
-.block-handle {
-  cursor: grab;
+@keyframes star-breathe {
+  0%, 100% { opacity: 0.12; }
+  50% { opacity: 0.26; }
 }
 

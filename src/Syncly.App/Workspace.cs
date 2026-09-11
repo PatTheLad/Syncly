@@ -802,12 +802,62 @@ public sealed class Workspace(
                 byKey.TryAdd(key, page);
         }
 
-        var links = await projection.ListLinksAsync(space, DefaultSpaceId, ct);
-        var nodes = new Dictionary<string, GraphNode>(StringComparer.Ordinal);
-        var edges = new HashSet<(string From, string To)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var nodes = new List<GraphNode>();
+
+        void Walk(string? parentId, int depth)
+        {
+            foreach (var page in ChildrenOf(parentId, space))
+            {
+                if (!seen.Add(page.Id))
+                    continue;
+
+                var body = GraphLayout.BodyFor(depth);
+                nodes.Add(new GraphNode(
+                    page.Id,
+                    page.DisplayTitle,
+                    page.Icon,
+                    0,
+                    0,
+                    false,
+                    false,
+                    depth,
+                    GraphLayout.SizeFor(body),
+                    parentId,
+                    body));
+                Walk(page.Id, depth + 1);
+            }
+        }
+
+        Walk(null, 0);
 
         foreach (var page in pages)
-            nodes[page.Id] = new GraphNode(page.Id, page.DisplayTitle, page.Icon, 0, 0, false, false);
+        {
+            if (seen.Contains(page.Id))
+                continue;
+
+            var parentId = page.ParentId is { } pid && byId.ContainsKey(pid) ? pid : null;
+            var depth = 0;
+            var body = GraphLayout.BodyFor(depth);
+            seen.Add(page.Id);
+            nodes.Add(new GraphNode(
+                page.Id,
+                page.DisplayTitle,
+                page.Icon,
+                0,
+                0,
+                false,
+                false,
+                depth,
+                GraphLayout.SizeFor(body),
+                parentId,
+                body));
+            Walk(page.Id, 1);
+        }
+
+        var links = await projection.ListLinksAsync(space, DefaultSpaceId, ct);
+        var edges = new HashSet<(string From, string To)>();
+        var missing = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var link in links)
         {
@@ -823,7 +873,24 @@ public sealed class Workspace(
             if (targetId is null)
             {
                 var missingId = "missing:" + link.TargetKey;
-                nodes.TryAdd(missingId, new GraphNode(missingId, link.TargetKey, null, 0, 0, false, true));
+                if (missing.Add(missingId))
+                {
+                    var sourceDepth = nodes.FirstOrDefault(n => n.Id == link.SourceId)?.Depth ?? 0;
+                    var body = GraphBodyKind.Dust;
+                    nodes.Add(new GraphNode(
+                        missingId,
+                        link.TargetKey,
+                        null,
+                        0,
+                        0,
+                        false,
+                        true,
+                        sourceDepth + 1,
+                        GraphLayout.SizeFor(body),
+                        link.SourceId,
+                        body));
+                }
+
                 targetId = missingId;
             }
 
@@ -833,7 +900,7 @@ public sealed class Workspace(
             edges.Add((link.SourceId, targetId));
         }
 
-        return GraphLayout.Arrange([.. nodes.Values], [.. edges.Select(e => new GraphEdge(e.From, e.To))]);
+        return GraphLayout.Arrange(nodes, [.. edges.Select(e => new GraphEdge(e.From, e.To))]);
     }
 
     /// <summary>

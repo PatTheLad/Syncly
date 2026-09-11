@@ -7,43 +7,104 @@
 <div class="graph-page">
     <div class="graph-head">
         <div>
-            <div class="graph-title">Graph</div>
-            <div class="card-sub">Pages in @(State.CurrentSpace?.DisplayTitle ?? "this space"), linked by [[wikilinks]] and page cards.</div>
+            <div class="graph-title">Galaxy</div>
+            <div class="card-sub">Roots are stars. Nested pages orbit as planets, moons, then smaller rock.</div>
         </div>
-        <span class="chip muted">@_graph.Nodes.Count page(s)</span>
+        <span class="chip muted">@_graph.Nodes.Count world(s)</span>
     </div>
 
     @if (_graph.Nodes.Count == 0)
     {
-        <div class="empty-state">
-            <h2>No pages yet</h2>
-            <p>Create a page, then connect it with <code>[[wikilinks]]</code>.</p>
+        <div class="empty-state graph-empty">
+            <h2>Empty space</h2>
+            <p>Create a page. Nest others under it to grow a solar system.</p>
         </div>
     }
     else
     {
-        <svg class="graph-canvas" viewBox="0 0 1000 1000" role="img" aria-label="Page graph">
+        <svg class="graph-canvas" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Page galaxy">
+            <defs>
+                <radialGradient id="graph-space" cx="48%" cy="42%" r="70%">
+                    <stop offset="0%" stop-color="#1a1240" />
+                    <stop offset="42%" stop-color="#0b0720" />
+                    <stop offset="100%" stop-color="#03010a" />
+                </radialGradient>
+                <radialGradient id="graph-star-core" cx="38%" cy="34%" r="62%">
+                    <stop offset="0%" stop-color="#fff8e8" />
+                    <stop offset="55%" stop-color="#ffd56a" />
+                    <stop offset="100%" stop-color="#e0912a" />
+                </radialGradient>
+            </defs>
+
+            <rect width="1000" height="1000" fill="url(#graph-space)" />
+
+            <ellipse class="graph-nebula one" cx="320" cy="380" rx="280" ry="140" />
+            <ellipse class="graph-nebula two" cx="690" cy="560" rx="240" ry="110" />
+            <ellipse class="graph-nebula three" cx="520" cy="220" rx="180" ry="90" />
+
+            @foreach (var speck in Specks())
+            {
+                <circle class="graph-speck" cx="@speck.X" cy="@speck.Y" r="@speck.R" opacity="@speck.Opacity" />
+            }
+
             @foreach (var edge in _graph.Edges)
             {
                 var from = Node(edge.From);
                 var to = Node(edge.To);
-                if (from is null || to is null)
+                if (from is null || to is null || LinkedByOrbit(from, to))
                     continue;
-                <line class="graph-edge"
-                      x1="@Px(from.X)" y1="@Px(from.Y)"
-                      x2="@Px(to.X)" y2="@Px(to.Y)" />
+                <path class="graph-link" d="@Curve(from, to)" />
             }
 
-            @foreach (var node in _graph.Nodes)
+            @foreach (var orbit in _graph.Orbits)
+            {
+                <circle class="graph-orbit depth-@Math.Clamp(orbit.Depth, 0, 4)"
+                        cx="@Px(orbit.X)" cy="@Px(orbit.Y)" r="@Px(orbit.Radius)" />
+            }
+
+            @foreach (var node in _graph.Nodes.OrderByDescending(n => n.Size))
             {
                 var current = node.Id == State.CurrentPageId;
-                <g class="graph-node @(current ? "current" : null) @(node.Missing ? "missing" : null)"
+                var r = Math.Max(2.5, node.Size * 1000);
+                <g class="graph-body body-@node.Body.ToString().ToLowerInvariant() @(current ? "current" : null) @(node.Missing ? "missing" : null) @(ShowLabel(node, current) ? "labeled" : "quiet")"
                    @key="node.Id"
                    transform="translate(@Px(node.X) @Px(node.Y))"
                    @onclick="() => OpenAsync(node)">
-                    <circle r="18" />
-                    <text y="5">@(node.Icon is { Length: > 0 } icon ? icon : node.Title.Length == 0 ? "?" : char.ToUpperInvariant(node.Title.Trim()[0]).ToString())</text>
-                    <text class="graph-label" y="34">@Truncate(node.Title)</text>
+                    <title>@Tooltip(node)</title>
+                    <circle class="graph-hit" r="@Math.Max(r, 14)" />
+                    @if (node.Body == GraphBodyKind.Star)
+                    {
+                        <circle class="star-halo" r="@(r * 3.1)" />
+                        <circle class="star-glow" r="@(r * 1.9)" />
+                        <circle class="star-core" r="@r" />
+                    }
+                    else if (node.Body == GraphBodyKind.Planet)
+                    {
+                        <ellipse class="planet-ring @(HasRing(node.Id) ? null : "hidden")"
+                                 rx="@(r * 2.35)" ry="@(r * 0.52)"
+                                 transform="rotate(@RingAngle(node.Id))" />
+                        <circle class="planet-core" r="@r" fill="@PlanetFill(node.Id)" />
+                        <circle class="planet-lit" cx="@(-r * 0.28)" cy="@(-r * 0.28)" r="@(r * 0.42)" />
+                    }
+                    else if (node.Body == GraphBodyKind.Moon)
+                    {
+                        <circle class="moon-core" r="@r" />
+                        <circle class="moon-crater" cx="@(r * 0.25)" cy="@(-r * 0.15)" r="@(r * 0.28)" />
+                    }
+                    else if (node.Body == GraphBodyKind.Asteroid)
+                    {
+                        <polygon class="asteroid-rock" points="@RockPoints(r, node.Id, 7)" />
+                    }
+                    else if (node.Body == GraphBodyKind.Meteor)
+                    {
+                        <ellipse class="meteor-core" rx="@(r * 1.7)" ry="@(r * 0.45)" transform="rotate(@RingAngle(node.Id))" />
+                    }
+                    else
+                    {
+                        <circle class="dust-core" r="@r" />
+                    }
+                    <text class="graph-glyph" y="@(node.Body == GraphBodyKind.Star ? 5 : 4)">@Glyph(node)</text>
+                    <text class="graph-label" y="@(r + (node.Body == GraphBodyKind.Star ? 18 : 14))">@Truncate(node.Title, node.Body)</text>
                 </g>
             }
         </svg>
@@ -51,7 +112,7 @@
 </div>
 
 @code {
-    private PageGraph _graph = new([], []);
+    private PageGraph _graph = new([], [], []);
 
     protected override void OnInitialized()
     {
@@ -74,10 +135,90 @@
 
     private static int Px(double unit) => (int)Math.Round(unit * 1000);
 
-    private static string Truncate(string title)
+    private static bool LinkedByOrbit(GraphNode a, GraphNode b) =>
+        a.ParentId == b.Id || b.ParentId == a.Id;
+
+    private static bool ShowLabel(GraphNode node, bool current) =>
+        current || node.Body is GraphBodyKind.Star or GraphBodyKind.Planet or GraphBodyKind.Moon or GraphBodyKind.Dust;
+
+    private static string Glyph(GraphNode node)
+    {
+        if (node.Icon is { Length: > 0 } icon)
+            return icon;
+        if (node.Body is GraphBodyKind.Asteroid or GraphBodyKind.Meteor)
+            return string.Empty;
+        var title = node.Title.Trim();
+        return title.Length == 0 ? "?" : char.ToUpperInvariant(title[0]).ToString();
+    }
+
+    private static string Tooltip(GraphNode node)
+    {
+        var title = string.IsNullOrWhiteSpace(node.Title) ? "Untitled" : node.Title;
+        var kind = node.Missing ? "unresolved" : node.Body.ToString().ToLowerInvariant();
+        return $"{title} · {kind}";
+    }
+
+    private static string Truncate(string title, GraphBodyKind body)
     {
         var text = string.IsNullOrWhiteSpace(title) ? "Untitled" : title;
-        return text.Length <= 22 ? text : text[..21] + "…";
+        var cap = body == GraphBodyKind.Star ? 28 : 20;
+        return text.Length <= cap ? text : text[..(cap - 1)] + "…";
+    }
+
+    private static string Curve(GraphNode from, GraphNode to)
+    {
+        var x1 = Px(from.X);
+        var y1 = Px(from.Y);
+        var x2 = Px(to.X);
+        var y2 = Px(to.Y);
+        var mx = (x1 + x2) / 2.0;
+        var my = (y1 + y2) / 2.0;
+        var dx = x2 - x1;
+        var dy = y2 - y1;
+        var len = Math.Max(1, Math.Sqrt(dx * dx + dy * dy));
+        var bend = Math.Min(70, len * 0.18);
+        var cx = mx - dy / len * bend;
+        var cy = my + dx / len * bend;
+        return $"M {x1} {y1} Q {cx:0.#} {cy:0.#} {x2} {y2}";
+    }
+
+    private static bool HasRing(string id) => GraphLayout.StableHash(id) % 5 == 0;
+
+    private static int RingAngle(string id) => (int)(GraphLayout.StableHash(id) % 70) - 25;
+
+    private static string PlanetFill(string id)
+    {
+        var hue = (int)(GraphLayout.StableHash(id) % 360);
+        return $"hsl({hue} 62% 58%)";
+    }
+
+    private static string RockPoints(double r, string id, int sides)
+    {
+        var hash = GraphLayout.StableHash(id);
+        var points = new List<string>(sides);
+        for (var i = 0; i < sides; i++)
+        {
+            var jitter = ((hash >> (i * 3)) & 7) / 7.0;
+            var ang = 2 * Math.PI * i / sides + jitter * 0.35;
+            var rad = r * (0.72 + jitter * 0.4);
+            points.Add($"{rad * Math.Cos(ang):0.##},{rad * Math.Sin(ang):0.##}");
+        }
+
+        return string.Join(' ', points);
+    }
+
+    private IEnumerable<Speck> Specks()
+    {
+        var hash = GraphLayout.StableHash(State.CurrentSpaceId ?? "space");
+        for (var i = 0; i < 160; i++)
+        {
+            hash = hash * 16777619 + (uint)i * 2654435761;
+            var x = hash % 1000;
+            var y = (hash / 1000) % 1000;
+            var r = 0.4 + (hash % 17) / 14.0;
+            var o = 0.18 + (hash % 11) / 22.0;
+            yield return new Speck(x, y, r, o);
+        }
     }
 
     private async Task OpenAsync(GraphNode node)
@@ -100,4 +241,6 @@
         State.Changed -= Refresh;
         State.Workspace.Changed -= Refresh;
     }
+
+    private readonly record struct Speck(double X, double Y, double R, double Opacity);
 }

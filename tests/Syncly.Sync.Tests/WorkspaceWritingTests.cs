@@ -75,6 +75,41 @@ public class WorkspaceWritingTests
     }
 
     [Fact]
+    public async Task Graph_nests_pages_as_star_planet_and_moon()
+    {
+        await using var app = await StartAsync();
+        var workspace = app.Workspace;
+        var star = await workspace.CreatePageAsync(null, "Sol");
+        var planet = await workspace.CreatePageAsync(star, "Earth");
+        var moon = await workspace.CreatePageAsync(planet, "Luna");
+
+        var graph = await workspace.GraphAsync();
+        var sun = graph.Nodes.Single(n => n.Id == star);
+        var earth = graph.Nodes.Single(n => n.Id == planet);
+        var luna = graph.Nodes.Single(n => n.Id == moon);
+
+        Assert.Equal(GraphBodyKind.Star, sun.Body);
+        Assert.Equal(GraphBodyKind.Planet, earth.Body);
+        Assert.Equal(GraphBodyKind.Moon, luna.Body);
+        Assert.Equal(star, earth.ParentId);
+        Assert.Equal(planet, luna.ParentId);
+
+        var sunEarth = Dist(sun, earth);
+        var earthLuna = Dist(earth, luna);
+        var sunLuna = Dist(sun, luna);
+        Assert.True(earthLuna < sunEarth);
+        Assert.True(earthLuna < sunLuna);
+        Assert.NotEmpty(graph.Orbits);
+    }
+
+    private static double Dist(GraphNode a, GraphNode b)
+    {
+        var dx = a.X - b.X;
+        var dy = a.Y - b.Y;
+        return Math.Sqrt(dx * dx + dy * dy);
+    }
+
+    [Fact]
     public async Task Reorder_block_inserts_before_a_sibling()
     {
         await using var app = await StartAsync();
