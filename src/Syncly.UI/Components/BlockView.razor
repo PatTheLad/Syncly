@@ -4,7 +4,7 @@
 @inject IJSRuntime Js
 @inject EditorState State
 
-<div class="block @KindClass" @key="Block.Id">
+<div id="@ElementId" class="block @KindClass" @key="Block.Id">
     @if (!Host.Reading && Block.Kind is not (BlockKind.Divider or BlockKind.PageLink or BlockKind.File))
     {
         <button class="block-handle" title="Block actions" @onclick="OpenMenuAsync">⋮</button>
@@ -111,7 +111,6 @@
     else
     {
         <div @ref="_element"
-             id="@ElementId"
              class="block-text @(Block.Checked ? "done" : null)"
              contenteditable="true"
              spellcheck="true"

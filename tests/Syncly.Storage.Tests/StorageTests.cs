@@ -205,6 +205,84 @@ public class StorageTests
     }
 
     [Fact]
+    public async Task Search_indexes_plain_text_not_markdown()
+    {
+        await using var temp = await TempDatabase.CreateAsync();
+        var projection = new ProjectionStore(temp.Database);
+        var replica = new Replica("dev00");
+        replica.Author(a =>
+        {
+            a.CreateObject("p", "Notes");
+            a.UpsertBlock("p", "b", null, FracIndex.Sequence(1)[0], BlockKind.Paragraph);
+            a.InsertText("p", "b", 0, "**fuzzy** and [[Sync Design|the spec]]");
+        });
+        await projection.WriteAsync(replica.Snapshot("p"));
+
+        var hits = await projection.SearchAsync("fuzzy");
+        Assert.Single(hits);
+        Assert.DoesNotContain("**", hits[0].Snippet);
+        Assert.Contains("<mark>", hits[0].Snippet);
+
+        Assert.NotEmpty(await projection.SearchAsync("spec"));
+        Assert.NotEmpty(await projection.SearchAsync("Design"));
+    }
+
+    [Fact]
+    public async Task Search_finds_attachment_filenames()
+    {
+        await using var temp = await TempDatabase.CreateAsync();
+        var projection = new ProjectionStore(temp.Database);
+        var replica = new Replica("dev00");
+        replica.Author(a =>
+        {
+            a.CreateObject("p", "Files");
+            a.UpsertBlock("p", "f1", null, FracIndex.Sequence(1)[0], BlockKind.File);
+            a.SetProp("p", "f1", PropKeys.FileName, "invoice.pdf");
+        });
+        await projection.WriteAsync(replica.Snapshot("p"));
+
+        var hits = await projection.SearchAsync("invoice");
+        Assert.Single(hits);
+        Assert.Equal("f1", hits[0].BlockId);
+    }
+
+    [Fact]
+    public async Task Search_stays_inside_the_requested_space()
+    {
+        await using var temp = await TempDatabase.CreateAsync();
+        var projection = new ProjectionStore(temp.Database);
+        var replica = new Replica("dev00");
+        replica.Author(a =>
+        {
+            a.CreateObject("a", "Alpha", spaceId: "spc_a");
+            a.UpsertBlock("a", "ba", null, FracIndex.Sequence(1)[0], BlockKind.Paragraph);
+            a.InsertText("a", "ba", 0, "zebra in alpha");
+
+            a.CreateObject("b", "Beta", spaceId: "spc_b");
+            a.UpsertBlock("b", "bb", null, FracIndex.Sequence(1)[0], BlockKind.Paragraph);
+            a.InsertText("b", "bb", 0, "zebra in beta");
+        });
+        await projection.WriteAsync(replica.Snapshot("a"));
+        await projection.WriteAsync(replica.Snapshot("b"));
+
+        var inA = await projection.SearchAsync("zebra", spaceId: "spc_a");
+        Assert.Single(inA);
+        Assert.Equal("a", inA[0].ObjectId);
+
+        var inB = await projection.SearchAsync("zebra", spaceId: "spc_b");
+        Assert.Single(inB);
+        Assert.Equal("b", inB[0].ObjectId);
+    }
+
+    [Fact]
+    public void SearchBody_strips_marks_and_sanitizes_snippets()
+    {
+        Assert.Equal("fuzzy", SearchBody.From("**fuzzy**"));
+        Assert.Equal("the spec Sync Design", SearchBody.From("[[Sync Design|the spec]]"));
+        Assert.Equal("&lt;script&gt;<mark>x</mark>", SearchBody.SanitizeSnippet("<script><mark>x</mark>"));
+    }
+
+    [Fact]
     public async Task Wikilinks_become_backlinks()
     {
         await using var temp = await TempDatabase.CreateAsync();

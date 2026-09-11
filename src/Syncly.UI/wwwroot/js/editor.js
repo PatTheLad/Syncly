@@ -9,7 +9,10 @@
   };
 
   function element(id) {
-    return document.getElementById(id);
+    const root = document.getElementById(id);
+    if (!root) return null;
+    if (root.isContentEditable) return root;
+    return root.querySelector('[contenteditable="true"]') ?? root;
   }
 
   // ---------------------------------------------------------------- selection
@@ -240,6 +243,18 @@
     return true;
   }
 
+  function revealBlock(id) {
+    const el = document.getElementById(id);
+    if (!el) return false;
+
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el.classList.remove('search-flash');
+    void el.offsetWidth;
+    el.classList.add('search-flash');
+    el.addEventListener('animationend', () => el.classList.remove('search-flash'), { once: true });
+    return true;
+  }
+
   function getText(id) {
     const el = element(id);
     return el ? el.textContent ?? '' : '';
@@ -467,6 +482,7 @@
     clearInput,
     setText,
     focusBlock,
+    revealBlock,
     focusElement,
     getText,
     getCaret,

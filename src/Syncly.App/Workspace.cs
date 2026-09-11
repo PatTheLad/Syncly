@@ -583,7 +583,7 @@ public sealed class Workspace(
     // ----------------------------------------------------------------- search
 
     public Task<List<SearchHit>> SearchAsync(string query, CancellationToken ct = default) =>
-        projection.SearchAsync(query, 40, ct);
+        projection.SearchAsync(query, 40, CurrentSpaceId, DefaultSpaceId, ct);
 
     public async Task<List<Backlink>> BacklinksAsync(string pageId, CancellationToken ct = default)
     {

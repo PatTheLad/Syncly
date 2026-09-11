@@ -49,7 +49,7 @@
             <div class="search-results">
                 @foreach (var hit in _hits)
                 {
-                    <button class="search-hit" @key="hit.ObjectId + hit.BlockId" @onclick="() => Open(hit.ObjectId)">
+                    <button class="search-hit" @key="hit.ObjectId + hit.BlockId" @onclick="() => OpenHit(hit)">
                         <strong>@(string.IsNullOrWhiteSpace(hit.Title) ? "Untitled" : hit.Title)</strong>
                         <span>@((MarkupString)hit.Snippet)</span>
                     </button>
@@ -212,6 +212,18 @@
         _ = CloseSidebarIfNarrowAsync();
     }
 
+    private void OpenHit(SearchHit hit)
+    {
+        State.Open(hit.ObjectId, string.IsNullOrEmpty(hit.BlockId) ? null : hit.BlockId);
+        _query = string.Empty;
+        _hits = null;
+
+        if (!IsAt(""))
+            Nav.NavigateTo("");
+
+        _ = CloseSidebarIfNarrowAsync();
+    }
+
     private async Task CloseSidebarIfNarrowAsync()
     {
         if (await Js.InvokeAsync<bool>("syncly.isNarrow"))
@@ -233,9 +245,7 @@
         _query = args.Value?.ToString() ?? string.Empty;
         _hits = _query.Trim().Length == 0
             ? null
-            : (await State.Workspace.SearchAsync(_query))
-                .Where(h => State.Workspace.PagesIn(State.CurrentSpaceId).Any(p => p.Id == h.ObjectId))
-                .ToList();
+            : await State.Workspace.SearchAsync(_query);
     }
 
     private Task SyncNowAsync() => App.Sync.SyncNowAsync();

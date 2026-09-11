@@ -56,6 +56,8 @@ public sealed class SqliteKeyVault(SynclyDatabase database) : IKeyVault
 public sealed class SynclyApp : IAsyncDisposable
 {
     private const string ProjectionVersionKey = "projection.version";
+    private const string ProjectionSchemaKey = "projection.schema";
+    private const string ProjectionSchema = "2";
 
     private SynclyApp(
         SynclyDatabase database,
@@ -145,6 +147,7 @@ public sealed class SynclyApp : IAsyncDisposable
         await workspace.ProjectAsync(dirty, ct);
         await workspace.EnsureSpacesAsync(ct);
         await database.SetMetaAsync(ProjectionVersionKey, VersionVectorText.Format(replica.Version), ct);
+        await database.SetMetaAsync(ProjectionSchemaKey, ProjectionSchema, ct);
 
         var context = new SyncContext
         {
@@ -228,6 +231,10 @@ public sealed class SynclyApp : IAsyncDisposable
         logger.LogInformation(
             "Restored {Documents} documents from snapshot and replayed {Ops} ops.",
             documents.Count, tail.Count);
+
+        var schema = await database.GetMetaAsync(ProjectionSchemaKey, ct);
+        if (!string.Equals(schema, ProjectionSchema, StringComparison.Ordinal))
+            return [.. replica.ObjectIds];
 
         var projected = VersionVectorText.Parse(await database.GetMetaAsync(ProjectionVersionKey, ct));
         if (projected.Count == 0)

@@ -29,6 +29,9 @@ public sealed class EditorState(SynclyApp app)
 
     public int FocusCaret { get; private set; }
 
+    /// <summary>Scroll to this block in reading mode after the next render (search hits).</summary>
+    public string? RevealBlockId { get; private set; }
+
     public event Action? Changed;
 
     public string CurrentSpaceId => Workspace.CurrentSpaceId;
@@ -37,10 +40,20 @@ public sealed class EditorState(SynclyApp app)
 
     public bool SpaceSwitcherOpen { get; private set; }
 
-    public void Open(string pageId)
+    public void Open(string pageId, string? revealBlockId = null)
     {
         if (CurrentPageId == pageId)
+        {
+            if (revealBlockId is { Length: > 0 })
+            {
+                ReadingMode = true;
+                FocusBlockId = null;
+                RevealBlockId = revealBlockId;
+                Changed?.Invoke();
+            }
+
             return;
+        }
 
         if (CurrentPageId is { } previous)
             _history.Add(previous);
@@ -48,6 +61,7 @@ public sealed class EditorState(SynclyApp app)
         CurrentPageId = pageId;
         ReadingMode = true;
         FocusBlockId = null;
+        RevealBlockId = string.IsNullOrEmpty(revealBlockId) ? null : revealBlockId;
 
         var page = Workspace.Page(pageId);
         if (page is { SpaceId: { Length: > 0 } space } && space != CurrentSpaceId)
@@ -122,6 +136,8 @@ public sealed class EditorState(SynclyApp app)
     }
 
     public void ClearFocusRequest() => FocusBlockId = null;
+
+    public void ClearReveal() => RevealBlockId = null;
 
     public void ToggleSpaceSwitcher(bool? open = null)
     {

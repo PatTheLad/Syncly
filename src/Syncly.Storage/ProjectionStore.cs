@@ -115,10 +115,11 @@ public sealed class ProjectionStore(SynclyDatabase database)
             blockText.Value = node.Text;
             await block.ExecuteNonQueryAsync(ct);
 
-            if (node.Text.Length > 0)
+            var body = SearchBody.ForBlock(node);
+            if (body.Length > 0)
             {
                 searchId.Value = node.Id;
-                searchBody.Value = node.Text;
+                searchBody.Value = body;
                 await search.ExecuteNonQueryAsync(ct);
             }
 
@@ -191,6 +192,8 @@ public sealed class ProjectionStore(SynclyDatabase database)
     public async Task<List<SearchHit>> SearchAsync(
         string query,
         int limit = 40,
+        string? spaceId = null,
+        string? defaultSpaceId = null,
         CancellationToken ct = default)
     {
         var match = ToMatchExpression(query);
@@ -200,18 +203,35 @@ public sealed class ProjectionStore(SynclyDatabase database)
         return await database.RunAsync(async connection =>
         {
             await using var command = connection.CreateCommand();
-            command.CommandText =
+            command.CommandText = spaceId is null
+                ?
                 """
                 SELECT s.object_id, o.title, s.block_id,
                        snippet(search, 3, '<mark>', '</mark>', '…', 12)
                 FROM search s
                 JOIN objects o ON o.id = s.object_id
-                WHERE search MATCH $q AND o.deleted = 0
+                WHERE search MATCH $q AND o.deleted = 0 AND o.type = 'page'
+                ORDER BY rank
+                LIMIT $limit
+                """
+                :
+                """
+                SELECT s.object_id, o.title, s.block_id,
+                       snippet(search, 3, '<mark>', '</mark>', '…', 12)
+                FROM search s
+                JOIN objects o ON o.id = s.object_id
+                WHERE search MATCH $q AND o.deleted = 0 AND o.type = 'page'
+                  AND (o.space_id = $space OR ($space = $default AND o.space_id IS NULL))
                 ORDER BY rank
                 LIMIT $limit
                 """;
             command.Parameters.AddWithValue("$q", match);
             command.Parameters.AddWithValue("$limit", limit);
+            if (spaceId is not null)
+            {
+                command.Parameters.AddWithValue("$space", spaceId);
+                command.Parameters.AddWithValue("$default", defaultSpaceId ?? "spc_default");
+            }
 
             var hits = new List<SearchHit>();
             await using var reader = await command.ExecuteReaderAsync(ct);
@@ -220,7 +240,7 @@ public sealed class ProjectionStore(SynclyDatabase database)
                     reader.GetString(0),
                     reader.GetString(1),
                     reader.GetString(2),
-                    reader.GetString(3)));
+                    SearchBody.SanitizeSnippet(reader.GetString(3))));
 
             return hits;
         }, ct);

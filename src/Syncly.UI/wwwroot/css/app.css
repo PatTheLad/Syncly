@@ -554,6 +554,15 @@ textarea {
   opacity: 1;
 }
 
+.block.search-flash {
+  animation: search-flash 1.4s ease-out;
+}
+
+@keyframes search-flash {
+  0% { background: rgb(255 255 255 / 16%); }
+  100% { background: transparent; }
+}
+
 .block-handle {
   position: absolute;
   top: 4px;
@@ -1573,6 +1582,13 @@ textarea {
   display: block;
   font-size: 12px;
   color: var(--ink-2);
+}
+
+.search-hit mark {
+  background: rgb(255 255 255 / 16%);
+  color: var(--ink-0);
+  border-radius: 2px;
+  padding: 0 1px;
 }
 
 .page section {
