@@ -1,118 +1,369 @@
 @page "/graph"
 @namespace Syncly.UI.Pages
-@implements IDisposable
+@implements IAsyncDisposable
 @inject EditorState State
 @inject NavigationManager Nav
+@inject IJSRuntime Js
+@using System.Globalization
+@using System.Text
 
 <div class="graph-page">
-    <div class="graph-head">
-        <div>
-            <div class="graph-title">Galaxy</div>
-            <div class="card-sub">Roots are stars. Nested pages orbit as planets, moons, then smaller rock.</div>
+    <header class="graph-head">
+        <div class="graph-head-copy">
+            <h1 class="graph-title">Galaxy</h1>
+            <div class="card-sub">A living map of your pages. Roots burn as stars; their worlds follow.</div>
         </div>
-        <span class="chip muted">@_graph.Nodes.Count world(s)</span>
-    </div>
+        <span class="graph-count">@_graph.Nodes.Count <span class="graph-count-word">world@(_graph.Nodes.Count == 1 ? null : "s")</span></span>
+    </header>
 
     @if (_graph.Nodes.Count == 0)
     {
         <div class="empty-state graph-empty">
-            <h2>Empty space</h2>
-            <p>Create a page. Nest others under it to grow a solar system.</p>
+            <div class="graph-empty-orbit" aria-hidden="true"><span></span></div>
+            <h2>Quiet space</h2>
+            <p>Create a page, then nest another beneath it to form your first system.</p>
         </div>
     }
     else
     {
-        <svg class="graph-canvas" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Page galaxy">
+        <svg id="page-galaxy"
+             class="graph-canvas"
+             viewBox="@ViewBox"
+             preserveAspectRatio="none"
+             role="img"
+             aria-labelledby="galaxy-title galaxy-description">
+            <title id="galaxy-title">Page galaxy</title>
+            <desc id="galaxy-description">An interactive map where root pages are stars and nested pages orbit them as worlds.</desc>
+
             <defs>
-                <radialGradient id="graph-space" cx="48%" cy="42%" r="70%">
-                    <stop offset="0%" stop-color="#1a1240" />
-                    <stop offset="42%" stop-color="#0b0720" />
-                    <stop offset="100%" stop-color="#03010a" />
+                <radialGradient id="graph-space" cx="50%" cy="48%" r="76%">
+                    <stop offset="0%" stop-color="#10152b" />
+                    <stop offset="46%" stop-color="#080b19" />
+                    <stop offset="100%" stop-color="#020309" />
                 </radialGradient>
-                <radialGradient id="graph-star-core" cx="38%" cy="34%" r="62%">
-                    <stop offset="0%" stop-color="#fff8e8" />
-                    <stop offset="55%" stop-color="#ffd56a" />
-                    <stop offset="100%" stop-color="#e0912a" />
+                <radialGradient id="graph-vignette" cx="50%" cy="52%" r="72%">
+                    <stop offset="45%" stop-color="#000000" stop-opacity="0" />
+                    <stop offset="82%" stop-color="#00020a" stop-opacity="0.42" />
+                    <stop offset="100%" stop-color="#000106" stop-opacity="0.9" />
                 </radialGradient>
+                <radialGradient id="galaxy-core" cx="50%" cy="50%" r="50%">
+                    <stop offset="0%" stop-color="#fff7dc" stop-opacity="0.86" />
+                    <stop offset="10%" stop-color="#ffe7b0" stop-opacity="0.62" />
+                    <stop offset="32%" stop-color="#c7b4ff" stop-opacity="0.28" />
+                    <stop offset="68%" stop-color="#5362c7" stop-opacity="0.1" />
+                    <stop offset="100%" stop-color="#152050" stop-opacity="0" />
+                </radialGradient>
+                <radialGradient id="nebula-violet">
+                    <stop offset="0%" stop-color="#786dff" stop-opacity="0.32" />
+                    <stop offset="54%" stop-color="#5144ad" stop-opacity="0.12" />
+                    <stop offset="100%" stop-color="#292361" stop-opacity="0" />
+                </radialGradient>
+                <radialGradient id="nebula-blue">
+                    <stop offset="0%" stop-color="#65c7e8" stop-opacity="0.22" />
+                    <stop offset="60%" stop-color="#335caa" stop-opacity="0.09" />
+                    <stop offset="100%" stop-color="#172957" stop-opacity="0" />
+                </radialGradient>
+                <linearGradient id="galaxy-arm" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#fff4d1" stop-opacity="0.48" />
+                    <stop offset="38%" stop-color="#a9b8ff" stop-opacity="0.24" />
+                    <stop offset="100%" stop-color="#635ab8" stop-opacity="0" />
+                </linearGradient>
+                <linearGradient id="meteor-tail" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" stop-color="#6cc9ff" stop-opacity="0" />
+                    <stop offset="70%" stop-color="#aadfff" stop-opacity="0.34" />
+                    <stop offset="100%" stop-color="#fff4df" stop-opacity="0.9" />
+                </linearGradient>
+
+                <radialGradient id="star-blue" cx="34%" cy="30%" r="68%">
+                    <stop offset="0%" stop-color="#ffffff" />
+                    <stop offset="26%" stop-color="#eaf7ff" />
+                    <stop offset="68%" stop-color="#9bd4ff" />
+                    <stop offset="100%" stop-color="#3c6fba" />
+                </radialGradient>
+                <radialGradient id="star-white" cx="34%" cy="30%" r="68%">
+                    <stop offset="0%" stop-color="#ffffff" />
+                    <stop offset="30%" stop-color="#fffdf0" />
+                    <stop offset="70%" stop-color="#ffe6a2" />
+                    <stop offset="100%" stop-color="#c98634" />
+                </radialGradient>
+                <radialGradient id="star-gold" cx="34%" cy="30%" r="68%">
+                    <stop offset="0%" stop-color="#fffdf4" />
+                    <stop offset="30%" stop-color="#ffe9a7" />
+                    <stop offset="72%" stop-color="#f4a34f" />
+                    <stop offset="100%" stop-color="#a94b22" />
+                </radialGradient>
+                <radialGradient id="star-red" cx="34%" cy="30%" r="68%">
+                    <stop offset="0%" stop-color="#fff4dd" />
+                    <stop offset="30%" stop-color="#ffc084" />
+                    <stop offset="72%" stop-color="#e7674d" />
+                    <stop offset="100%" stop-color="#7d2734" />
+                </radialGradient>
+                <radialGradient id="star-corona-blue">
+                    <stop offset="0%" stop-color="#a9dcff" stop-opacity="0.45" />
+                    <stop offset="28%" stop-color="#72b9ff" stop-opacity="0.18" />
+                    <stop offset="100%" stop-color="#4478d4" stop-opacity="0" />
+                </radialGradient>
+                <radialGradient id="star-corona-white">
+                    <stop offset="0%" stop-color="#fff2bd" stop-opacity="0.48" />
+                    <stop offset="30%" stop-color="#ffd675" stop-opacity="0.16" />
+                    <stop offset="100%" stop-color="#e59843" stop-opacity="0" />
+                </radialGradient>
+                <radialGradient id="star-corona-gold">
+                    <stop offset="0%" stop-color="#ffd58a" stop-opacity="0.46" />
+                    <stop offset="30%" stop-color="#f49a4e" stop-opacity="0.16" />
+                    <stop offset="100%" stop-color="#bd4e36" stop-opacity="0" />
+                </radialGradient>
+                <radialGradient id="star-corona-red">
+                    <stop offset="0%" stop-color="#ffad80" stop-opacity="0.4" />
+                    <stop offset="30%" stop-color="#dd5d63" stop-opacity="0.15" />
+                    <stop offset="100%" stop-color="#842f5e" stop-opacity="0" />
+                </radialGradient>
+
+                <radialGradient id="planet-ocean" cx="29%" cy="25%" r="78%">
+                    <stop offset="0%" stop-color="#b9efff" />
+                    <stop offset="23%" stop-color="#4ea6c9" />
+                    <stop offset="66%" stop-color="#1f587e" />
+                    <stop offset="100%" stop-color="#071729" />
+                </radialGradient>
+                <radialGradient id="planet-ice" cx="29%" cy="25%" r="78%">
+                    <stop offset="0%" stop-color="#f4fbff" />
+                    <stop offset="28%" stop-color="#b8d8e8" />
+                    <stop offset="70%" stop-color="#58788f" />
+                    <stop offset="100%" stop-color="#172735" />
+                </radialGradient>
+                <radialGradient id="planet-amber" cx="29%" cy="25%" r="78%">
+                    <stop offset="0%" stop-color="#ffe0a0" />
+                    <stop offset="27%" stop-color="#d78f50" />
+                    <stop offset="70%" stop-color="#713c31" />
+                    <stop offset="100%" stop-color="#24131c" />
+                </radialGradient>
+                <radialGradient id="planet-sage" cx="29%" cy="25%" r="78%">
+                    <stop offset="0%" stop-color="#d5e6bd" />
+                    <stop offset="26%" stop-color="#7fa47f" />
+                    <stop offset="70%" stop-color="#354f52" />
+                    <stop offset="100%" stop-color="#112129" />
+                </radialGradient>
+                <radialGradient id="planet-violet" cx="29%" cy="25%" r="78%">
+                    <stop offset="0%" stop-color="#e2d4ff" />
+                    <stop offset="28%" stop-color="#8874bd" />
+                    <stop offset="70%" stop-color="#413d70" />
+                    <stop offset="100%" stop-color="#17152d" />
+                </radialGradient>
+                <radialGradient id="planet-rust" cx="29%" cy="25%" r="78%">
+                    <stop offset="0%" stop-color="#ffd0a4" />
+                    <stop offset="25%" stop-color="#bd6548" />
+                    <stop offset="70%" stop-color="#63333a" />
+                    <stop offset="100%" stop-color="#211521" />
+                </radialGradient>
+                <radialGradient id="moon-surface" cx="30%" cy="27%" r="76%">
+                    <stop offset="0%" stop-color="#f2f4f8" />
+                    <stop offset="38%" stop-color="#b9c0cc" />
+                    <stop offset="78%" stop-color="#596270" />
+                    <stop offset="100%" stop-color="#252b35" />
+                </radialGradient>
+                <linearGradient id="asteroid-surface" x1="15%" y1="10%" x2="85%" y2="90%">
+                    <stop offset="0%" stop-color="#b3a28f" />
+                    <stop offset="44%" stop-color="#71665e" />
+                    <stop offset="100%" stop-color="#312d31" />
+                </linearGradient>
+
+                <filter id="galaxy-soft-blur" x="-35%" y="-35%" width="170%" height="170%" color-interpolation-filters="sRGB">
+                    <feGaussianBlur stdDeviation="24" />
+                </filter>
+                <filter id="star-soft-glow" x="-180%" y="-180%" width="460%" height="460%" color-interpolation-filters="sRGB">
+                    <feGaussianBlur stdDeviation="2.8" />
+                </filter>
             </defs>
 
-            <rect width="1000" height="1000" fill="url(#graph-space)" />
+            <rect class="graph-space" width="@F(_viewportWidth)" height="@F(_viewportHeight)" fill="url(#graph-space)" />
 
-            <ellipse class="graph-nebula one" cx="320" cy="380" rx="280" ry="140" />
-            <ellipse class="graph-nebula two" cx="690" cy="560" rx="240" ry="110" />
-            <ellipse class="graph-nebula three" cx="520" cy="220" rx="180" ry="90" />
-
-            @foreach (var speck in Specks())
-            {
-                <circle class="graph-speck" cx="@speck.X" cy="@speck.Y" r="@speck.R" opacity="@speck.Opacity" />
-            }
-
-            @foreach (var edge in _graph.Edges)
-            {
-                var from = Node(edge.From);
-                var to = Node(edge.To);
-                if (from is null || to is null || LinkedByOrbit(from, to))
-                    continue;
-                <path class="graph-link" d="@Curve(from, to)" />
-            }
-
-            @foreach (var orbit in _graph.Orbits)
-            {
-                <circle class="graph-orbit depth-@Math.Clamp(orbit.Depth, 0, 4)"
-                        cx="@Px(orbit.X)" cy="@Px(orbit.Y)" r="@Px(orbit.Radius)" />
-            }
-
-            @foreach (var node in _graph.Nodes.OrderByDescending(n => n.Size))
-            {
-                var current = node.Id == State.CurrentPageId;
-                var r = Math.Max(2.5, node.Size * 1000);
-                <g class="graph-body body-@node.Body.ToString().ToLowerInvariant() @(current ? "current" : null) @(node.Missing ? "missing" : null) @(ShowLabel(node, current) ? "labeled" : "quiet")"
-                   @key="node.Id"
-                   transform="translate(@Px(node.X) @Px(node.Y))"
-                   @onclick="() => OpenAsync(node)">
-                    <title>@Tooltip(node)</title>
-                    <circle class="graph-hit" r="@Math.Max(r, 14)" />
-                    @if (node.Body == GraphBodyKind.Star)
+            <g class="graph-deep-field" aria-hidden="true">
+                @foreach (var speck in _specks)
+                {
+                    var x = speck.X * _viewportWidth;
+                    var y = speck.Y * _viewportHeight;
+                    if (speck.Flare)
                     {
-                        <circle class="star-halo" r="@(r * 3.1)" />
-                        <circle class="star-glow" r="@(r * 1.9)" />
-                        <circle class="star-core" r="@r" />
-                    }
-                    else if (node.Body == GraphBodyKind.Planet)
-                    {
-                        <ellipse class="planet-ring @(HasRing(node.Id) ? null : "hidden")"
-                                 rx="@(r * 2.35)" ry="@(r * 0.52)"
-                                 transform="rotate(@RingAngle(node.Id))" />
-                        <circle class="planet-core" r="@r" fill="@PlanetFill(node.Id)" />
-                        <circle class="planet-lit" cx="@(-r * 0.28)" cy="@(-r * 0.28)" r="@(r * 0.42)" />
-                    }
-                    else if (node.Body == GraphBodyKind.Moon)
-                    {
-                        <circle class="moon-core" r="@r" />
-                        <circle class="moon-crater" cx="@(r * 0.25)" cy="@(-r * 0.15)" r="@(r * 0.28)" />
-                    }
-                    else if (node.Body == GraphBodyKind.Asteroid)
-                    {
-                        <polygon class="asteroid-rock" points="@RockPoints(r, node.Id, 7)" />
-                    }
-                    else if (node.Body == GraphBodyKind.Meteor)
-                    {
-                        <ellipse class="meteor-core" rx="@(r * 1.7)" ry="@(r * 0.45)" transform="rotate(@RingAngle(node.Id))" />
+                        <g class="space-star flare tone-@speck.Tone" transform="translate(@F(x) @F(y))" style="@SpeckStyle(speck)">
+                            <line x1="@F(-speck.Radius * 3.8)" x2="@F(speck.Radius * 3.8)" />
+                            <line y1="@F(-speck.Radius * 3.8)" y2="@F(speck.Radius * 3.8)" />
+                            <circle r="@F(speck.Radius)" />
+                        </g>
                     }
                     else
                     {
-                        <circle class="dust-core" r="@r" />
+                        <circle class="space-star tone-@speck.Tone @(speck.Twinkle ? "twinkle" : null)"
+                                cx="@F(x)" cy="@F(y)" r="@F(speck.Radius)" style="@SpeckStyle(speck)" />
                     }
-                    <text class="graph-glyph" y="@(node.Body == GraphBodyKind.Star ? 5 : 4)">@Glyph(node)</text>
-                    <text class="graph-label" y="@(r + (node.Body == GraphBodyKind.Star ? 18 : 14))">@Truncate(node.Title, node.Body)</text>
-                </g>
-            }
+                }
+            </g>
+
+            <g class="galaxy-field" transform="@GalaxyTransform" aria-hidden="true">
+                <ellipse class="galaxy-halo" rx="@F(GalaxyRadius * 0.58)" ry="@F(GalaxyRadius * 0.34)" fill="url(#galaxy-core)" />
+                <ellipse class="nebula-cloud nebula-violet" cx="@F(-GalaxyRadius * 0.24)" cy="@F(GalaxyRadius * 0.08)"
+                         rx="@F(GalaxyRadius * 0.48)" ry="@F(GalaxyRadius * 0.17)" />
+                <ellipse class="nebula-cloud nebula-blue" cx="@F(GalaxyRadius * 0.28)" cy="@F(-GalaxyRadius * 0.07)"
+                         rx="@F(GalaxyRadius * 0.46)" ry="@F(GalaxyRadius * 0.15)" />
+
+                @for (var arm = 0; arm < 3; arm++)
+                {
+                    <path class="galaxy-arm-wash" d="@GalaxyArmPath(arm, 0)" stroke-width="@F(GalaxyRadius * 0.1)" />
+                    <path class="galaxy-arm" d="@GalaxyArmPath(arm, 0.025)" stroke-width="@F(Math.Max(1.2, GalaxyRadius * 0.012))" />
+                    <path class="galaxy-dust-lane" d="@GalaxyArmPath(arm, -0.045)" stroke-width="@F(Math.Max(2.4, GalaxyRadius * 0.02))" />
+                }
+
+                @foreach (var particle in _galaxyParticles)
+                {
+                    <circle class="galaxy-particle tone-@particle.Tone"
+                            cx="@F(particle.X * GalaxyRadius)"
+                            cy="@F(particle.Y * GalaxyRadius)"
+                            r="@F(particle.Radius)"
+                            opacity="@F(particle.Opacity)" />
+                }
+
+                <ellipse class="galaxy-nucleus-glow" rx="@F(GalaxyRadius * 0.12)" ry="@F(GalaxyRadius * 0.07)" />
+                <ellipse class="galaxy-nucleus" rx="@F(GalaxyRadius * 0.036)" ry="@F(GalaxyRadius * 0.022)" />
+            </g>
+
+            <rect class="graph-vignette" width="@F(_viewportWidth)" height="@F(_viewportHeight)" fill="url(#graph-vignette)" aria-hidden="true" />
+
+            <g class="graph-connections">
+                @foreach (var edge in _graph.Edges)
+                {
+                    var from = Node(edge.From);
+                    var to = Node(edge.To);
+                    if (from is null || to is null || LinkedByOrbit(from, to))
+                        continue;
+                    var linkedToCurrent = from.Id == State.CurrentPageId || to.Id == State.CurrentPageId;
+                    <path class="graph-link @(linkedToCurrent ? "active" : null)" d="@Curve(from, to)" />
+                }
+
+                @foreach (var orbit in _graph.Orbits)
+                {
+                    <ellipse class="graph-orbit depth-@Math.Clamp(orbit.Depth, 0, 4)"
+                             cx="@F(MapX(orbit.X))" cy="@F(MapY(orbit.Y))"
+                             rx="@F(OrbitRadiusX(orbit.Radius))" ry="@F(OrbitRadiusY(orbit.Radius))" />
+                }
+            </g>
+
+            <g class="graph-worlds">
+                @foreach (var node in _graph.Nodes.OrderByDescending(n => n.Size))
+                {
+                    var current = node.Id == State.CurrentPageId;
+                    var radius = VisualRadius(node);
+                    var glyph = Glyph(node);
+                    var hasLabel = ShowLabel(node, current);
+                    var ring = node.Body == GraphBodyKind.Planet && HasRing(node.Id);
+                    var palette = PlanetPalette(node.Id);
+                    <g class="graph-body body-@node.Body.ToString().ToLowerInvariant() @(current ? "current" : null) @(node.Missing ? "missing" : null) @(hasLabel ? "labeled" : "quiet")"
+                       @key="node.Id"
+                       transform="translate(@F(MapX(node.X)) @F(MapY(node.Y)))"
+                       role="link"
+                       tabindex="0"
+                       focusable="true"
+                       aria-label="@Tooltip(node)"
+                       style="@NodeStyle(node)"
+                       @onclick="() => OpenAsync(node)"
+                       @onkeydown="args => OnNodeKeyDownAsync(args, node)">
+                        <title>@Tooltip(node)</title>
+                        <circle class="graph-hit" r="@F(HitRadius(radius))" />
+
+                        <g class="graph-object">
+                            @if (node.Body == GraphBodyKind.Star)
+                            {
+                                @if (IsRadiant(node.Id, current))
+                                {
+                                    <g class="star-rays">
+                                        <line x1="@F(-radius * 3.2)" x2="@F(radius * 3.2)" />
+                                        <line y1="@F(-radius * 3.2)" y2="@F(radius * 3.2)" />
+                                    </g>
+                                }
+                                <circle class="star-corona" r="@F(radius * 3.35)" fill="@StarCorona(node.Id)" />
+                                <circle class="star-halo" r="@F(radius * 1.75)" fill="@StarCorona(node.Id)" />
+                                <circle class="star-glow" r="@F(radius * 1.13)" fill="@StarCore(node.Id)" />
+                                <circle class="star-core" r="@F(radius)" fill="@StarCore(node.Id)" />
+                                <circle class="star-hotspot" cx="@F(-radius * 0.27)" cy="@F(-radius * 0.3)" r="@F(radius * 0.24)" />
+                            }
+                            else if (node.Body == GraphBodyKind.Planet)
+                            {
+                                @if (ring)
+                                {
+                                    <g class="planet-rings" transform="rotate(@RingAngle(node.Id))">
+                                        <ellipse class="planet-ring-back" rx="@F(radius * 2.25)" ry="@F(radius * 0.54)" />
+                                    </g>
+                                }
+                                <circle class="planet-atmosphere palette-@palette" r="@F(radius * 1.13)" />
+                                <circle class="planet-core" r="@F(radius)" fill="@PlanetFill(node.Id)" />
+                                @if (HasBands(node.Id))
+                                {
+                                    <ellipse class="planet-band" cy="@F(radius * 0.08)" rx="@F(radius * 0.82)" ry="@F(radius * 0.13)"
+                                             transform="rotate(@F(RingAngle(node.Id) * 0.16))" />
+                                    <ellipse class="planet-band faint" cy="@F(radius * 0.38)" rx="@F(radius * 0.65)" ry="@F(radius * 0.08)"
+                                             transform="rotate(@F(RingAngle(node.Id) * 0.16))" />
+                                }
+                                <ellipse class="planet-glint" cx="@F(-radius * 0.31)" cy="@F(-radius * 0.34)"
+                                         rx="@F(radius * 0.22)" ry="@F(radius * 0.15)" />
+                                @if (ring)
+                                {
+                                    <g class="planet-rings" transform="rotate(@RingAngle(node.Id))">
+                                        <path class="planet-ring-front" d="@RingFront(radius * 2.25, radius * 0.54)" />
+                                    </g>
+                                }
+                            }
+                            else if (node.Body == GraphBodyKind.Moon)
+                            {
+                                <circle class="moon-core" r="@F(radius)" />
+                                @foreach (var crater in MoonCraters(radius, node.Id))
+                                {
+                                    <circle class="moon-crater" cx="@F(crater.X)" cy="@F(crater.Y)" r="@F(crater.Radius)" opacity="@F(crater.Opacity)" />
+                                }
+                            }
+                            else if (node.Body == GraphBodyKind.Asteroid)
+                            {
+                                <polygon class="asteroid-rock" points="@RockPoints(radius, node.Id, 9)" />
+                                <path class="asteroid-facet" d="@RockFacet(radius, node.Id)" />
+                            }
+                            else if (node.Body == GraphBodyKind.Meteor)
+                            {
+                                <g class="meteor" transform="rotate(@RingAngle(node.Id))">
+                                    <path class="meteor-tail" d="@MeteorTail(radius)" />
+                                    <ellipse class="meteor-glow" rx="@F(radius * 2)" ry="@F(radius * 0.72)" />
+                                    <ellipse class="meteor-core" rx="@F(radius * 1.45)" ry="@F(radius * 0.5)" />
+                                </g>
+                            }
+                            else
+                            {
+                                <circle class="dust-haze" r="@F(radius * 1.8)" />
+                                <circle class="dust-core" r="@F(radius)" />
+                            }
+
+                            @if (glyph.Length > 0)
+                            {
+                                <text class="graph-glyph" y="@F(radius * 0.18)">@glyph</text>
+                            }
+                        </g>
+
+                        <text class="graph-label" y="@F(radius + LabelGap(node.Body))">@Truncate(node.Title, node.Body)</text>
+                    </g>
+                }
+            </g>
         </svg>
     }
 </div>
 
 @code {
+    private const string GalaxyElementId = "page-galaxy";
+    private static readonly string[] StarNames = ["blue", "white", "gold", "red"];
+    private static readonly string[] PlanetNames = ["ocean", "ice", "amber", "sage", "violet", "rust"];
+
     private PageGraph _graph = new([], [], []);
+    private IReadOnlyDictionary<string, GraphNode> _nodesById = new Dictionary<string, GraphNode>();
+    private IReadOnlyList<SpaceSpeck> _specks = [];
+    private IReadOnlyList<GalaxyParticle> _galaxyParticles = [];
+    private DotNetObjectReference<Graph>? _self;
+    private string? _backdropKey;
+    private double _viewportWidth = 1100;
+    private double _viewportHeight = 760;
 
     protected override void OnInitialized()
     {
@@ -122,103 +373,313 @@
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _graph.Nodes.Count == 0)
+            return;
+
+        _self = DotNetObjectReference.Create(this);
+        await Js.InvokeVoidAsync("syncly.attachGalaxy", GalaxyElementId, _self);
+    }
+
     private void Refresh() => _ = InvokeAsync(LoadAsync);
 
     private async Task LoadAsync()
     {
         _graph = await State.Workspace.GraphAsync();
+        _nodesById = _graph.Nodes
+            .GroupBy(node => node.Id, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        EnsureBackdrop();
         StateHasChanged();
     }
 
-    private GraphNode? Node(string id) =>
-        _graph.Nodes.FirstOrDefault(n => n.Id == id);
+    private void EnsureBackdrop()
+    {
+        var key = State.CurrentSpaceId ?? "space";
+        if (key == _backdropKey)
+            return;
 
-    private static int Px(double unit) => (int)Math.Round(unit * 1000);
+        _backdropKey = key;
+        _specks = BuildSpecks(key);
+        _galaxyParticles = BuildGalaxyParticles(key);
+    }
+
+    [JSInvokable]
+    public void OnGalaxyResize(double width, double height)
+    {
+        width = Math.Clamp(width, 220, 4096);
+        height = Math.Clamp(height, 220, 4096);
+        if (Math.Abs(width - _viewportWidth) < 1 && Math.Abs(height - _viewportHeight) < 1)
+            return;
+
+        _viewportWidth = width;
+        _viewportHeight = height;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private GraphNode? Node(string id) =>
+        _nodesById.TryGetValue(id, out var node) ? node : null;
+
+    private string ViewBox => $"0 0 {F(_viewportWidth)} {F(_viewportHeight)}";
+
+    private bool IsCompact => _viewportWidth < 640 || _viewportHeight < 500;
+
+    private PlotBounds Plot
+    {
+        get
+        {
+            var shortSide = Math.Min(_viewportWidth, _viewportHeight);
+            var pad = Math.Clamp(shortSide * 0.052, 18, 58);
+            var header = IsCompact ? 62 : 84;
+            var availableWidth = Math.Max(120, _viewportWidth - pad * 2);
+            var availableHeight = Math.Max(120, _viewportHeight - header - pad);
+            var plotWidth = availableWidth;
+            var plotHeight = availableHeight;
+            const double minAspect = 0.68;
+            const double maxAspect = 1.82;
+            var aspect = plotWidth / plotHeight;
+
+            if (aspect < minAspect)
+                plotHeight = plotWidth / minAspect;
+            else if (aspect > maxAspect)
+                plotWidth = plotHeight * maxAspect;
+
+            return new PlotBounds(
+                (_viewportWidth - plotWidth) / 2,
+                header + (availableHeight - plotHeight) / 2,
+                plotWidth,
+                plotHeight);
+        }
+    }
+
+    private double MapX(double unit) => Plot.Left + unit * Plot.Width;
+
+    private double MapY(double unit) => Plot.Top + unit * Plot.Height;
+
+    private double OrbitRadiusX(double unit) => unit * Plot.Width;
+
+    private double OrbitRadiusY(double unit) => unit * Plot.Height;
+
+    private double VisualRadius(GraphNode node)
+    {
+        var scale = Math.Clamp(Math.Min(_viewportWidth, _viewportHeight) / 780, 0.64, 1.18);
+        var proposed = node.Size * 1000 * scale;
+        return node.Body switch
+        {
+            GraphBodyKind.Star => Math.Clamp(proposed, 20, 40),
+            GraphBodyKind.Planet => Math.Clamp(proposed, 9.5, 21),
+            GraphBodyKind.Moon => Math.Clamp(proposed, 5.8, 12),
+            GraphBodyKind.Asteroid => Math.Clamp(proposed, 4.2, 8),
+            GraphBodyKind.Meteor => Math.Clamp(proposed, 3.6, 6.5),
+            GraphBodyKind.Dust => Math.Clamp(proposed, 5, 9),
+            _ => proposed,
+        };
+    }
+
+    private double HitRadius(double visualRadius) => Math.Max(visualRadius + 10, IsCompact ? 23 : 18);
+
+    private static double LabelGap(GraphBodyKind body) => body == GraphBodyKind.Star ? 18 : 14;
 
     private static bool LinkedByOrbit(GraphNode a, GraphNode b) =>
         a.ParentId == b.Id || b.ParentId == a.Id;
 
-    private static bool ShowLabel(GraphNode node, bool current) =>
-        current || node.Body is GraphBodyKind.Star or GraphBodyKind.Planet or GraphBodyKind.Moon or GraphBodyKind.Dust;
+    private bool ShowLabel(GraphNode node, bool current) =>
+        current || node.Body == GraphBodyKind.Star || (!IsCompact && node.Body is GraphBodyKind.Planet or GraphBodyKind.Moon);
 
-    private static string Glyph(GraphNode node)
-    {
-        if (node.Icon is { Length: > 0 } icon)
-            return icon;
-        if (node.Body is GraphBodyKind.Asteroid or GraphBodyKind.Meteor)
-            return string.Empty;
-        var title = node.Title.Trim();
-        return title.Length == 0 ? "?" : char.ToUpperInvariant(title[0]).ToString();
-    }
+    private static string Glyph(GraphNode node) => node.Icon is { Length: > 0 } icon ? icon : string.Empty;
 
     private static string Tooltip(GraphNode node)
     {
         var title = string.IsNullOrWhiteSpace(node.Title) ? "Untitled" : node.Title;
-        var kind = node.Missing ? "unresolved" : node.Body.ToString().ToLowerInvariant();
-        return $"{title} · {kind}";
+        var kind = node.Missing ? "unresolved page" : node.Body.ToString().ToLowerInvariant();
+        return $"{title}, {kind}";
     }
 
     private static string Truncate(string title, GraphBodyKind body)
     {
         var text = string.IsNullOrWhiteSpace(title) ? "Untitled" : title;
         var cap = body == GraphBodyKind.Star ? 28 : 20;
-        return text.Length <= cap ? text : text[..(cap - 1)] + "…";
+        return text.Length <= cap ? text : text[..(cap - 3)] + "...";
     }
 
-    private static string Curve(GraphNode from, GraphNode to)
+    private string Curve(GraphNode from, GraphNode to)
     {
-        var x1 = Px(from.X);
-        var y1 = Px(from.Y);
-        var x2 = Px(to.X);
-        var y2 = Px(to.Y);
-        var mx = (x1 + x2) / 2.0;
-        var my = (y1 + y2) / 2.0;
+        var x1 = MapX(from.X);
+        var y1 = MapY(from.Y);
+        var x2 = MapX(to.X);
+        var y2 = MapY(to.Y);
+        var mx = (x1 + x2) / 2;
+        var my = (y1 + y2) / 2;
         var dx = x2 - x1;
         var dy = y2 - y1;
         var len = Math.Max(1, Math.Sqrt(dx * dx + dy * dy));
-        var bend = Math.Min(70, len * 0.18);
+        var bend = Math.Min(72, len * 0.14);
         var cx = mx - dy / len * bend;
         var cy = my + dx / len * bend;
-        return $"M {x1} {y1} Q {cx:0.#} {cy:0.#} {x2} {y2}";
+        return $"M {F(x1)} {F(y1)} Q {F(cx)} {F(cy)} {F(x2)} {F(y2)}";
+    }
+
+    private double GalaxyRadius => Math.Max(180, Math.Min(_viewportWidth * 0.72, _viewportHeight * 0.68));
+
+    private string GalaxyTransform =>
+        $"translate({F(_viewportWidth * 0.5)} {F(_viewportHeight * 0.54)}) rotate({(IsCompact ? -23 : -14)})";
+
+    private string GalaxyArmPath(int arm, double phaseOffset)
+    {
+        var path = new StringBuilder();
+        for (var i = 0; i <= 48; i++)
+        {
+            var t = i / 48.0;
+            var radius = GalaxyRadius * (0.025 + t * 0.98);
+            var angle = arm * Math.PI * 2 / 3 + t * 5.15 + phaseOffset;
+            var x = Math.Cos(angle) * radius;
+            var y = Math.Sin(angle) * radius * 0.56;
+            path.Append(i == 0 ? "M " : " L ")
+                .Append(F(x)).Append(' ').Append(F(y));
+        }
+
+        return path.ToString();
     }
 
     private static bool HasRing(string id) => GraphLayout.StableHash(id) % 5 == 0;
 
+    private static bool HasBands(string id) => GraphLayout.StableHash(id) % 3 != 1;
+
+    private static bool IsRadiant(string id, bool current) => current || GraphLayout.StableHash(id) % 3 == 0;
+
     private static int RingAngle(string id) => (int)(GraphLayout.StableHash(id) % 70) - 25;
 
-    private static string PlanetFill(string id)
+    private static int PlanetPalette(string id) => (int)(GraphLayout.StableHash(id) % (uint)PlanetNames.Length);
+
+    private static string PlanetFill(string id) => $"url(#planet-{PlanetNames[PlanetPalette(id)]})";
+
+    private static int StarPalette(string id) => (int)(GraphLayout.StableHash(id) % (uint)StarNames.Length);
+
+    private static string StarCore(string id) => $"url(#star-{StarNames[StarPalette(id)]})";
+
+    private static string StarCorona(string id) => $"url(#star-corona-{StarNames[StarPalette(id)]})";
+
+    private static string NodeStyle(GraphNode node)
     {
-        var hue = (int)(GraphLayout.StableHash(id) % 360);
-        return $"hsl({hue} 62% 58%)";
+        var hash = GraphLayout.StableHash(node.Id);
+        var delay = -((hash % 60) / 10.0);
+        var duration = 5.8 + hash % 29 / 10.0;
+        return $"--pulse-delay:{F(delay)}s;--pulse-speed:{F(duration)}s";
     }
 
-    private static string RockPoints(double r, string id, int sides)
+    private static string SpeckStyle(SpaceSpeck speck) =>
+        $"--star-alpha:{F(speck.Opacity)};--twinkle-delay:{F(-speck.Delay)}s";
+
+    private static string RingFront(double rx, double ry) =>
+        $"M {F(-rx)} 0 A {F(rx)} {F(ry)} 0 0 0 {F(rx)} 0";
+
+    private static string MeteorTail(double radius) =>
+        $"M {F(-radius * 6.8)} {F(-radius * 0.72)} Q {F(-radius * 2.8)} 0 {F(radius * 1.2)} 0 Q {F(-radius * 2.8)} 0 {F(-radius * 6.8)} {F(radius * 0.72)} Z";
+
+    private static string RockPoints(double radius, string id, int sides)
     {
         var hash = GraphLayout.StableHash(id);
         var points = new List<string>(sides);
         for (var i = 0; i < sides; i++)
         {
-            var jitter = ((hash >> (i * 3)) & 7) / 7.0;
-            var ang = 2 * Math.PI * i / sides + jitter * 0.35;
-            var rad = r * (0.72 + jitter * 0.4);
-            points.Add($"{rad * Math.Cos(ang):0.##},{rad * Math.Sin(ang):0.##}");
+            var jitter = ((hash >> (i % 9 * 3)) & 7) / 7.0;
+            var angle = 2 * Math.PI * i / sides + jitter * 0.3;
+            var size = radius * (0.74 + jitter * 0.34);
+            points.Add($"{F(size * Math.Cos(angle))},{F(size * Math.Sin(angle))}");
         }
 
         return string.Join(' ', points);
     }
 
-    private IEnumerable<Speck> Specks()
+    private static string RockFacet(double radius, string id)
     {
-        var hash = GraphLayout.StableHash(State.CurrentSpaceId ?? "space");
-        for (var i = 0; i < 160; i++)
+        var turn = (GraphLayout.StableHash(id) % 90) * Math.PI / 180;
+        var x = Math.Cos(turn) * radius * 0.66;
+        var y = Math.Sin(turn) * radius * 0.66;
+        return $"M {F(-x * 0.5)} {F(-y * 0.5)} L {F(x)} {F(y)} L {F(-y * 0.38)} {F(x * 0.38)}";
+    }
+
+    private static IEnumerable<Crater> MoonCraters(double radius, string id)
+    {
+        var state = GraphLayout.StableHash(id);
+        for (var i = 0; i < 3; i++)
         {
-            hash = hash * 16777619 + (uint)i * 2654435761;
-            var x = hash % 1000;
-            var y = (hash / 1000) % 1000;
-            var r = 0.4 + (hash % 17) / 14.0;
-            var o = 0.18 + (hash % 11) / 22.0;
-            yield return new Speck(x, y, r, o);
+            var angle = NextUnit(ref state) * Math.PI * 2;
+            var distance = Math.Sqrt(NextUnit(ref state)) * radius * 0.55;
+            var size = radius * (0.1 + NextUnit(ref state) * 0.13);
+            yield return new Crater(
+                Math.Cos(angle) * distance,
+                Math.Sin(angle) * distance,
+                size,
+                0.3 + NextUnit(ref state) * 0.3);
         }
+    }
+
+    private static IReadOnlyList<SpaceSpeck> BuildSpecks(string key)
+    {
+        var state = GraphLayout.StableHash($"stars:{key}");
+        var stars = new List<SpaceSpeck>(280);
+        for (var i = 0; i < 280; i++)
+        {
+            var brightness = Math.Pow(NextUnit(ref state), 3.1);
+            var radius = 0.42 + brightness * 1.55;
+            var opacity = 0.18 + brightness * 0.68;
+            stars.Add(new SpaceSpeck(
+                NextUnit(ref state),
+                NextUnit(ref state),
+                radius,
+                opacity,
+                (int)(NextUnit(ref state) * 3),
+                brightness > 0.78,
+                brightness > 0.5,
+                NextUnit(ref state) * 7));
+        }
+
+        return stars;
+    }
+
+    private static IReadOnlyList<GalaxyParticle> BuildGalaxyParticles(string key)
+    {
+        var state = GraphLayout.StableHash($"galaxy:{key}");
+        var particles = new List<GalaxyParticle>(300);
+        for (var i = 0; i < 300; i++)
+        {
+            var core = i >= 240;
+            var radial = core
+                ? Math.Pow(NextUnit(ref state), 1.8) * 0.28
+                : Math.Pow(NextUnit(ref state), 0.7) * 0.98;
+            var arm = i % 3;
+            var scatter = (NextUnit(ref state) - 0.5) * (core ? 2.4 : 0.26 + radial * 0.5);
+            var angle = arm * Math.PI * 2 / 3 + radial * 5.15 + scatter;
+            var x = Math.Cos(angle) * radial + (NextUnit(ref state) - 0.5) * 0.035;
+            var y = Math.Sin(angle) * radial * 0.56 + (NextUnit(ref state) - 0.5) * (0.025 + radial * 0.045);
+            var brightness = Math.Pow(NextUnit(ref state), 2.4);
+            particles.Add(new GalaxyParticle(
+                x,
+                y,
+                0.35 + brightness * 1.45,
+                0.16 + brightness * 0.58,
+                (int)(NextUnit(ref state) * 3)));
+        }
+
+        return particles;
+    }
+
+    private static double NextUnit(ref uint state)
+    {
+        if (state == 0)
+            state = 0x9e3779b9;
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        return (state & 0x00ffffff) / (double)0x00ffffff;
+    }
+
+    private async Task OnNodeKeyDownAsync(KeyboardEventArgs args, GraphNode node)
+    {
+        if (args.Key is "Enter" or " ")
+            await OpenAsync(node);
     }
 
     private async Task OpenAsync(GraphNode node)
@@ -236,11 +697,42 @@
         Nav.NavigateTo("");
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         State.Changed -= Refresh;
         State.Workspace.Changed -= Refresh;
+
+        if (_self is null)
+            return;
+
+        try
+        {
+            await Js.InvokeVoidAsync("syncly.detachGalaxy", GalaxyElementId);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        finally
+        {
+            _self.Dispose();
+        }
     }
 
-    private readonly record struct Speck(double X, double Y, double R, double Opacity);
+    private static string F(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
+
+    private readonly record struct PlotBounds(double Left, double Top, double Width, double Height);
+    private readonly record struct SpaceSpeck(
+        double X,
+        double Y,
+        double Radius,
+        double Opacity,
+        int Tone,
+        bool Flare,
+        bool Twinkle,
+        double Delay);
+    private readonly record struct GalaxyParticle(double X, double Y, double Radius, double Opacity, int Tone);
+    private readonly record struct Crater(double X, double Y, double Radius, double Opacity);
 }
