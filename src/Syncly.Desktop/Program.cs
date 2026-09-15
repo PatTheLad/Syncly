@@ -30,7 +30,7 @@ internal static class Program
         builder.Services.AddLogging(logging => logging.AddSimpleConsole(o => o.SingleLine = true));
         builder.Services.AddSingleton(syncly);
         builder.Services.AddSingleton(syncly.Workspace);
-        builder.Services.AddSingleton<IAppUpdater>(new VelopackUpdater(loggerFactory));
+        builder.Services.AddSingleton<IAppUpdater>(CreateUpdater(loggerFactory));
         builder.Services.AddSingleton<IDeviceCamera, AlwaysAllowedCamera>();
         builder.Services.AddSingleton<IMailboxCapabilities, DesktopMailboxCapabilities>();
         builder.Services.AddSingleton<IFileAccess, DesktopFileAccess>();
@@ -61,6 +61,36 @@ internal static class Program
             syncly.DisposeAsync().AsTask().GetAwaiter().GetResult();
 
         app.Run();
+    }
+
+    // .deb copies live under /usr/lib/syncly and can't use Velopack's self-replace layout, so they
+    // get a fallback updater that downloads the new .deb and opens it in the desktop's own installer.
+    private static IAppUpdater CreateUpdater(ILoggerFactory loggerFactory)
+    {
+        var velopack = new VelopackUpdater(loggerFactory);
+        if (velopack.CanSelfUpdate || !IsDebInstall())
+            return velopack;
+
+        var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+        http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "Syncly");
+        var cacheDirectory = Path.Combine(Path.GetTempPath(), "syncly-updates");
+        return new GitHubDebUpdater(http, OpenWithPackageInstallerAsync, cacheDirectory);
+    }
+
+    private static bool IsDebInstall() =>
+        OperatingSystem.IsLinux() && AppContext.BaseDirectory.TrimEnd('/').Equals("/usr/lib/syncly", StringComparison.Ordinal);
+
+    private static Task OpenWithPackageInstallerAsync(string path, CancellationToken ct)
+    {
+        // xdg-open hands off to the desktop's default .deb handler (e.g. GNOME Software), which
+        // manages its own privilege prompt; we never invoke sudo/pkexec ourselves.
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "xdg-open",
+            Arguments = $"\"{path}\"",
+            UseShellExecute = false,
+        });
+        return Task.CompletedTask;
     }
 
     private static SynclyOptions BuildOptions(string[] args) => new()

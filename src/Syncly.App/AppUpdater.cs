@@ -262,3 +262,120 @@ public sealed class GitHubApkUpdater : IAppUpdater
         }
     }
 }
+
+/// <summary>Linux .deb installs: Velopack's self-replace layout doesn't apply, so this downloads the
+/// new .deb from GitHub and hands it to the desktop's own package installer to finish (it manages any
+/// privilege prompt itself; we never invoke sudo/pkexec directly).</summary>
+public sealed class GitHubDebUpdater : IAppUpdater
+{
+    private readonly GitHubReleaseClient _client;
+    private readonly HttpClient _http;
+    private readonly Func<string, CancellationToken, Task> _install;
+    private readonly string _cacheDirectory;
+
+    public GitHubDebUpdater(
+        HttpClient http,
+        Func<string, CancellationToken, Task> install,
+        string cacheDirectory)
+    {
+        _http = http;
+        _client = new GitHubReleaseClient(http);
+        _install = install;
+        _cacheDirectory = cacheDirectory;
+    }
+
+    public string CurrentVersion => AppRelease.CurrentVersion;
+
+    public bool CanSelfUpdate => true;
+
+    public AppUpdate? Available { get; private set; }
+
+    public string? Progress { get; private set; }
+
+    public bool Busy { get; private set; }
+
+    public event Action? Changed;
+
+    public async Task CheckAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var release = await _client.GetLatestAsync(ct);
+            if (release is null || !ReleaseVersion.IsNewer(release.TagName, CurrentVersion))
+            {
+                Available = null;
+                Progress = null;
+                Changed?.Invoke();
+                return;
+            }
+
+            var deb = release.FindAsset(name => name.EndsWith(".deb", StringComparison.OrdinalIgnoreCase));
+            if (deb is null)
+            {
+                Available = null;
+                Progress = "A newer release exists, but it has no Linux package.";
+                Changed?.Invoke();
+                return;
+            }
+
+            Available = new AppUpdate(release.TagName.TrimStart('v', 'V'), release.Body, deb.BrowserDownloadUrl, deb.Name);
+            Progress = null;
+            Changed?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Progress = ex.Message;
+            Changed?.Invoke();
+        }
+    }
+
+    public async Task ApplyAsync(CancellationToken ct = default)
+    {
+        if (Available?.DownloadUrl is not { Length: > 0 } url)
+            return;
+
+        Busy = true;
+        Progress = "Downloading…";
+        Changed?.Invoke();
+
+        try
+        {
+            Directory.CreateDirectory(_cacheDirectory);
+            var path = Path.Combine(_cacheDirectory, Available.AssetName ?? "Syncly.deb");
+            if (File.Exists(path))
+                File.Delete(path);
+
+            using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+            response.EnsureSuccessStatusCode();
+            var total = response.Content.Headers.ContentLength;
+
+            await using var input = await response.Content.ReadAsStreamAsync(ct);
+            await using var output = File.Create(path);
+            var buffer = new byte[64 * 1024];
+            long read = 0;
+            int n;
+            while ((n = await input.ReadAsync(buffer, ct)) > 0)
+            {
+                await output.WriteAsync(buffer.AsMemory(0, n), ct);
+                read += n;
+                if (total is > 0)
+                    Progress = $"Downloading… {read * 100 / total}%";
+                Changed?.Invoke();
+            }
+
+            Progress = "Opening installer…";
+            Changed?.Invoke();
+            await _install(path, ct);
+            Progress = "Opened in your package installer. Finish there, then restart Syncly.";
+        }
+        catch (Exception ex)
+        {
+            Progress = ex.Message;
+        }
+        finally
+        {
+            Busy = false;
+            Changed?.Invoke();
+        }
+    }
+}

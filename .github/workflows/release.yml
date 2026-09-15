@@ -252,7 +252,7 @@ jobs:
           else
             gh release create "$tag" \
               --title "Syncly ${VERSION}" \
-              --notes "Installers for Windows, Linux, and Android. Installed copies show an Update button for the next release; the download is silent. Android users who already have a copy signed with an older CI debug key need to uninstall once, then later in-app updates install over the app." \
+              --notes "Installers for Windows, Linux, and Android, plus a .deb for apt-based distros. Velopack-installed copies (the .exe/Linux installer, not the .deb) show an Update button that downloads and restarts silently. The .deb build shows an Update button too, but it downloads the new .deb and hands it to your system's package installer to finish. Android users who already have a copy signed with an older CI debug key need to uninstall once, then later in-app updates install over the app." \
               --latest \
               "${files[@]}"
           fi
