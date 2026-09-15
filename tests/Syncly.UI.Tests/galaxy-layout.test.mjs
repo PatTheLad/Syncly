@@ -87,10 +87,13 @@ test('restoration rejects corrupt coordinates and layouts do not share state', (
 });
 
 test('node size is bounded and missing nodes are distinct', () => {
-  assert.equal(radiusFor(0), 9);
-  assert.ok(radiusFor(10) > radiusFor(1));
-  assert.equal(radiusFor(100000), 19);
-  assert.equal(radiusFor(30, true), 7);
+  assert.equal(radiusFor(0, 0), 21);
+  assert.ok(radiusFor(0, 10) > radiusFor(0, 1));
+  assert.equal(radiusFor(0, 100000), 30);
+  assert.equal(radiusFor(0, 30, true), 6);
+  assert.ok(radiusFor(1, 0) < radiusFor(0, 0));
+  assert.ok(radiusFor(2, 0) < radiusFor(1, 0));
+  assert.ok(radiusFor(10, 0) < radiusFor(2, 0));
 });
 
 test('returning to an unchanged graph restores its settled layout exactly', () => {
