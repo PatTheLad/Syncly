@@ -432,11 +432,14 @@
     if (!el || !dotnet) return false;
 
     let frame = 0;
+    let timer = 0;
+    let lastReport = 0;
     let lastWidth = 0;
     let lastHeight = 0;
 
     const report = () => {
       frame = 0;
+      lastReport = performance.now();
       if (!el.isConnected) return;
 
       const rect = el.getBoundingClientRect();
@@ -450,8 +453,16 @@
     };
 
     const schedule = () => {
-      if (frame) window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(report);
+      if (frame || timer) return;
+      const remaining = 50 - (performance.now() - lastReport);
+      if (remaining <= 0) {
+        frame = window.requestAnimationFrame(report);
+      } else {
+        timer = window.setTimeout(() => {
+          timer = 0;
+          frame = window.requestAnimationFrame(report);
+        }, remaining);
+      }
     };
 
     let observer = null;
@@ -462,7 +473,13 @@
       window.addEventListener('resize', schedule);
     }
 
-    galaxyObservers.set(id, { token, observer, schedule, get frame() { return frame; } });
+    galaxyObservers.set(id, {
+      token,
+      observer,
+      schedule,
+      get frame() { return frame; },
+      get timer() { return timer; },
+    });
     report();
     return true;
   }
@@ -474,6 +491,7 @@
     if (attached.observer) attached.observer.disconnect();
     else window.removeEventListener('resize', attached.schedule);
     if (attached.frame) window.cancelAnimationFrame(attached.frame);
+    if (attached.timer) window.clearTimeout(attached.timer);
     galaxyObservers.delete(id);
     return true;
   }

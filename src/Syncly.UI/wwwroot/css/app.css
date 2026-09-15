@@ -2036,9 +2036,12 @@ html.phone .icon-grid {
 }
 
 .graph-empty {
-  position: relative;
-  z-index: 1;
-  margin-top: 76px;
+  position: absolute;
+  inset: 76px 18px 0;
+  z-index: 3;
+  height: auto;
+  margin: 0;
+  pointer-events: none;
 }
 
 .graph-empty-orbit {
@@ -2506,6 +2509,11 @@ html.phone .graph-head,
 .graph-page.compact .graph-head {
   min-height: 58px;
   padding-bottom: 22px;
+}
+
+html.phone .graph-empty,
+.graph-page.compact .graph-empty {
+  top: 58px;
 }
 
 html.phone .graph-title,

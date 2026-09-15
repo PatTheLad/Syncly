@@ -24,13 +24,11 @@
             <p>Create a page, then nest another beneath it to form your first system.</p>
         </div>
     }
-    else
-    {
-        <svg id="page-galaxy"
+    <svg id="page-galaxy"
              class="graph-canvas @(_viewportMeasured ? "ready" : null)"
              viewBox="@ViewBox"
              preserveAspectRatio="none"
-             role="img"
+             role="group"
              aria-labelledby="galaxy-title galaxy-description">
             <title id="galaxy-title">Page galaxy</title>
             <desc id="galaxy-description">An interactive map where root pages are stars and nested pages orbit them as worlds.</desc>
@@ -358,8 +356,7 @@
                     </g>
                 }
             </g>
-        </svg>
-    }
+    </svg>
 </div>
 
 @code {
@@ -376,6 +373,7 @@
     private bool _galaxyAttached;
     private bool _viewportMeasured;
     private bool _disposed;
+    private long _loadGeneration;
     private string? _backdropKey;
     private double _viewportWidth = 1100;
     private double _viewportHeight = 760;
@@ -386,23 +384,13 @@
         State.Workspace.Changed += Refresh;
     }
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    protected override async Task OnInitializedAsync() =>
+        await LoadAsync(Interlocked.Increment(ref _loadGeneration));
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (_disposed)
             return;
-
-        if (_graph.Nodes.Count == 0)
-        {
-            if (_galaxyAttached)
-            {
-                await Js.InvokeVoidAsync("syncly.detachGalaxy", GalaxyElementId, _observerToken);
-                _galaxyAttached = false;
-                _viewportMeasured = false;
-            }
-            return;
-        }
 
         if (_galaxyAttached)
             return;
@@ -419,14 +407,30 @@
         _galaxyAttached = attached;
     }
 
-    private void Refresh() => _ = InvokeAsync(LoadAsync);
-
-    private async Task LoadAsync()
+    private void Refresh()
     {
-        _graph = await State.Workspace.GraphAsync();
-        _nodesById = _graph.Nodes
+        if (_disposed)
+            return;
+
+        var generation = Interlocked.Increment(ref _loadGeneration);
+        _ = InvokeAsync(() => LoadAsync(generation));
+    }
+
+    private async Task LoadAsync(long generation)
+    {
+        var graph = await State.Workspace.GraphAsync();
+        if (_disposed || generation != Interlocked.Read(ref _loadGeneration))
+            return;
+
+        var nodesById = graph.Nodes
             .GroupBy(node => node.Id, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+
+        if (_disposed || generation != Interlocked.Read(ref _loadGeneration))
+            return;
+
+        _graph = graph;
+        _nodesById = nodesById;
         EnsureBackdrop();
         StateHasChanged();
     }
@@ -746,6 +750,7 @@
     public async ValueTask DisposeAsync()
     {
         _disposed = true;
+        Interlocked.Increment(ref _loadGeneration);
         State.Changed -= Refresh;
         State.Workspace.Changed -= Refresh;
 
