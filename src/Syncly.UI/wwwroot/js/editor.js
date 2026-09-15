@@ -260,6 +260,13 @@
     return el ? el.textContent ?? '' : '';
   }
 
+  // Current text + selection for a block, so a toolbar button can toggle a mark without a keyboard.
+  function selection(id) {
+    const el = element(id);
+    if (!el) return { text: '', start: 0, end: 0 };
+    return { text: el.textContent ?? '', start: caretOffset(el), end: selectionEnd(el) };
+  }
+
   function getCaret(id) {
     const el = element(id);
     return el ? caretOffset(el) : 0;
@@ -405,6 +412,69 @@
       event.stopPropagation();
       dotnet.invokeMethodAsync('OnOpenLink', link.dataset.page ?? link.textContent ?? '');
     }, true);
+
+    attachLinkPreview(dotnet);
+  }
+
+  // Hover a wikilink a moment and a small card shows the target's title and first lines.
+  function attachLinkPreview(dotnet) {
+    let card = null;
+    let timer = null;
+    let current = null;
+
+    const hide = () => {
+      clearTimeout(timer);
+      timer = null;
+      current = null;
+      card?.remove();
+      card = null;
+    };
+
+    const show = async (link) => {
+      const title = link.dataset.page ?? link.textContent ?? '';
+      let info;
+      try {
+        info = await dotnet.invokeMethodAsync('OnLinkPreview', title);
+      } catch {
+        return;
+      }
+      if (!info || current !== link) return;
+
+      card = document.createElement('div');
+      card.className = 'link-preview';
+      const rect = link.getBoundingClientRect();
+      card.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 320))}px`;
+      card.style.top = `${rect.bottom + 8}px`;
+
+      const heading = document.createElement('strong');
+      heading.textContent = info.missing ? `${info.title} (not created yet)` : info.title;
+      card.appendChild(heading);
+
+      for (const line of info.lines ?? []) {
+        const p = document.createElement('p');
+        p.textContent = line;
+        card.appendChild(p);
+      }
+
+      document.body.appendChild(card);
+    };
+
+    document.addEventListener('mouseover', (event) => {
+      const link = event.target.closest?.('a.wikilink');
+      if (!link || link === current) return;
+      hide();
+      current = link;
+      timer = setTimeout(() => show(link), 350);
+    });
+
+    document.addEventListener('mouseout', (event) => {
+      const link = event.target.closest?.('a.wikilink');
+      if (!link || link !== current) return;
+      if (event.relatedTarget && link.contains(event.relatedTarget)) return;
+      hide();
+    });
+
+    document.addEventListener('scroll', hide, true);
   }
 
   function setMenuOpen(open) {
@@ -449,6 +519,22 @@
 
   function confirmDialog(message) {
     return window.confirm(message);
+  }
+
+  function downloadText(fileName, text) {
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function printPage() {
+    window.print();
   }
 
   async function scanQr() {
@@ -514,6 +600,7 @@
     focusElement,
     getText,
     getCaret,
+    selection,
     anchorOf,
     setMenuOpen,
     setPaletteOpen,
@@ -522,6 +609,8 @@
     treeDropHint,
     blockDropHint,
     scanQr,
+    downloadText,
+    printPage,
     click(id) {
       const el = element(id);
       if (el) el.click();

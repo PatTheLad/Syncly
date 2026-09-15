@@ -43,6 +43,8 @@
                 <button class="chip panel-toggle" title="Outline and backlinks" @onclick="() => _panelOpen = true">Outline</button>
                 <button class="chip" title="New sub-page" @onclick="() => NewSubPageAsync()">Sub-page</button>
                 <button class="chip" title="Show this page in the galaxy" @onclick="ShowInGalaxy">Galaxy</button>
+                <button class="chip" title="Download this page as a .md file" @onclick="ExportMarkdownAsync">Export .md</button>
+                <button class="chip" title="Print, or save as PDF, from the browser print dialog" @onclick="PrintAsync">Print / PDF</button>
                 <button class="chip danger" @onclick="DeletePageAsync">Delete</button>
             </div>
         }
@@ -123,6 +125,16 @@
             </aside>
         }
     </div>
+
+    @if (_focusedBlockId is not null && !State.ReadingMode)
+    {
+        <div class="format-bar" role="toolbar" aria-label="Text formatting">
+            <button type="button" @onmousedown:preventDefault="true" @onclick='() => MarkFocusedAsync("b")'><strong>B</strong></button>
+            <button type="button" @onmousedown:preventDefault="true" @onclick='() => MarkFocusedAsync("i")'><em>I</em></button>
+            <button type="button" @onmousedown:preventDefault="true" @onclick='() => MarkFocusedAsync("u")'><u>U</u></button>
+            <button type="button" @onmousedown:preventDefault="true" @onclick='() => MarkFocusedAsync("s")'><s>S</s></button>
+        </div>
+    }
 </div>
 
 @if (_panelOpen && _page is not null)
@@ -420,6 +432,19 @@
         var (updated, from, _) = InlineMarkup.ToggleMark(text, start, end, marker);
         await State.Workspace.SetBlockTextAsync(PageIdOrThrow, blockId, updated);
         await Js.InvokeVoidAsync("syncly.setText", $"blk-{blockId}", updated, from);
+    }
+
+    private sealed record BlockSelection(string Text, int Start, int End);
+
+    /// <summary>Toolbar entry point for touch users who have no Ctrl+B keyboard shortcut.</summary>
+    private async Task MarkFocusedAsync(string shortcut)
+    {
+        if (_focusedBlockId is not { } blockId)
+            return;
+
+        var selection = await Js.InvokeAsync<BlockSelection>("syncly.selection", $"blk-{blockId}");
+        await MarkAsync(blockId, shortcut, selection.Text, selection.Start, selection.End);
+        await Js.InvokeVoidAsync("syncly.focusElement", $"blk-{blockId}");
     }
 
     public async Task SlashAsync(string blockId)
@@ -988,6 +1013,16 @@
 
     private void ShowInGalaxy() =>
         Nav.NavigateTo("graph?focus=" + Uri.EscapeDataString(PageIdOrThrow));
+
+    private async Task ExportMarkdownAsync()
+    {
+        var markdown = MarkdownExport.ToMarkdown(_snapshot);
+        var title = string.IsNullOrWhiteSpace(_page?.DisplayTitle) ? "Untitled" : _page.DisplayTitle;
+        var safeTitle = string.Concat(title.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '-' : c));
+        await Js.InvokeVoidAsync("syncly.downloadText", safeTitle + ".md", markdown);
+    }
+
+    private Task PrintAsync() => Js.InvokeVoidAsync("syncly.printPage").AsTask();
 
     private async Task NewSubPageAsync()
     {

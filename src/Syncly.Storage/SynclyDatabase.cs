@@ -127,6 +127,15 @@ public sealed class SynclyDatabase : IAsyncDisposable
             CREATE INDEX IF NOT EXISTS ix_links_source ON links (source_object);
             CREATE INDEX IF NOT EXISTS ix_links_target_object ON links (target_object);
 
+            CREATE TABLE IF NOT EXISTS tags (
+                object_id TEXT NOT NULL,
+                block_id  TEXT NOT NULL,
+                tag       TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_tags_object ON tags (object_id);
+            CREATE INDEX IF NOT EXISTS ix_tags_tag ON tags (tag);
+
             CREATE TABLE IF NOT EXISTS snapshots (
                 object_id  TEXT PRIMARY KEY,
                 state      BLOB NOT NULL,

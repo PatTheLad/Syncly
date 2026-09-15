@@ -498,6 +498,30 @@ textarea {
   overflow-y: auto;
 }
 
+/* Desktop has keyboard shortcuts; only html.phone below turns this into a visible bar. */
+.format-bar {
+  display: none;
+}
+
+.format-bar button {
+  flex: 1;
+  padding: 12px 0;
+  font-size: 15px;
+  color: var(--ink-1);
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--line);
+}
+
+.format-bar button:last-child {
+  border-right: none;
+}
+
+.format-bar button:active {
+  color: var(--ink-0);
+  background: var(--bg-2);
+}
+
 .editor-inner {
   max-width: 740px;
   padding: 0 48px;
@@ -929,6 +953,35 @@ button.code-lang:hover {
 .block-text a.wikilink.missing {
   color: var(--ink-2);
   text-decoration-style: dashed;
+}
+
+.link-preview {
+  position: fixed;
+  z-index: 40;
+  width: 280px;
+  max-width: calc(100vw - 16px);
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  color: var(--ink-1);
+  pointer-events: none;
+}
+
+.link-preview strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ink-0);
+  font-size: 13px;
+}
+
+.link-preview p {
+  margin: 2px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .block-text code {
@@ -1869,6 +1922,18 @@ html.phone .icon-grid {
   grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
+html.phone .format-bar {
+  display: flex;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  background: var(--bg-1);
+  border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
 .row.wrap {
   flex-wrap: wrap;
 }
@@ -1892,6 +1957,40 @@ html.phone .icon-grid {
   resize: vertical;
   font-family: var(--mono);
   font-size: 13px;
+}
+
+/* "Print / PDF" hides the app chrome and lets the page content flow onto real pages. */
+@media print {
+  .rail,
+  .sidebar,
+  .sidebar-scrim,
+  .topbar,
+  .panel,
+  .format-bar,
+  .banner,
+  .link-preview {
+    display: none !important;
+  }
+
+  .shell,
+  .shell-main,
+  .workspace,
+  .editor-scroll,
+  .editor {
+    display: block !important;
+    overflow: visible !important;
+    height: auto !important;
+  }
+
+  body {
+    background: #fff;
+    color: #000;
+  }
+
+  .block-text,
+  .crumb-current {
+    color: #000 !important;
+  }
 }
 
 .qr-wrap {

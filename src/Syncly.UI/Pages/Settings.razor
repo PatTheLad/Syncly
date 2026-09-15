@@ -270,6 +270,40 @@
             </section>
 
             <section>
+                <h2>Trash</h2>
+                <div class="card">
+                    <div class="card-sub">Deleted pages stay here until you restore them. Their sub-pages already moved up to the parent when deleted.</div>
+                    <div class="row">
+                        <button class="chip" @onclick="ToggleTrashAsync">@(_trashOpen ? "Hide trash" : "Show trash")@(_trash.Count > 0 ? $" ({_trash.Count})" : null)</button>
+                    </div>
+                    @if (_trashOpen)
+                    {
+                        @if (_trash.Count == 0)
+                        {
+                            <div class="card-sub">Nothing in the trash.</div>
+                        }
+                        else
+                        {
+                            @foreach (var page in _trash)
+                            {
+                                <div class="row wrap" style="margin-top:0.5rem;align-items:flex-start;">
+                                    <div class="grow">
+                                        <div class="card-title">@page.DisplayTitle</div>
+                                        <div class="card-sub">Deleted @page.UpdatedAt.ToLocalTime().ToString("g")</div>
+                                    </div>
+                                    <button class="chip" @onclick="() => RestorePageAsync(page.Id, page.DisplayTitle)">Restore</button>
+                                </div>
+                            }
+                        }
+                    }
+                    @if (_trashMessage is { Length: > 0 })
+                    {
+                        <div class="card-sub">@_trashMessage</div>
+                    }
+                </div>
+            </section>
+
+            <section>
                 <h2>Editing</h2>
                 <div class="card">
                     <div class="row">
@@ -325,6 +359,9 @@
     private bool _identityError;
     private List<PeerRow> _peers = [];
     private string? _peerMessage;
+    private List<PageRef> _trash = [];
+    private bool _trashOpen;
+    private string? _trashMessage;
 
     private string? _shortId => App.Sync.Chain is { } chain ? chain.ChainId : null;
 
@@ -345,6 +382,7 @@
         _pageCount = App.Workspace.Pages.Count;
         _opCount = await App.OpLog.CountAsync();
         await LoadPeersAsync();
+        await LoadTrashAsync();
     }
 
     private void Refresh() => _ = InvokeAsync(async () =>
@@ -352,6 +390,7 @@
         _prefs = App.Sync.Preferences;
         _deviceName = App.Identity.DisplayName;
         await LoadPeersAsync();
+        await LoadTrashAsync();
         StateHasChanged();
     });
 
@@ -370,6 +409,22 @@
         }
 
         _peers = rows;
+    }
+
+    private async Task LoadTrashAsync() => _trash = await App.Workspace.TrashAsync();
+
+    private async Task ToggleTrashAsync()
+    {
+        _trashOpen = !_trashOpen;
+        if (_trashOpen)
+            await LoadTrashAsync();
+    }
+
+    private async Task RestorePageAsync(string pageId, string title)
+    {
+        await App.Workspace.RestorePageAsync(pageId);
+        _trashMessage = $"{title} restored.";
+        await LoadTrashAsync();
     }
 
     private static string ShortId(string deviceId) =>

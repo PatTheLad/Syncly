@@ -104,6 +104,14 @@ public sealed class ProjectionStore(SynclyDatabase database)
         var linkLabel = link.Parameters.Add("$label", SqliteType.Text);
         linkObject.Value = snapshot.Id;
 
+        await using var tag = connection.CreateCommand();
+        tag.Transaction = tx;
+        tag.CommandText = "INSERT INTO tags (object_id, block_id, tag) VALUES ($object, $block, $tag)";
+        var tagObject = tag.Parameters.Add("$object", SqliteType.Text);
+        var tagBlock = tag.Parameters.Add("$block", SqliteType.Text);
+        var tagName = tag.Parameters.Add("$tag", SqliteType.Text);
+        tagObject.Value = snapshot.Id;
+
         // The page title itself is searchable, indexed against a sentinel block id.
         searchId.Value = string.Empty;
         searchBody.Value = snapshot.Title;
@@ -144,6 +152,13 @@ public sealed class ProjectionStore(SynclyDatabase database)
                 linkLabel.Value = string.IsNullOrWhiteSpace(node.Text) ? DBNull.Value : node.Text;
                 await link.ExecuteNonQueryAsync(ct);
             }
+
+            foreach (var found in Tags.Extract(node.Text).Select(t => t.Name).Distinct(StringComparer.Ordinal))
+            {
+                tagBlock.Value = node.Id;
+                tagName.Value = found;
+                await tag.ExecuteNonQueryAsync(ct);
+            }
         }
     }
 
@@ -158,6 +173,7 @@ public sealed class ProjectionStore(SynclyDatabase database)
                      "DELETE FROM blocks WHERE object_id = $id",
                      "DELETE FROM search WHERE object_id = $id",
                      "DELETE FROM links WHERE source_object = $id",
+                     "DELETE FROM tags WHERE object_id = $id",
                  })
         {
             await using var command = connection.CreateCommand();
@@ -177,6 +193,87 @@ public sealed class ProjectionStore(SynclyDatabase database)
                 SELECT id, title, icon, parent_id, space_id, type, color, position, created_at, updated_at
                 FROM objects WHERE deleted = 0 ORDER BY title
                 """;
+
+            var pages = new List<PageRef>();
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+                pages.Add(new PageRef(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.IsDBNull(5) ? ObjectTypes.Page : reader.GetString(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6),
+                    reader.IsDBNull(7) ? null : reader.GetString(7),
+                    Stamp(reader, 8),
+                    Stamp(reader, 9)));
+
+            return pages;
+        }, ct);
+
+    /// <summary>Soft-deleted pages, newest first, so the trash UI can offer to restore them.</summary>
+    public async Task<List<PageRef>> ListDeletedPagesAsync(CancellationToken ct = default) =>
+        await database.RunAsync(async connection =>
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT id, title, icon, parent_id, space_id, type, color, position, created_at, updated_at
+                FROM objects WHERE deleted = 1 AND type = 'page' ORDER BY updated_at DESC
+                """;
+
+            var pages = new List<PageRef>();
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+                pages.Add(new PageRef(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.IsDBNull(5) ? ObjectTypes.Page : reader.GetString(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6),
+                    reader.IsDBNull(7) ? null : reader.GetString(7),
+                    Stamp(reader, 8),
+                    Stamp(reader, 9)));
+
+            return pages;
+        }, ct);
+
+    /// <summary>Distinct tags across non-deleted pages, most-used first, for a tag cloud.</summary>
+    public async Task<List<TagCount>> ListTagsAsync(CancellationToken ct = default) =>
+        await database.RunAsync(async connection =>
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT t.tag, COUNT(DISTINCT t.object_id)
+                FROM tags t JOIN objects o ON o.id = t.object_id
+                WHERE o.deleted = 0
+                GROUP BY t.tag ORDER BY COUNT(DISTINCT t.object_id) DESC, t.tag
+                """;
+
+            var tags = new List<TagCount>();
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+                tags.Add(new TagCount(reader.GetString(0), reader.GetInt32(1)));
+
+            return tags;
+        }, ct);
+
+    /// <summary>Pages (not deleted) that use the given tag, title order.</summary>
+    public async Task<List<PageRef>> ListPagesByTagAsync(string tag, CancellationToken ct = default) =>
+        await database.RunAsync(async connection =>
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT DISTINCT o.id, o.title, o.icon, o.parent_id, o.space_id, o.type, o.color, o.position, o.created_at, o.updated_at
+                FROM objects o JOIN tags t ON t.object_id = o.id
+                WHERE o.deleted = 0 AND t.tag = $tag ORDER BY o.title
+                """;
+            command.Parameters.AddWithValue("$tag", Tags.Key(tag));
 
             var pages = new List<PageRef>();
             await using var reader = await command.ExecuteReaderAsync(ct);

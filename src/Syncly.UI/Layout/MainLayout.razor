@@ -46,7 +46,38 @@
             <input id="sidebar-search" placeholder="Search" value="@_query" @oninput="OnSearchAsync" />
         </div>
 
-        @if (_hits is { Count: > 0 })
+        @if (_tags.Count > 0 && _query.Length == 0)
+        {
+            <div class="row wrap" style="gap:4px;padding:0 12px 8px;">
+                @foreach (var tag in _tags)
+                {
+                    <button type="button" class="chip @(tag.Tag == _tagFilter ? "primary" : null)"
+                            title="@tag.Pages page(s)" @onclick="() => ToggleTagAsync(tag.Tag)">
+                        #@tag.Tag
+                    </button>
+                }
+            </div>
+        }
+
+        @if (_tagFilter is { } activeTag)
+        {
+            <div class="tree">
+                @if (_tagPages.Count == 0)
+                {
+                    <div class="tree-empty">No pages tagged #@activeTag.</div>
+                }
+                else
+                {
+                    @foreach (var page in _tagPages)
+                    {
+                        <button type="button" class="search-hit" @key="page.Id" @onclick="() => OpenTagPage(page)">
+                            <strong>@page.DisplayTitle</strong>
+                        </button>
+                    }
+                }
+            </div>
+        }
+        else if (_hits is { Count: > 0 })
         {
             <div class="search-results">
                 @foreach (var hit in _hits)
@@ -150,6 +181,9 @@
     private bool _paletteFlag;
     private List<string> _unresolved = [];
     private List<SearchHit> _paletteHits = [];
+    private List<TagCount> _tags = [];
+    private string? _tagFilter;
+    private List<PageRef> _tagPages = [];
 
     protected override void OnInitialized()
     {
@@ -157,6 +191,7 @@
         State.Workspace.Changed += Refresh;
         App.Sync.Changed += Refresh;
         Updater.Changed += Refresh;
+        _ = LoadTagsAsync();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -197,8 +232,35 @@
             _unresolved = [];
         }
 
+        await LoadTagsAsync();
+        if (_tagFilter is { } tag)
+            _tagPages = await State.Workspace.PagesWithTagAsync(tag);
+
         StateHasChanged();
     });
+
+    private async Task LoadTagsAsync() => _tags = await State.Workspace.TagsAsync();
+
+    private async Task ToggleTagAsync(string tag)
+    {
+        if (_tagFilter == tag)
+        {
+            _tagFilter = null;
+            _tagPages = [];
+            return;
+        }
+
+        _tagFilter = tag;
+        _tagPages = await State.Workspace.PagesWithTagAsync(tag);
+    }
+
+    private void OpenTagPage(PageRef page)
+    {
+        State.Open(page.Id);
+        _tagFilter = null;
+        _tagPages = [];
+        _ = CloseSidebarIfNarrowAsync();
+    }
 
     private bool IsAt(string path) =>
         Nav.ToBaseRelativePath(Nav.Uri).TrimEnd('/').Equals(path, StringComparison.OrdinalIgnoreCase);
@@ -458,6 +520,19 @@
                      ?? await State.Workspace.EnsurePageByTitleAsync(title);
 
         Open(pageId);
+    }
+
+    private sealed record LinkPreviewInfo(string Title, bool Missing, IReadOnlyList<string> Lines);
+
+    [JSInvokable]
+    public async Task<LinkPreviewInfo> OnLinkPreview(string title)
+    {
+        var pageId = State.Workspace.ResolvePageByTitle(title);
+        if (pageId is null)
+            return new LinkPreviewInfo(title, true, []);
+
+        var preview = await State.Workspace.PreviewAsync(pageId, 3);
+        return new LinkPreviewInfo(preview?.Title ?? title, false, preview?.Lines ?? []);
     }
 
     public void Dispose()

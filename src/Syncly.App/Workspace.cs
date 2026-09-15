@@ -301,6 +301,23 @@ public sealed class Workspace(
         }, [pageId, .. children.Select(c => c.Id)], ct);
     }
 
+    /// <summary>Deleted pages, for a trash UI. Content is untouched, so restoring is instant.</summary>
+    public Task<List<PageRef>> TrashAsync(CancellationToken ct = default) =>
+        projection.ListDeletedPagesAsync(ct);
+
+    /// <summary>Undoes <see cref="DeletePageAsync"/>. Children re-parented at delete time stay where
+    /// they landed; only the page itself comes back.</summary>
+    public Task RestorePageAsync(string pageId, CancellationToken ct = default) =>
+        CommitAsync(a => a.SetProp(pageId, pageId, PropKeys.Deleted, "false"), pageId, ct);
+
+    /// <summary>Distinct <c>#tags</c> used in block text, most-used first.</summary>
+    public Task<List<TagCount>> TagsAsync(CancellationToken ct = default) =>
+        projection.ListTagsAsync(ct);
+
+    /// <summary>Pages that contain the given <c>#tag</c> anywhere in their text.</summary>
+    public Task<List<PageRef>> PagesWithTagAsync(string tag, CancellationToken ct = default) =>
+        projection.ListPagesByTagAsync(tag, ct);
+
     /// <summary>Resolves a <c>[[wikilink]]</c>, creating the page when it does not exist yet.</summary>
     public async Task<string> EnsurePageByTitleAsync(string title, CancellationToken ct = default)
     {
