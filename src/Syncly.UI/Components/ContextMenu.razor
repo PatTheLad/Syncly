@@ -1,0 +1,95 @@
+@namespace Syncly.UI.Components
+@inject IJSRuntime Js
+
+<div class="context-scrim" @onclick="Close" @oncontextmenu:preventDefault="true"></div>
+<div class="context-menu"
+     style="left: @(Left)px; top: @(Top)px"
+     role="menu"
+     @onclick:stopPropagation="true"
+     @onkeydown="OnKeyDown">
+    @for (var i = 0; i < Items.Count; i++)
+    {
+        var index = i;
+        var item = Items[i];
+        <button type="button"
+                class="context-item @(item.Danger ? "danger" : null) @(index == _active ? "active" : null)"
+                role="menuitem"
+                @onclick="() => RunAsync(item)">
+            @if (!string.IsNullOrEmpty(item.Glyph))
+            {
+                <span class="glyph" aria-hidden="true">@item.Glyph</span>
+            }
+            <span class="label">@item.Label</span>
+        </button>
+    }
+</div>
+
+@code {
+    private int _active;
+
+    public sealed record MenuItem(string Label, Func<Task> Run, string? Glyph = null, bool Danger = false);
+
+    [Parameter, EditorRequired]
+    public required IReadOnlyList<MenuItem> Items { get; set; }
+
+    [Parameter]
+    public double Left { get; set; }
+
+    [Parameter]
+    public double Top { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        try
+        {
+            await Js.InvokeVoidAsync("syncly.clampContextMenu");
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (JSException)
+        {
+        }
+    }
+
+    private async Task Close() => await OnClose.InvokeAsync();
+
+    private async Task RunAsync(MenuItem item)
+    {
+        await OnClose.InvokeAsync();
+        await item.Run();
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs args)
+    {
+        if (Items.Count == 0)
+            return;
+
+        if (args.Key == "Escape")
+        {
+            await Close();
+            return;
+        }
+
+        if (args.Key == "ArrowDown")
+        {
+            _active = (_active + 1) % Items.Count;
+            return;
+        }
+
+        if (args.Key == "ArrowUp")
+        {
+            _active = (_active - 1 + Items.Count) % Items.Count;
+            return;
+        }
+
+        if (args.Key is "Enter" or " ")
+            await RunAsync(Items[_active]);
+    }
+}

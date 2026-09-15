@@ -10,11 +10,10 @@
 <div class="shell @(State.SidebarOpen ? null : "no-sidebar")">
     <nav class="rail">
         <button type="button"
-                class="rail-brand space-avatar"
-                style="background: @(State.CurrentSpace?.Accent ?? SpaceColors.Default)"
-                title="@(State.CurrentSpace?.DisplayTitle ?? "Spaces")"
-                @onclick="() => State.ToggleSpaceSwitcher(true)">
-            @(State.CurrentSpace?.Initial ?? "S")
+                class="rail-brand"
+                title="Syncly — Notes"
+                @onclick='() => Go("")'>
+            S
         </button>
 
         <button class="rail-item @(IsAt("") ? "active" : null)" title="Notes (Ctrl+K to jump)"
@@ -39,20 +38,22 @@
                 <span class="sidebar-title">@(State.CurrentSpace?.DisplayTitle ?? "Space")</span>
                 <span class="sidebar-caret">▾</span>
             </button>
-            <button class="chip" title="New page (Ctrl+N)" @onclick="() => NewPageAsync(null)">New</button>
+            <button class="chip primary" title="New page (Ctrl+N)" @onclick="() => NewPageAsync(null)">New</button>
         </div>
 
         <div class="sidebar-search">
-            <input id="sidebar-search" placeholder="Search" value="@_query" @oninput="OnSearchAsync" />
+            <input id="sidebar-search" placeholder="Search or Ctrl+K" value="@_query" @oninput="OnSearchAsync" />
         </div>
 
         @if (_tags.Count > 0 && _query.Length == 0)
         {
-            <div class="row wrap" style="gap:4px;padding:0 12px 8px;">
+            <div class="sidebar-tags">
                 @foreach (var tag in _tags)
                 {
-                    <button type="button" class="chip @(tag.Tag == _tagFilter ? "primary" : null)"
-                            title="@tag.Pages page(s)" @onclick="() => ToggleTagAsync(tag.Tag)">
+                    <button type="button"
+                            class="tag-chip @(tag.Tag == _tagFilter ? "active" : null)"
+                            title="@tag.Pages page(s)"
+                            @onclick="() => ToggleTagAsync(tag.Tag)">
                         #@tag.Tag
                     </button>
                 }
@@ -70,8 +71,15 @@
                 {
                     @foreach (var entry in _tagPages)
                     {
-                        <button type="button" class="search-hit" @key="entry.Id" @onclick="() => OpenTagPage(entry)">
-                            <strong>@entry.DisplayTitle</strong>
+                        <button type="button"
+                                class="tree-row flat @(entry.Id == State.CurrentPageId ? "selected" : null)"
+                                @key="entry.Id"
+                                @onclick="() => OpenTagPage(entry)">
+                            @if (!string.IsNullOrEmpty(entry.Icon))
+                            {
+                                <span class="tree-icon" aria-hidden="true">@entry.Icon</span>
+                            }
+                            <span class="tree-label">@entry.DisplayTitle</span>
                         </button>
                     }
                 }
@@ -98,7 +106,7 @@
             <div class="tree">
                 @if (State.Workspace.PagesIn(State.CurrentSpaceId).Count == 0)
                 {
-                    <div class="tree-empty">No pages yet.</div>
+                    <div class="tree-empty">No pages yet. Use <strong>New</strong> above to create one.</div>
                 }
                 else
                 {
@@ -111,26 +119,31 @@
         }
 
         <div class="sidebar-foot">
-            <div class="row">
-                <span class="status-dot @StatusClass"></span>
-                <div class="grow">
-                    <div class="card-sub">@SyncSummary</div>
-                    @if (App.Sync.Status.Detail is { Length: > 0 } detail)
-                    {
-                        <div class="card-sub">@detail</div>
-                    }
-                </div>
-                <button class="chip muted" title="Sync now (Ctrl+S)" @onclick="SyncNowAsync">↻</button>
-            </div>
-            @if (Updater.Available is { } update)
+            @if (ShowFootDetail)
             {
-                <button class="chip primary update-chip"
-                        disabled="@Updater.Busy"
-                        title="Install Syncly @update.Version"
-                        @onclick="UpdateAsync">
-                    @(Updater.Busy ? (Updater.Progress ?? "Updating…") : $"Update to {update.Version}")
-                </button>
+                <div class="sidebar-foot-detail">
+                    <span class="status-dot @StatusClass"></span>
+                    <div class="grow">
+                        <div class="card-sub">@SyncSummary</div>
+                        @if (App.Sync.Status.Detail is { Length: > 0 } detail)
+                        {
+                            <div class="card-sub">@detail</div>
+                        }
+                    </div>
+                </div>
             }
+            <div class="sidebar-foot-row">
+                <button class="chip muted" title="Sync now (Ctrl+S)" @onclick="SyncNowAsync">↻ Sync</button>
+                @if (Updater.Available is { } update)
+                {
+                    <button class="chip primary update-chip"
+                            disabled="@Updater.Busy"
+                            title="Install Syncly @update.Version"
+                            @onclick="UpdateAsync">
+                        @(Updater.Busy ? (Updater.Progress ?? "Updating…") : $"Update to {update.Version}")
+                    </button>
+                }
+            </div>
         </div>
     </aside>
 
@@ -386,6 +399,9 @@
         SyncPhase.Syncing => "working",
         _ => "",
     };
+
+    private bool ShowFootDetail =>
+        App.Sync.Status.Phase is SyncPhase.Failed or SyncPhase.Syncing;
 
     private string SyncSummary => App.Sync.Status.Summary;
 

@@ -509,6 +509,30 @@
     return clientY < rect.top + rect.height / 2 ? 'before' : 'after';
   }
 
+  function clampContextMenu() {
+    const menu = document.querySelector('.context-menu');
+    if (!menu) return;
+
+    const pad = 8;
+    const rect = menu.getBoundingClientRect();
+    let left = rect.left;
+    let top = rect.top;
+
+    if (left + rect.width > window.innerWidth - pad)
+      left = Math.max(pad, window.innerWidth - rect.width - pad);
+    if (top + rect.height > window.innerHeight - pad)
+      top = Math.max(pad, window.innerHeight - rect.height - pad);
+    if (left < pad) left = pad;
+    if (top < pad) top = pad;
+
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+    if (typeof menu.focus === 'function') {
+      menu.tabIndex = -1;
+      menu.focus({ preventScroll: true });
+    }
+  }
+
   function blockDropHint(blockId, clientX, clientY) {
     const el = document.getElementById('blk-' + blockId);
     if (!el) return 'after';
@@ -607,6 +631,7 @@
     isNarrow,
     confirm: confirmDialog,
     treeDropHint,
+    clampContextMenu,
     blockDropHint,
     scanQr,
     downloadText,
