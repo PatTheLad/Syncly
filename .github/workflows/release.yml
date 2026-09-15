@@ -102,7 +102,6 @@ jobs:
       - name: Build .deb package
         run: |
           set -euo pipefail
-          sudo apt-get install -y imagemagick
           pkgdir="dist/deb/syncly_${VERSION}_amd64"
           rm -rf "$pkgdir"
           mkdir -p "$pkgdir/DEBIAN" "$pkgdir/usr/lib/syncly" "$pkgdir/usr/bin" \
@@ -110,7 +109,7 @@ jobs:
           cp -r publish/linux/. "$pkgdir/usr/lib/syncly/"
           chmod +x "$pkgdir/usr/lib/syncly/Syncly"
           ln -s /usr/lib/syncly/Syncly "$pkgdir/usr/bin/syncly"
-          convert src/Syncly.Desktop/Assets/app.ico -resize 256x256 \
+          cp src/Syncly.Desktop/Assets/app.png \
             "$pkgdir/usr/share/icons/hicolor/256x256/apps/syncly.png"
           cat > "$pkgdir/usr/share/applications/syncly.desktop" <<DESKTOP
           [Desktop Entry]
