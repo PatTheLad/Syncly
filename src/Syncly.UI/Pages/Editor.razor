@@ -7,6 +7,7 @@
 @inject SynclyApp App
 @inject IJSRuntime Js
 @inject IFileAccess Files
+@inject NavigationManager Nav
 
 <div class="workspace">
     <div class="topbar">
@@ -41,6 +42,7 @@
 
                 <button class="chip panel-toggle" title="Outline and backlinks" @onclick="() => _panelOpen = true">Outline</button>
                 <button class="chip" title="New sub-page" @onclick="() => NewSubPageAsync()">Sub-page</button>
+                <button class="chip" title="Show this page in the galaxy" @onclick="ShowInGalaxy">Galaxy</button>
                 <button class="chip danger" @onclick="DeletePageAsync">Delete</button>
             </div>
         }
@@ -983,6 +985,9 @@
         State.Open(pageId);
         State.SetReadingMode(false);
     }
+
+    private void ShowInGalaxy() =>
+        Nav.NavigateTo("graph?focus=" + Uri.EscapeDataString(PageIdOrThrow));
 
     private async Task NewSubPageAsync()
     {

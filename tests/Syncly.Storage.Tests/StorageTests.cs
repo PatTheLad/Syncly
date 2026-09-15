@@ -193,6 +193,22 @@ public class StorageTests
     }
 
     [Fact]
+    public async Task Projection_lists_page_timestamps()
+    {
+        await using var temp = await TempDatabase.CreateAsync();
+        var projection = new ProjectionStore(temp.Database);
+        var replica = Seed();
+        var snapshot = replica.Snapshot(Page);
+
+        await projection.WriteAsync(snapshot);
+        var page = Assert.Single(await projection.ListPagesAsync());
+
+        Assert.NotEqual(default, page.CreatedAt);
+        Assert.Equal(snapshot.CreatedAt.ToUnixTimeMilliseconds(), page.CreatedAt.ToUnixTimeMilliseconds());
+        Assert.Equal(snapshot.UpdatedAt.ToUnixTimeMilliseconds(), page.UpdatedAt.ToUnixTimeMilliseconds());
+    }
+
+    [Fact]
     public async Task Full_text_search_finds_blocks_and_titles()
     {
         await using var temp = await TempDatabase.CreateAsync();

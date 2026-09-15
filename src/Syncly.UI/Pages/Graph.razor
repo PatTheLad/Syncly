@@ -11,7 +11,7 @@
             class="galaxy-canvas"
             tabindex="0"
             role="application"
-            aria-label="Page galaxy. Drag to pan, scroll to zoom, double-click a star to fly in."></canvas>
+            aria-label="Page galaxy. Drag to pan, scroll to zoom, click to select, Enter to open, double-click to fly in."></canvas>
 
     <header class="galaxy-hud">
         <div class="galaxy-hud-copy">
@@ -26,12 +26,26 @@
                     @Plural(_graph.Edges.Count, "link")
                 }
             </p>
+            @if (_trail.Count > 0)
+            {
+                <nav class="galaxy-trail" aria-label="Where you are">
+                    <button type="button" class="galaxy-trail-chip" @onclick="FitAsync">@(State.CurrentSpace?.DisplayTitle ?? "Space")</button>
+                    @foreach (var crumb in _trail)
+                    {
+                        <span class="galaxy-trail-sep">›</span>
+                        <button type="button"
+                                class="galaxy-trail-chip kind-@crumb.Body.ToString().ToLowerInvariant()"
+                                @onclick="() => FlyToAsync(crumb.Id)">@Label(crumb)</button>
+                    }
+                </nav>
+            }
         </div>
 
         <div class="galaxy-tools">
             <label class="galaxy-search @(_query.Length > 0 ? "active" : null)">
                 <span class="galaxy-search-icon" aria-hidden="true">⌕</span>
-                <input placeholder="Find a world"
+                <input id="@SearchId"
+                       placeholder="Find a world"
                        value="@_query"
                        aria-label="Find a page in the galaxy"
                        @oninput="OnQueryInput"
@@ -43,6 +57,18 @@
                 }
             </label>
 
+            <div class="galaxy-lens" role="radiogroup" aria-label="Lens">
+                @foreach (var lens in Lenses)
+                {
+                    <button type="button"
+                            class="galaxy-lens-btn @(_lens == lens.Key ? "on" : null)"
+                            role="radio"
+                            aria-checked="@(_lens == lens.Key ? "true" : "false")"
+                            title="@lens.Hint"
+                            @onclick="() => SetLensAsync(lens.Key)">@lens.Label</button>
+                }
+            </div>
+
             <button type="button" class="galaxy-btn" title="Fit everything (Home)" @onclick="FitAsync">⤢</button>
             <button type="button"
                     class="galaxy-btn"
@@ -50,33 +76,110 @@
                     disabled="@(State.CurrentPageId is null || !_nodeIds.Contains(State.CurrentPageId))"
                     @onclick="LocateAsync">◎</button>
             <button type="button"
-                    class="galaxy-btn @(_motion ? "on" : null)"
-                    title="@(_motion ? "Pause motion" : "Resume motion")"
-                    aria-pressed="@(_motion ? "true" : "false")"
-                    @onclick="ToggleMotionAsync">@(_motion ? "❚❚" : "▶")</button>
+                    class="galaxy-btn @(_opt.Motion ? "on" : null)"
+                    title="@(_opt.Motion ? "Pause motion" : "Resume motion")"
+                    aria-pressed="@(_opt.Motion ? "true" : "false")"
+                    @onclick="ToggleMotionAsync">@(_opt.Motion ? "❚❚" : "▶")</button>
+            <div class="galaxy-pop-anchor">
+                <button type="button"
+                        class="galaxy-btn @(_settingsOpen ? "on" : null)"
+                        title="Galaxy settings"
+                        aria-expanded="@(_settingsOpen ? "true" : "false")"
+                        @onclick="() => _settingsOpen = !_settingsOpen">⚙</button>
+                @if (_settingsOpen)
+                {
+                    <div class="galaxy-pop" role="dialog" aria-label="Galaxy settings">
+                        <div class="galaxy-pop-row">
+                            <span>Motion</span>
+                            <button type="button" class="galaxy-switch @(_opt.Motion ? "on" : null)" role="switch" aria-checked="@(_opt.Motion ? "true" : "false")" @onclick="ToggleMotionAsync"><span></span></button>
+                        </div>
+                        <div class="galaxy-pop-row">
+                            <span>Effects <small>bloom, particles, belts</small></span>
+                            <button type="button" class="galaxy-switch @(_opt.Effects ? "on" : null)" role="switch" aria-checked="@(_opt.Effects ? "true" : "false")" @onclick="() => SetOptionAsync(o => o with { Effects = !o.Effects })"><span></span></button>
+                        </div>
+                        <div class="galaxy-pop-row">
+                            <span>Hover sound</span>
+                            <button type="button" class="galaxy-switch @(_opt.Sound ? "on" : null)" role="switch" aria-checked="@(_opt.Sound ? "true" : "false")" @onclick="() => SetOptionAsync(o => o with { Sound = !o.Sound })"><span></span></button>
+                        </div>
+                        <div class="galaxy-pop-row">
+                            <span>Labels</span>
+                            <div class="galaxy-seg">
+                                <button type="button" class="@(_opt.Labels == "auto" ? "on" : null)" @onclick="() => SetLabelsAsync(LabelsAuto)">Auto</button>
+                                <button type="button" class="@(_opt.Labels == "all" ? "on" : null)" @onclick="() => SetLabelsAsync(LabelsAll)">All</button>
+                                <button type="button" class="@(_opt.Labels == "min" ? "on" : null)" @onclick="() => SetLabelsAsync(LabelsMin)">Minimal</button>
+                            </div>
+                        </div>
+                        <div class="galaxy-pop-row">
+                            <span>Starfield</span>
+                            <div class="galaxy-seg">
+                                <button type="button" class="@(_opt.Density < 0.75 ? "on" : null)" @onclick="() => SetOptionAsync(o => o with { Density = 0.5 })">Sparse</button>
+                                <button type="button" class="@(_opt.Density is >= 0.75 and < 1.25 ? "on" : null)" @onclick="() => SetOptionAsync(o => o with { Density = 1 })">Normal</button>
+                                <button type="button" class="@(_opt.Density >= 1.25 ? "on" : null)" @onclick="() => SetOptionAsync(o => o with { Density = 1.5 })">Dense</button>
+                            </div>
+                        </div>
+                        <div class="galaxy-pop-keys">
+                            <span><kbd>Click</kbd> select</span>
+                            <span><kbd>Enter</kbd> open</span>
+                            <span><kbd>F</kbd> fly</span>
+                            <span><kbd>Tab</kbd> siblings</span>
+                            <span><kbd>↑↓←→</kbd> neighbours</span>
+                            <span><kbd>/</kbd> search</span>
+                            <span><kbd>Home</kbd> fit</span>
+                        </div>
+                    </div>
+                }
+            </div>
         </div>
     </header>
 
     @if (_legend.Count > 0)
     {
-        <nav class="galaxy-legend" aria-label="Body types">
-            @foreach (var entry in _legend)
+        <div class="galaxy-bottom">
+            <nav class="galaxy-legend" aria-label="Body types">
+                @foreach (var entry in _legend)
+                {
+                    var hidden = _hidden.Contains(entry.Body);
+                    <button type="button"
+                            class="galaxy-chip kind-@entry.Key @(hidden ? "off" : null)"
+                            title="@(hidden ? "Show" : "Hide") @entry.Label.ToLowerInvariant()"
+                            aria-pressed="@(hidden ? "false" : "true")"
+                            @onclick="() => ToggleKindAsync(entry.Body)">
+                        <span class="galaxy-chip-dot" aria-hidden="true"></span>
+                        <span class="galaxy-chip-label">@entry.Label</span>
+                        <span class="galaxy-chip-count">@entry.Count</span>
+                    </button>
+                }
+                @if (_timeMax > _timeMin)
+                {
+                    <button type="button"
+                            class="galaxy-chip time @(_timelapse ? "on" : null)"
+                            title="@(_timelapse ? "Close time-lapse" : "Watch pages appear over time")"
+                            aria-pressed="@(_timelapse ? "true" : "false")"
+                            @onclick="ToggleTimelapseAsync">
+                        <span class="galaxy-chip-dot" aria-hidden="true"></span>
+                        <span class="galaxy-chip-label">Time-lapse</span>
+                    </button>
+                }
+            </nav>
+
+            @if (_timelapse)
             {
-                var hidden = _hidden.Contains(entry.Body);
-                <button type="button"
-                        class="galaxy-chip kind-@entry.Key @(hidden ? "off" : null)"
-                        title="@(hidden ? "Show" : "Hide") @entry.Label.ToLowerInvariant()"
-                        aria-pressed="@(hidden ? "false" : "true")"
-                        @onclick="() => ToggleKindAsync(entry.Body)">
-                    <span class="galaxy-chip-dot" aria-hidden="true"></span>
-                    <span class="galaxy-chip-label">@entry.Label</span>
-                    <span class="galaxy-chip-count">@entry.Count</span>
-                </button>
+                <div class="galaxy-time" role="group" aria-label="Time-lapse">
+                    <button type="button" class="galaxy-btn small" title="@(_playing ? "Pause" : "Play")" @onclick="TogglePlayAsync">@(_playing ? "❚❚" : "▶")</button>
+                    <input type="range"
+                           min="0"
+                           max="1000"
+                           value="@_timeValue"
+                           aria-label="Point in time"
+                           @oninput="OnTimeInput" />
+                    <span class="galaxy-time-label">@TimeLabel()</span>
+                    <span class="galaxy-time-count">@Plural(BornCount(), "world")</span>
+                </div>
             }
-        </nav>
+        </div>
     }
 
-    <div class="galaxy-hint" aria-hidden="true">Drag to pan · Scroll to zoom · Double-click a star to fly in · Home to fit</div>
+    <div class="galaxy-hint" aria-hidden="true">Drag to pan · Scroll to zoom · Click to select · Enter to open · Right-click for more</div>
 
     @if (_loaded && _graph.Nodes.Count == 0)
     {
@@ -89,7 +192,7 @@
 
     @if (_preview is { } preview)
     {
-        <article class="galaxy-preview @(_previewVisible ? "show" : null)"
+        <article class="galaxy-preview @(_previewVisible ? "show" : null) @(_pinned && preview.Id == _selectedId ? "pinned" : null) @(_cardX is null ? "docked" : null)"
                  style="@PreviewStyle"
                  @onmouseenter="HoldPreview"
                  @onmouseleave="ReleasePreview"
@@ -139,13 +242,20 @@
                 <span>@Plural(preview.LinkCount, "link")</span>
                 <span class="galaxy-dot">·</span>
                 <span>@Relative(preview.UpdatedAt)</span>
-                <span class="galaxy-preview-cta">Open ↵</span>
+                @if (_pinned && preview.Id == _selectedId)
+                {
+                    <button type="button" class="galaxy-preview-open" @onclick="() => OpenIdAsync(preview.Id)" @onclick:stopPropagation="true">Open <kbd>↵</kbd></button>
+                }
+                else
+                {
+                    <span class="galaxy-preview-cta">Click to select</span>
+                }
             </footer>
         </article>
     }
     else if (_missingPreview is { } missing)
     {
-        <article class="galaxy-preview missing @(_previewVisible ? "show" : null)"
+        <article class="galaxy-preview missing @(_previewVisible ? "show" : null) @(_pinned && missing.Id == _selectedId ? "pinned" : null) @(_cardX is null ? "docked" : null)"
                  style="@PreviewStyle"
                  @onmouseenter="HoldPreview"
                  @onmouseleave="ReleasePreview"
@@ -161,70 +271,179 @@
             <footer class="galaxy-preview-foot"><span class="galaxy-preview-cta">Create page ↵</span></footer>
         </article>
     }
+
+    @if (_menu is { } menu)
+    {
+        <div class="galaxy-menu-backdrop" @onclick="CloseMenu" @oncontextmenu="CloseMenu" @oncontextmenu:preventDefault="true"></div>
+        <div class="galaxy-menu" role="menu" style="@MenuStyle" @onkeydown="OnMenuKeyDown">
+            @if (menu.Node is { } node)
+            {
+                <div class="galaxy-menu-head">
+                    <span class="galaxy-menu-icon kind-@node.Body.ToString().ToLowerInvariant()">@(node.Icon is { Length: > 0 } micon ? micon : Initial(node.Title))</span>
+                    <span class="galaxy-menu-title">@node.Title</span>
+                </div>
+                @if (_renaming)
+                {
+                    <input class="galaxy-menu-rename"
+                           id="@RenameId"
+                           value="@_renameText"
+                           aria-label="New title"
+                           @oninput="e => _renameText = e.Value?.ToString() ?? string.Empty"
+                           @onkeydown="OnRenameKeyDown"
+                           @onclick:stopPropagation="true" />
+                    <div class="galaxy-menu-actions">
+                        <button type="button" class="galaxy-menu-item" @onclick="CommitRenameAsync">Save</button>
+                        <button type="button" class="galaxy-menu-item muted" @onclick="() => _renaming = false">Cancel</button>
+                    </div>
+                }
+                else if (node.Missing)
+                {
+                    <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => OpenIdAsync(node.Id)">Create page</button>
+                    <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => CopyLinkAsync(node.Title)">Copy [[link]]</button>
+                }
+                else
+                {
+                    <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => OpenIdAsync(node.Id)">Open <kbd>↵</kbd></button>
+                    <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => MenuFlyAsync(node.Id)">Fly to <kbd>F</kbd></button>
+                    <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => NewSubpageAsync(node.Id)">New subpage</button>
+                    <div class="galaxy-menu-sep"></div>
+                    <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => StartRenameAsync(node)">Rename</button>
+                    <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => DuplicateAsync(node.Id)">Duplicate</button>
+                    <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => CopyLinkAsync(node.Title)">Copy [[link]]</button>
+                    <div class="galaxy-menu-sep"></div>
+                    <button type="button" role="menuitem" class="galaxy-menu-item danger" @onclick="() => DeleteAsync(node.Id)">@(_confirmDelete ? "Really delete?" : "Delete")</button>
+                }
+            }
+            else
+            {
+                <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => NewSubpageAsync(null)">New page</button>
+                <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="MenuFitAsync">Fit everything <kbd>Home</kbd></button>
+                <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="MenuToggleMotionAsync">@(_opt.Motion ? "Pause motion" : "Resume motion")</button>
+            }
+        </div>
+    }
 </div>
 
 @code {
     private const string CanvasId = "galaxy-canvas";
+    private const string SearchId = "galaxy-search-input";
+    private const string RenameId = "galaxy-rename-input";
+    private const int TimelapseSeconds = 8;
 
     private sealed record LegendEntry(GraphBodyKind Body, string Key, string Label, int Count);
+    private sealed record LensEntry(string Key, string Label, string Hint);
+    private sealed record Options(bool Motion, string Labels, double Density, bool Sound, bool Effects);
+    private sealed record MenuState(GraphNode? Node, double X, double Y);
+
+    private static readonly LensEntry[] Lenses =
+    [
+        new("none", "All", "Plain view"),
+        new("recency", "Recent", "Warm rims for recently edited pages, faded for old ones"),
+        new("links", "Links", "Bodies grow with backlinks"),
+        new("orphans", "Orphans", "Spotlight pages with no parent, children or links"),
+    ];
+
+    [SupplyParameterFromQuery(Name = "focus")]
+    public string? Focus { get; set; }
 
     private PageGraph _graph = new([], [], []);
     private HashSet<string> _nodeIds = new(StringComparer.Ordinal);
     private List<LegendEntry> _legend = [];
     private readonly HashSet<GraphBodyKind> _hidden = [];
+    private Options _opt = new(true, "auto", 1, false, true);
 
     private DotNetObjectReference<Graph>? _self;
     private bool _mounted;
     private bool _loaded;
     private bool _disposed;
-    private bool _motion = true;
+    private bool _settingsOpen;
     private long _loadGeneration;
+    private string? _pendingFocus;
 
+    private string _lens = "none";
     private string _query = string.Empty;
     private int _hitCount;
     private CancellationTokenSource? _searchCts;
 
+    private List<GraphNode> _trail = [];
+
+    private bool _timelapse;
+    private bool _playing;
+    private int _timeValue = 1000;
+    private long _timeMin;
+    private long _timeMax;
+    private CancellationTokenSource? _playCts;
+
+    private string? _selectedId;
+    private bool _pinned;
+    private GraphPreview? _pinnedPreview;
     private GraphPreview? _preview;
     private GraphNode? _missingPreview;
     private bool _previewVisible;
     private bool _previewHeld;
-    private double _previewX;
-    private double _previewY;
+    private double? _cardX;
+    private double? _cardY;
+    private double _pinX;
+    private double _pinY;
     private string? _hoverId;
     private CancellationTokenSource? _hideCts;
     private CancellationTokenSource? _previewCts;
+
+    private MenuState? _menu;
+    private bool _renaming;
+    private bool _confirmDelete;
+    private string _renameText = string.Empty;
 
     protected override void OnInitialized()
     {
         State.Changed += OnStateChanged;
         State.Workspace.Changed += OnWorkspaceChanged;
+        _pendingFocus = Focus;
     }
 
     protected override Task OnInitializedAsync() =>
         LoadAsync(Interlocked.Increment(ref _loadGeneration));
 
+    protected override void OnParametersSet()
+    {
+        if (Focus is { Length: > 0 } && Focus != _pendingFocus && Focus != _selectedId)
+            _pendingFocus = Focus;
+    }
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender || _disposed)
+        if (_disposed)
             return;
 
-        _self = DotNetObjectReference.Create(this);
-        try
+        if (firstRender)
         {
-            _mounted = await Js.InvokeAsync<bool>("synclyGalaxy.mount", CanvasId, _self, new { reducedMotion = false });
-            if (_mounted)
+            _self = DotNetObjectReference.Create(this);
+            try
             {
-                _motion = await Js.InvokeAsync<bool>("synclyGalaxy.isMotion", CanvasId);
-                if (_loaded)
-                    await PushDataAsync();
-                StateHasChanged();
+                _mounted = await Js.InvokeAsync<bool>("synclyGalaxy.mount", CanvasId, _self, new { reducedMotion = false });
+                if (_mounted)
+                {
+                    _opt = await Js.InvokeAsync<Options>("synclyGalaxy.getOptions", CanvasId);
+                    if (_loaded)
+                        await PushDataAsync();
+                    StateHasChanged();
+                }
             }
+            catch (JSException)
+            {
+                _mounted = false;
+            }
+            return;
         }
-        catch (JSException)
+
+        if (_renaming && _renameFocusPending)
         {
-            _mounted = false;
+            _renameFocusPending = false;
+            await SafeJsAsync(() => Js.InvokeVoidAsync("syncly.focusElement", RenameId, true).AsTask());
         }
     }
+
+    private bool _renameFocusPending;
 
     private void OnWorkspaceChanged()
     {
@@ -254,7 +473,17 @@
         _graph = graph;
         _nodeIds = graph.Nodes.Select(n => n.Id).ToHashSet(StringComparer.Ordinal);
         _legend = BuildLegend(graph);
+        var stamps = graph.Nodes.Where(n => n.CreatedAt != default).Select(n => n.CreatedAt.ToUnixTimeMilliseconds()).ToList();
+        _timeMin = stamps.Count > 0 ? stamps.Min() : 0;
+        _timeMax = stamps.Count > 0 ? stamps.Max() : 0;
         _loaded = true;
+
+        if (_selectedId is not null && !_nodeIds.Contains(_selectedId))
+        {
+            _selectedId = null;
+            _pinned = false;
+            _pinnedPreview = null;
+        }
 
         if (_mounted)
             await PushDataAsync();
@@ -287,6 +516,10 @@
                 parentId = n.ParentId,
                 body = n.Body.ToString().ToLowerInvariant(),
                 missing = n.Missing,
+                createdAt = n.CreatedAt == default ? 0 : n.CreatedAt.ToUnixTimeMilliseconds(),
+                updatedAt = n.UpdatedAt == default ? 0 : n.UpdatedAt.ToUnixTimeMilliseconds(),
+                inbound = n.Inbound,
+                outbound = n.Outbound,
             }),
             edges = _graph.Edges.Select(e => new { from = e.From, to = e.To }),
         };
@@ -296,8 +529,21 @@
             await Js.InvokeVoidAsync("synclyGalaxy.setData", CanvasId, payload);
             if (_hidden.Count > 0)
                 await Js.InvokeVoidAsync("synclyGalaxy.setFilter", CanvasId, _hidden.Select(h => h.ToString().ToLowerInvariant()));
+            if (_lens != "none")
+                await Js.InvokeVoidAsync("synclyGalaxy.setLens", CanvasId, _lens);
+            if (_timelapse)
+                await PushTimeCursorAsync();
             if (_query.Length > 0)
                 _hitCount = await Js.InvokeAsync<int>("synclyGalaxy.search", CanvasId, _query);
+            if (_selectedId is not null)
+                await Js.InvokeVoidAsync("synclyGalaxy.select", CanvasId, _selectedId, false);
+
+            if (_pendingFocus is { } focus && _nodeIds.Contains(focus))
+            {
+                _pendingFocus = null;
+                await Js.InvokeVoidAsync("synclyGalaxy.select", CanvasId, focus, true);
+                await SelectAsync(focus, null, null);
+            }
         });
     }
 
@@ -307,10 +553,39 @@
 
     private Task LocateAsync() => SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.locate", CanvasId).AsTask());
 
-    private async Task ToggleMotionAsync()
+    private Task FlyToAsync(string id) => SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.flyTo", CanvasId, id).AsTask());
+
+    private Task ToggleMotionAsync() => SetOptionAsync(o => o with { Motion = !o.Motion });
+
+    private async Task SetOptionAsync(Func<Options, Options> change)
     {
-        _motion = !_motion;
-        await SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.setMotion", CanvasId, _motion).AsTask());
+        var next = change(_opt);
+        _opt = next;
+        await SafeJsAsync(async () =>
+        {
+            var applied = await Js.InvokeAsync<Options?>("synclyGalaxy.setOptions", CanvasId, new
+            {
+                motion = next.Motion,
+                labels = next.Labels,
+                density = next.Density,
+                sound = next.Sound,
+                effects = next.Effects,
+            });
+            if (applied is not null)
+                _opt = applied;
+        });
+    }
+
+    private const string LabelsAuto = "auto";
+    private const string LabelsAll = "all";
+    private const string LabelsMin = "min";
+
+    private Task SetLabelsAsync(string labels) => SetOptionAsync(o => o with { Labels = labels });
+
+    private async Task SetLensAsync(string lens)
+    {
+        _lens = lens;
+        await SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.setLens", CanvasId, lens).AsTask());
     }
 
     private async Task ToggleKindAsync(GraphBodyKind body)
@@ -366,7 +641,111 @@
         await SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.search", CanvasId, string.Empty).AsTask());
     }
 
-    // ------------------------------------------------------------- hover preview
+    // ------------------------------------------------------------- time-lapse
+
+    private async Task ToggleTimelapseAsync()
+    {
+        _timelapse = !_timelapse;
+        StopPlaying();
+        if (_timelapse)
+        {
+            _timeValue = 0;
+            await PushTimeCursorAsync();
+            await TogglePlayAsync();
+        }
+        else
+        {
+            await SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.setTimeCursor", CanvasId, null, 0).AsTask());
+        }
+    }
+
+    private async Task OnTimeInput(ChangeEventArgs args)
+    {
+        if (int.TryParse(args.Value?.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+        {
+            StopPlaying();
+            _timeValue = Math.Clamp(value, 0, 1000);
+            await PushTimeCursorAsync();
+        }
+    }
+
+    private async Task TogglePlayAsync()
+    {
+        if (_playing)
+        {
+            StopPlaying();
+            return;
+        }
+
+        if (_timeValue >= 1000)
+            _timeValue = 0;
+
+        _playing = true;
+        var cts = _playCts = new CancellationTokenSource();
+        _ = PlayAsync(cts.Token);
+        await Task.CompletedTask;
+    }
+
+    private void StopPlaying()
+    {
+        _playing = false;
+        _playCts?.Cancel();
+        _playCts = null;
+    }
+
+    private async Task PlayAsync(CancellationToken ct)
+    {
+        const int stepMs = 40;
+        var step = Math.Max(1, 1000 * stepMs / (TimelapseSeconds * 1000));
+        try
+        {
+            while (!ct.IsCancellationRequested && _timeValue < 1000)
+            {
+                await Task.Delay(stepMs, ct);
+                _timeValue = Math.Min(1000, _timeValue + step);
+                await PushTimeCursorAsync();
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        if (!ct.IsCancellationRequested)
+        {
+            _playing = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private Task PushTimeCursorAsync()
+    {
+        if (_timeMax <= _timeMin)
+            return Task.CompletedTask;
+        var span = _timeMax - _timeMin;
+        var cursor = _timeMin + span * _timeValue / 1000;
+        var window = Math.Max(1000, span * 6 / 100);
+        return SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.setTimeCursor", CanvasId, cursor, window).AsTask());
+    }
+
+    private string TimeLabel()
+    {
+        if (_timeMax <= _timeMin)
+            return string.Empty;
+        var cursor = _timeMin + (_timeMax - _timeMin) * _timeValue / 1000;
+        return DateTimeOffset.FromUnixTimeMilliseconds(cursor).ToLocalTime().ToString("d MMM yyyy", CultureInfo.InvariantCulture);
+    }
+
+    private int BornCount()
+    {
+        if (_timeMax <= _timeMin)
+            return _graph.Nodes.Count(n => !n.Missing);
+        var cursor = _timeMin + (_timeMax - _timeMin) * _timeValue / 1000;
+        return _graph.Nodes.Count(n => !n.Missing && (n.CreatedAt == default || n.CreatedAt.ToUnixTimeMilliseconds() <= cursor));
+    }
+
+    // ------------------------------------------------------------- callbacks from JS
 
     [JSInvokable]
     public async Task OnHover(string? id, double clientX, double clientY)
@@ -374,24 +753,131 @@
         if (_disposed)
             return;
 
+        _hoverId = id;
+
         if (id is null)
         {
-            _hoverId = null;
-            ScheduleHide();
+            if (_pinned && _selectedId is not null)
+                await ShowPinnedAsync();
+            else
+                ScheduleHide();
+            return;
+        }
+
+        if (id == _selectedId && _pinned)
+        {
+            _hideCts?.Cancel();
+            await ShowPinnedAsync();
             return;
         }
 
         _hideCts?.Cancel();
-        _hoverId = id;
-        _previewX = clientX;
-        _previewY = clientY;
+        await ShowPreviewAsync(id, clientX, clientY, pinned: false);
+    }
 
+    [JSInvokable]
+    public Task OnSelect(string? id, double clientX, double clientY) =>
+        InvokeAsync(() => SelectAsync(id, clientX, clientY));
+
+    [JSInvokable]
+    public Task OnOpen(string id) => InvokeAsync(() => OpenIdAsync(id));
+
+    [JSInvokable]
+    public Task OnContextMenu(string? id, double clientX, double clientY) => InvokeAsync(() =>
+    {
+        var node = id is null ? null : _graph.Nodes.FirstOrDefault(n => n.Id == id);
+        _menu = new MenuState(node, clientX, clientY);
+        _renaming = false;
+        _confirmDelete = false;
+        _settingsOpen = false;
+        StateHasChanged();
+    });
+
+    [JSInvokable]
+    public Task OnFocusSystem(string? id) => InvokeAsync(() =>
+    {
+        var trail = new List<GraphNode>();
+        var cursor = id is null ? null : _graph.Nodes.FirstOrDefault(n => n.Id == id);
+        var guard = 0;
+        while (cursor is not null && guard++ < 64)
+        {
+            trail.Insert(0, cursor);
+            cursor = cursor.ParentId is null ? null : _graph.Nodes.FirstOrDefault(n => n.Id == cursor.ParentId);
+        }
+        _trail = trail;
+        StateHasChanged();
+    });
+
+    [JSInvokable]
+    public Task OnFocusSearch() =>
+        SafeJsAsync(() => Js.InvokeVoidAsync("syncly.focusElement", SearchId, true).AsTask());
+
+    // ------------------------------------------------------------- selection + preview
+
+    private async Task SelectAsync(string? id, double? clientX, double? clientY)
+    {
+        _menu = null;
+        _selectedId = id;
+
+        if (id is null)
+        {
+            _pinned = false;
+            _pinnedPreview = null;
+            ScheduleHide();
+            StateHasChanged();
+            return;
+        }
+
+        _pinned = true;
+        _hideCts?.Cancel();
+        if (clientX is { } x && clientY is { } y)
+        {
+            _pinX = x;
+            _pinY = y;
+            _cardX = x;
+            _cardY = y;
+        }
+        else
+        {
+            _cardX = null;
+            _cardY = null;
+        }
+
+        await ShowPreviewAsync(id, clientX, clientY, pinned: true);
+    }
+
+    private async Task ShowPinnedAsync()
+    {
+        if (_selectedId is null)
+            return;
+        _cardX = _cardX is null ? null : _pinX;
+        _cardY = _cardY is null ? null : _pinY;
+        if (_pinnedPreview is not null)
+        {
+            _missingPreview = null;
+            _preview = _pinnedPreview;
+            _previewVisible = true;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+        await ShowPreviewAsync(_selectedId, _cardX, _cardY, pinned: true);
+    }
+
+    private async Task ShowPreviewAsync(string id, double? clientX, double? clientY, bool pinned)
+    {
         var node = _graph.Nodes.FirstOrDefault(n => n.Id == id);
         if (node is null)
             return;
 
+        if (clientX is { } x && clientY is { } y)
+        {
+            _cardX = x;
+            _cardY = y;
+        }
+
         if (node.Missing)
         {
+            _previewCts?.Cancel();
             _preview = null;
             _missingPreview = node;
             _previewVisible = true;
@@ -411,8 +897,13 @@
             return;
         }
 
-        if (cts.IsCancellationRequested || _disposed || _hoverId != id)
+        if (cts.IsCancellationRequested || _disposed)
             return;
+        if (!pinned && _hoverId != id && !(_pinned && _selectedId == id))
+            return;
+
+        if (pinned || id == _selectedId)
+            _pinnedPreview = preview;
 
         _missingPreview = null;
         _preview = preview;
@@ -438,7 +929,7 @@
             return;
         }
 
-        if (_disposed || _previewHeld || _hoverId is not null)
+        if (_disposed || _previewHeld || _hoverId is not null || (_pinned && _selectedId is not null))
             return;
 
         _previewVisible = false;
@@ -470,20 +961,131 @@
     private void ReleasePreview()
     {
         _previewHeld = false;
-        if (_hoverId is null)
+        if (_hoverId is null && !(_pinned && _selectedId is not null))
             ScheduleHide();
     }
 
     private string PreviewStyle =>
-        $"--px:{F(_previewX)}px;--py:{F(_previewY)}px";
+        _cardX is { } x && _cardY is { } y ? $"--px:{F(x)}px;--py:{F(y)}px" : string.Empty;
+
+    private string MenuStyle =>
+        _menu is { } m ? $"--px:{F(m.X)}px;--py:{F(m.Y)}px" : string.Empty;
+
+    // ------------------------------------------------------------- context menu actions
+
+    private void CloseMenu()
+    {
+        _menu = null;
+        _renaming = false;
+        _confirmDelete = false;
+    }
+
+    private void OnMenuKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            CloseMenu();
+    }
+
+    private async Task MenuFlyAsync(string id)
+    {
+        CloseMenu();
+        await FlyToAsync(id);
+    }
+
+    private async Task MenuFitAsync()
+    {
+        CloseMenu();
+        await FitAsync();
+    }
+
+    private async Task MenuToggleMotionAsync()
+    {
+        CloseMenu();
+        await ToggleMotionAsync();
+    }
+
+    private async Task NewSubpageAsync(string? parentId)
+    {
+        CloseMenu();
+        if (parentId is not null)
+            State.ExpandPage(parentId);
+        var pageId = await State.Workspace.CreatePageAsync(parentId);
+        State.Open(pageId);
+        State.SetReadingMode(false);
+        Nav.NavigateTo("");
+    }
+
+    private Task StartRenameAsync(GraphNode node)
+    {
+        _renaming = true;
+        _renameText = node.Title;
+        _renameFocusPending = true;
+        return Task.CompletedTask;
+    }
+
+    private async Task OnRenameKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter")
+            await CommitRenameAsync();
+        else if (args.Key == "Escape")
+            _renaming = false;
+    }
+
+    private async Task CommitRenameAsync()
+    {
+        if (_menu?.Node is not { } node)
+            return;
+        var title = _renameText.Trim();
+        CloseMenu();
+        if (title.Length == 0 || title == node.Title)
+            return;
+        await State.Workspace.RenamePageAsync(node.Id, title);
+    }
+
+    private async Task DuplicateAsync(string id)
+    {
+        CloseMenu();
+        var copy = await State.Workspace.DuplicatePageAsync(id);
+        _selectedId = copy;
+        _pinned = false;
+        _pinnedPreview = null;
+        await SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.select", CanvasId, copy, true).AsTask());
+    }
+
+    private async Task CopyLinkAsync(string title)
+    {
+        CloseMenu();
+        await SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.copyText", $"[[{title}]]").AsTask());
+    }
+
+    private async Task DeleteAsync(string id)
+    {
+        if (!_confirmDelete)
+        {
+            _confirmDelete = true;
+            return;
+        }
+
+        CloseMenu();
+        if (_selectedId == id)
+        {
+            _selectedId = null;
+            _pinned = false;
+            _pinnedPreview = null;
+            _preview = null;
+            _missingPreview = null;
+            _previewVisible = false;
+        }
+        await State.Workspace.DeletePageAsync(id);
+        if (State.CurrentPageId == id)
+            State.Back();
+    }
 
     // ------------------------------------------------------------- open
 
-    [JSInvokable]
-    public Task OnOpen(string id) => InvokeAsync(() => OpenIdAsync(id));
-
     private async Task OpenIdAsync(string id)
     {
+        CloseMenu();
         var node = _graph.Nodes.FirstOrDefault(n => n.Id == id);
         if (node is null)
             return;
@@ -512,6 +1114,9 @@
         GraphBodyKind.Meteor => plural ? "Meteors" : "Meteor",
         _ => plural ? "Unresolved" : "Unresolved",
     };
+
+    private static string Label(GraphNode node) =>
+        node.Icon is { Length: > 0 } icon ? $"{icon} {node.Title}" : node.Title;
 
     private static string Plural(int count, string noun) =>
         $"{count.ToString(CultureInfo.InvariantCulture)} {noun}{(count == 1 ? string.Empty : "s")}";
@@ -571,6 +1176,7 @@
         _searchCts?.Cancel();
         _hideCts?.Cancel();
         _previewCts?.Cancel();
+        _playCts?.Cancel();
 
         if (_mounted)
         {

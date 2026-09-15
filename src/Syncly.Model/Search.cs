@@ -33,7 +33,11 @@ public sealed record GraphNode(
     int Depth = 0,
     double Size = 0.018,
     string? ParentId = null,
-    GraphBodyKind Body = GraphBodyKind.Star);
+    GraphBodyKind Body = GraphBodyKind.Star,
+    DateTimeOffset CreatedAt = default,
+    DateTimeOffset UpdatedAt = default,
+    int Inbound = 0,
+    int Outbound = 0);
 
 public sealed record GraphEdge(string From, string To, GraphEdgeKind Kind = GraphEdgeKind.Link);
 

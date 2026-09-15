@@ -174,7 +174,7 @@ public sealed class ProjectionStore(SynclyDatabase database)
             await using var command = connection.CreateCommand();
             command.CommandText =
                 """
-                SELECT id, title, icon, parent_id, space_id, type, color, position
+                SELECT id, title, icon, parent_id, space_id, type, color, position, created_at, updated_at
                 FROM objects WHERE deleted = 0 ORDER BY title
                 """;
 
@@ -189,10 +189,20 @@ public sealed class ProjectionStore(SynclyDatabase database)
                     reader.IsDBNull(4) ? null : reader.GetString(4),
                     reader.IsDBNull(5) ? ObjectTypes.Page : reader.GetString(5),
                     reader.IsDBNull(6) ? null : reader.GetString(6),
-                    reader.IsDBNull(7) ? null : reader.GetString(7)));
+                    reader.IsDBNull(7) ? null : reader.GetString(7),
+                    Stamp(reader, 8),
+                    Stamp(reader, 9)));
 
             return pages;
         }, ct);
+
+    private static DateTimeOffset Stamp(SqliteDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal))
+            return default;
+        var ms = reader.GetInt64(ordinal);
+        return ms <= 0 ? default : DateTimeOffset.FromUnixTimeMilliseconds(ms);
+    }
 
     public async Task<List<SearchHit>> SearchAsync(
         string query,

@@ -824,7 +824,9 @@ public sealed class Workspace(
                     depth,
                     GraphLayout.SizeFor(body),
                     parentId,
-                    body));
+                    body,
+                    page.CreatedAt,
+                    page.UpdatedAt));
                 Walk(page.Id, depth + 1);
             }
         }
@@ -851,7 +853,9 @@ public sealed class Workspace(
                 depth,
                 GraphLayout.SizeFor(body),
                 parentId,
-                body));
+                body,
+                page.CreatedAt,
+                page.UpdatedAt));
             Walk(page.Id, 1);
         }
 
@@ -898,6 +902,24 @@ public sealed class Workspace(
                 continue;
 
             edges.Add((link.SourceId, targetId));
+        }
+
+        // Link degree per body drives the "links" lens and the preview badge.
+        var inbound = new Dictionary<string, int>(StringComparer.Ordinal);
+        var outbound = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (from, to) in edges)
+        {
+            outbound[from] = outbound.GetValueOrDefault(from) + 1;
+            inbound[to] = inbound.GetValueOrDefault(to) + 1;
+        }
+
+        for (var i = 0; i < nodes.Count; i++)
+        {
+            var node = nodes[i];
+            var inCount = inbound.GetValueOrDefault(node.Id);
+            var outCount = outbound.GetValueOrDefault(node.Id);
+            if (inCount != 0 || outCount != 0)
+                nodes[i] = node with { Inbound = inCount, Outbound = outCount };
         }
 
         return GraphLayout.Arrange(nodes, [.. edges.Select(e => new GraphEdge(e.From, e.To))]);

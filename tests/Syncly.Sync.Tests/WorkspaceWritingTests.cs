@@ -103,6 +103,29 @@ public class WorkspaceWritingTests
     }
 
     [Fact]
+    public async Task Graph_reports_timestamps_and_link_degree()
+    {
+        await using var app = await StartAsync();
+        var workspace = app.Workspace;
+        var hub = await workspace.CreatePageAsync(null, "Hub");
+        var a = await workspace.CreatePageAsync(null, "Alpha");
+        var b = await workspace.CreatePageAsync(null, "Beta");
+
+        await workspace.SetBlockTextAsync(a, workspace.Tree(a).Order[0].Id, "see [[Hub]]");
+        await workspace.SetBlockTextAsync(b, workspace.Tree(b).Order[0].Id, "also [[Hub]] and [[Alpha]]");
+
+        var graph = await workspace.GraphAsync();
+        var hubNode = graph.Nodes.Single(n => n.Id == hub);
+        var betaNode = graph.Nodes.Single(n => n.Id == b);
+
+        Assert.Equal(2, hubNode.Inbound);
+        Assert.Equal(0, hubNode.Outbound);
+        Assert.Equal(2, betaNode.Outbound);
+        Assert.NotEqual(default, hubNode.CreatedAt);
+        Assert.True(hubNode.UpdatedAt >= hubNode.CreatedAt);
+    }
+
+    [Fact]
     public async Task Preview_describes_a_page_for_the_galaxy_hover_card()
     {
         await using var app = await StartAsync();

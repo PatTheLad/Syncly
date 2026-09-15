@@ -138,7 +138,9 @@ public sealed record PageRef(
     string? SpaceId = null,
     string Type = ObjectTypes.Page,
     string? Color = null,
-    string? Position = null)
+    string? Position = null,
+    DateTimeOffset CreatedAt = default,
+    DateTimeOffset UpdatedAt = default)
 {
     public string DisplayTitle => string.IsNullOrWhiteSpace(Title)
         ? (Type == ObjectTypes.Space ? "Untitled space" : "Untitled")
