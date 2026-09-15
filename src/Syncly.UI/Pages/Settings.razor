@@ -8,8 +8,11 @@
 @inject IQrScanner QrScanner
 @inject IDeviceCamera Camera
 @inject IMailboxCapabilities Mailbox
+@inject NavigationManager Nav
 
-<div class="workspace">
+<div class="workspace"
+     @oncontextmenu="OnSettingsContext"
+     @oncontextmenu:preventDefault="true">
     <div class="topbar">
         <div class="crumbs"><span class="crumb-current">Settings</span></div>
     </div>
@@ -339,9 +342,19 @@
     </div>
 </div>
 
+@if (_ctxMenu is not null)
+{
+    <ContextMenu Items="_ctxMenu.Items"
+                 Left="_ctxMenu.Left"
+                 Top="_ctxMenu.Top"
+                 OnClose="CloseCtxMenu" />
+}
+
 @code {
     private sealed record PeerRow(string DeviceId, string DisplayName, DateTimeOffset? LastSyncAt);
+    private sealed record CtxMenuState(double Left, double Top, IReadOnlyList<ContextMenu.MenuItem> Items);
 
+    private CtxMenuState? _ctxMenu;
     private int _pageCount;
     private long _opCount;
     private string _maintenance = string.Empty;
@@ -648,6 +661,27 @@
     }
 
     private Task UpdateAsync() => Updater.ApplyAsync();
+
+    private void OnSettingsContext(MouseEventArgs e)
+    {
+        var items = new List<ContextMenu.MenuItem>
+        {
+            new("Sync now", () => App.Sync.SyncNowAsync(), "↻"),
+            new("Open notes", () => { Nav.NavigateTo(""); return Task.CompletedTask; }, "✎"),
+            new("Open graph", () => { Nav.NavigateTo("graph"); return Task.CompletedTask; }, "◎"),
+        };
+
+        if (Updater.Available is not null)
+            items.Add(new("Install update", UpdateAsync, "↑"));
+
+        _ctxMenu = new(e.ClientX, e.ClientY, items);
+    }
+
+    private Task CloseCtxMenu()
+    {
+        _ctxMenu = null;
+        return Task.CompletedTask;
+    }
 
     public void Dispose()
     {

@@ -69,7 +69,7 @@ export function mount(id, dotnet) {
     clearTimeout(view.longPress);
     const point = local(view, event);
     const node = hit(view, point.x, point.y, event.pointerType === 'touch');
-    notify(view, 'OnContext', node?.id ?? null);
+    notify(view, 'OnContext', node?.id ?? null, event.clientX, event.clientY);
   });
   on(canvas, 'dblclick', event => {
     const point = local(view, event);
@@ -365,7 +365,8 @@ function pointerDown(view, event) {
     view.longPress = setTimeout(() => {
       if (view.gesture?.kind !== 'pending') return;
       view.gesture.suppress = true;
-      notify(view, 'OnContext', node?.id ?? null);
+      const rect = view.canvas.getBoundingClientRect();
+      notify(view, 'OnContext', node?.id ?? null, rect.left + point.x, rect.top + point.y);
     }, 500);
   }
 }

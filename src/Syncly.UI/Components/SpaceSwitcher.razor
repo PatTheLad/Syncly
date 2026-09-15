@@ -14,7 +14,9 @@
         <div class="space-grid">
             @foreach (var space in State.Workspace.Spaces)
             {
-                <div class="space-card-wrap" @key="space.Id">
+                <div class="space-card-wrap" @key="space.Id"
+                     @oncontextmenu="e => OpenSpaceMenu(e, space)"
+                     @oncontextmenu:preventDefault="true">
                     <button type="button"
                             class="space-card @(space.Id == State.CurrentSpaceId ? "active" : null)"
                             @onclick="() => SwitchAsync(space.Id)">
@@ -110,6 +112,14 @@
     </div>
 </div>
 
+@if (_menuSpace is not null)
+{
+    <ContextMenu Items="SpaceMenuItems()"
+                 Left="_menuLeft"
+                 Top="_menuTop"
+                 OnClose="CloseSpaceMenu" />
+}
+
 @code {
     private const string DefaultSpaceId = Syncly.App.Workspace.DefaultSpaceId;
 
@@ -119,11 +129,52 @@
     private string _name = string.Empty;
     private string _color = SpaceColors.Default;
     private string? _error;
+    private PageRef? _menuSpace;
+    private double _menuLeft;
+    private double _menuTop;
 
     [Parameter]
     public EventCallback OnClose { get; set; }
 
     private Task Close() => OnClose.InvokeAsync();
+
+    private void OpenSpaceMenu(MouseEventArgs e, PageRef space)
+    {
+        _menuSpace = space;
+        _menuLeft = e.ClientX;
+        _menuTop = e.ClientY;
+    }
+
+    private Task CloseSpaceMenu()
+    {
+        _menuSpace = null;
+        return Task.CompletedTask;
+    }
+
+    private IReadOnlyList<ContextMenu.MenuItem> SpaceMenuItems()
+    {
+        var space = _menuSpace;
+        if (space is null)
+            return [];
+
+        var items = new List<ContextMenu.MenuItem>
+        {
+            new("Open", () => SwitchAsync(space.Id), "↗"),
+            new("Edit", () => { BeginEdit(space); return Task.CompletedTask; }, "✎"),
+        };
+
+        if (space.Id != DefaultSpaceId)
+        {
+            items.Add(new("Delete…", () =>
+            {
+                BeginEdit(space);
+                _confirmDelete = true;
+                return Task.CompletedTask;
+            }, "✕", Danger: true));
+        }
+
+        return items;
+    }
 
     private void CancelPanels()
     {

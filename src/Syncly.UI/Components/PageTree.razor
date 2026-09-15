@@ -5,7 +5,9 @@
 <div class="tree-drop @(_dropRoot ? "drop-hover" : null)"
      @ondragover="OnRootDragOver"
      @ondragover:preventDefault
-     @ondrop="OnRootDrop">
+     @ondrop="OnRootDrop"
+     @oncontextmenu="OnTreeContext"
+     @oncontextmenu:preventDefault="true">
 @foreach (var (page, depth, childCount) in VisibleRows())
 {
     var id = page.Id;
@@ -21,6 +23,9 @@
          tabindex="0"
          @onclick="() => OnSelect.InvokeAsync(id)"
          @onkeydown="e => OnRowKey(id, e)"
+         @oncontextmenu="e => OpenMenu(id, e)"
+         @oncontextmenu:preventDefault="true"
+         @oncontextmenu:stopPropagation="true"
          @ondragstart="() => OnDragStart(id)"
          @ondragover="e => OnRowDragOver(id, e)"
          @ondragover:preventDefault
@@ -72,7 +77,7 @@
 }
 </div>
 
-@if (_menuPageId is not null)
+@if (_menuPageId is not null || _emptyMenu)
 {
     <ContextMenu Items="MenuItems()"
                  Left="_menuLeft"
@@ -91,6 +96,7 @@
 
 @code {
     private string? _menuPageId;
+    private bool _emptyMenu;
     private double _menuLeft;
     private double _menuTop;
     private string? _movingId;
@@ -115,7 +121,7 @@
     public EventCallback<string> OnSelect { get; set; }
 
     [Parameter]
-    public EventCallback<string> OnAddChild { get; set; }
+    public EventCallback<string?> OnAddChild { get; set; }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -161,7 +167,18 @@
     private void OpenMenu(string pageId, MouseEventArgs e)
     {
         _movingId = null;
+        _emptyMenu = false;
         _menuPageId = pageId;
+        _menuLeft = e.ClientX;
+        _menuTop = e.ClientY;
+    }
+
+    private void OnTreeContext(MouseEventArgs e)
+    {
+        // Row handlers stop this when a page was the target.
+        _menuPageId = null;
+        _movingId = null;
+        _emptyMenu = true;
         _menuLeft = e.ClientX;
         _menuTop = e.ClientY;
     }
@@ -169,6 +186,7 @@
     private Task CloseMenu()
     {
         _menuPageId = null;
+        _emptyMenu = false;
         return Task.CompletedTask;
     }
 
@@ -180,6 +198,14 @@
 
     private IReadOnlyList<ContextMenu.MenuItem> MenuItems()
     {
+        if (_emptyMenu)
+        {
+            return
+            [
+                new("New page", () => OnAddChild.InvokeAsync(null), "+"),
+            ];
+        }
+
         var pageId = _menuPageId;
         if (pageId is null)
             return [];

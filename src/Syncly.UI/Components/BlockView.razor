@@ -10,7 +10,10 @@
      @ondragover="OnDragOverAsync"
      @ondragover:preventDefault
      @ondrop="OnDropAsync"
-     @ondrop:preventDefault>
+     @ondrop:preventDefault
+     @oncontextmenu="OnContextMenuAsync"
+     @oncontextmenu:preventDefault="true"
+     @oncontextmenu:stopPropagation="true">
     @if (!Host.Reading && Block.Kind is not (BlockKind.Divider or BlockKind.PageLink or BlockKind.File))
     {
         <button class="block-handle"
@@ -452,6 +455,9 @@
     public Task OnEscape() => Host.EscapeAsync();
 
     private Task OpenMenuAsync() => Host.SlashAsync(Block.Id);
+
+    private Task OnContextMenuAsync(MouseEventArgs e) =>
+        Host.OpenBlockContextMenuAsync(Block.Id, e.ClientX, e.ClientY);
 
     private void OnDragStart() => Host.BeginBlockDrag(Block.Id);
 

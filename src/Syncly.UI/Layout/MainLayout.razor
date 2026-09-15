@@ -10,28 +10,46 @@
 <div class="shell @(State.SidebarOpen ? null : "no-sidebar")">
     <nav class="rail">
         <button type="button"
-                class="rail-brand"
-                title="Syncly — Notes"
-                @onclick='() => Go("")'>
-            S
+                class="rail-brand space-avatar"
+                style="background: @(State.CurrentSpace?.Accent ?? SpaceColors.Default)"
+                title="@(State.CurrentSpace?.DisplayTitle ?? "Spaces")"
+                @onclick="() => State.ToggleSpaceSwitcher(true)"
+                @oncontextmenu="e => OpenShellMenu(e, ShellMenuKind.Space)"
+                @oncontextmenu:preventDefault="true">
+            @(State.CurrentSpace?.Initial ?? "S")
         </button>
 
         <button class="rail-item @(IsAt("") ? "active" : null)" title="Notes (Ctrl+K to jump)"
-                @onclick='() => Go("")'>✎</button>
+                @onclick='() => Go("")'
+                @oncontextmenu="e => OpenShellMenu(e, ShellMenuKind.Notes)"
+                @oncontextmenu:preventDefault="true">✎</button>
         <button class="rail-item @(IsAt("graph") ? "active" : null)" title="Graph"
-                @onclick='() => Go("graph")'>◎</button>
+                @onclick='() => Go("graph")'
+                @oncontextmenu="e => OpenShellMenu(e, ShellMenuKind.Graph)"
+                @oncontextmenu:preventDefault="true">◎</button>
         <button class="rail-item @(IsAt("settings") ? "active" : null)" title="Settings"
-                @onclick='() => Go("settings")'>⚙</button>
+                @onclick='() => Go("settings")'
+                @oncontextmenu="e => OpenShellMenu(e, ShellMenuKind.Settings)"
+                @oncontextmenu:preventDefault="true">⚙</button>
 
         <div class="rail-spacer"></div>
 
-        <div class="rail-dot @StatusClass" title="@SyncTooltip"></div>
-        <button type="button" class="rail-item" title="Toggle sidebar" @onclick="State.ToggleSidebar">☰</button>
+        <div class="rail-dot @StatusClass" title="@SyncTooltip"
+             @oncontextmenu="e => OpenShellMenu(e, ShellMenuKind.Sync)"
+             @oncontextmenu:preventDefault="true"></div>
+        <button type="button" class="rail-item" title="Toggle sidebar" @onclick="State.ToggleSidebar"
+                @oncontextmenu="e => OpenShellMenu(e, ShellMenuKind.Sidebar)"
+                @oncontextmenu:preventDefault="true">☰</button>
     </nav>
 
-    <aside class="sidebar">
+    <aside class="sidebar"
+           @oncontextmenu="e => OpenShellMenu(e, ShellMenuKind.Sidebar)"
+           @oncontextmenu:preventDefault="true">
         <div class="sidebar-head">
-            <button type="button" class="sidebar-space" title="Switch space" @onclick="() => State.ToggleSpaceSwitcher(true)">
+            <button type="button" class="sidebar-space" title="Switch space" @onclick="() => State.ToggleSpaceSwitcher(true)"
+                    @oncontextmenu="e => OpenShellMenu(e, ShellMenuKind.Space)"
+                    @oncontextmenu:preventDefault="true"
+                    @oncontextmenu:stopPropagation="true">
                 <span class="space-avatar sm" style="background: @(State.CurrentSpace?.Accent ?? SpaceColors.Default)">
                     @(State.CurrentSpace?.Initial ?? "S")
                 </span>
@@ -41,19 +59,21 @@
             <button class="chip primary" title="New page (Ctrl+N)" @onclick="() => NewPageAsync(null)">New</button>
         </div>
 
-        <div class="sidebar-search">
+        <div class="sidebar-search" @oncontextmenu:stopPropagation="true">
             <input id="sidebar-search" placeholder="Search or Ctrl+K" value="@_query" @oninput="OnSearchAsync" />
         </div>
 
         @if (_tags.Count > 0 && _query.Length == 0)
         {
-            <div class="sidebar-tags">
+            <div class="sidebar-tags" @oncontextmenu:stopPropagation="true">
                 @foreach (var tag in _tags)
                 {
                     <button type="button"
                             class="tag-chip @(tag.Tag == _tagFilter ? "active" : null)"
                             title="@tag.Pages page(s)"
-                            @onclick="() => ToggleTagAsync(tag.Tag)">
+                            @onclick="() => ToggleTagAsync(tag.Tag)"
+                            @oncontextmenu="e => OpenTagMenu(e, tag.Tag)"
+                            @oncontextmenu:preventDefault="true">
                         #@tag.Tag
                     </button>
                 }
@@ -62,7 +82,7 @@
 
         @if (_tagFilter is { } activeTag)
         {
-            <div class="tree">
+            <div class="tree" @oncontextmenu:stopPropagation="true">
                 @if (_tagPages.Count == 0)
                 {
                     <div class="tree-empty">No pages tagged #@activeTag.</div>
@@ -74,7 +94,9 @@
                         <button type="button"
                                 class="tree-row flat @(entry.Id == State.CurrentPageId ? "selected" : null)"
                                 @key="entry.Id"
-                                @onclick="() => OpenTagPage(entry)">
+                                @onclick="() => OpenTagPage(entry)"
+                                @oncontextmenu="e => OpenTagPageMenu(e, entry)"
+                                @oncontextmenu:preventDefault="true">
                             @if (!string.IsNullOrEmpty(entry.Icon))
                             {
                                 <span class="tree-icon" aria-hidden="true">@entry.Icon</span>
@@ -87,10 +109,12 @@
         }
         else if (_hits is { Count: > 0 })
         {
-            <div class="search-results">
+            <div class="search-results" @oncontextmenu:stopPropagation="true">
                 @foreach (var hit in _hits)
                 {
-                    <button class="search-hit" @key="hit.ObjectId + hit.BlockId" @onclick="() => OpenHit(hit)">
+                    <button class="search-hit" @key="hit.ObjectId + hit.BlockId" @onclick="() => OpenHit(hit)"
+                            @oncontextmenu="e => OpenHitMenu(e, hit)"
+                            @oncontextmenu:preventDefault="true">
                         <strong>@(string.IsNullOrWhiteSpace(hit.Title) ? "Untitled" : hit.Title)</strong>
                         <span>@((MarkupString)hit.Snippet)</span>
                     </button>
@@ -103,10 +127,14 @@
         }
         else
         {
-            <div class="tree">
+            <div class="tree" @oncontextmenu:stopPropagation="true">
                 @if (State.Workspace.PagesIn(State.CurrentSpaceId).Count == 0)
                 {
-                    <div class="tree-empty">No pages yet. Use <strong>New</strong> above to create one.</div>
+                    <div class="tree-empty"
+                         @oncontextmenu="e => OpenShellMenu(e, ShellMenuKind.Sidebar)"
+                         @oncontextmenu:preventDefault="true">
+                        No pages yet. Use <strong>New</strong> above to create one.
+                    </div>
                 }
                 else
                 {
@@ -118,32 +146,22 @@
             </div>
         }
 
-        <div class="sidebar-foot">
-            @if (ShowFootDetail)
+        <div class="sidebar-foot" title="@SyncTooltip"
+             @oncontextmenu="e => OpenShellMenu(e, ShellMenuKind.Sync)"
+             @oncontextmenu:preventDefault="true"
+             @oncontextmenu:stopPropagation="true">
+            <span class="status-dot @StatusClass"></span>
+            <span class="sidebar-foot-status grow">@SyncSummary</span>
+            <button class="chip muted" title="Sync now (Ctrl+S)" @onclick="SyncNowAsync">↻</button>
+            @if (Updater.Available is { } update)
             {
-                <div class="sidebar-foot-detail">
-                    <span class="status-dot @StatusClass"></span>
-                    <div class="grow">
-                        <div class="card-sub">@SyncSummary</div>
-                        @if (App.Sync.Status.Detail is { Length: > 0 } detail)
-                        {
-                            <div class="card-sub">@detail</div>
-                        }
-                    </div>
-                </div>
+                <button class="chip primary update-chip"
+                        disabled="@Updater.Busy"
+                        title="Install Syncly @update.Version"
+                        @onclick="UpdateAsync">
+                    @(Updater.Busy ? (Updater.Progress ?? "Updating…") : $"Update {update.Version}")
+                </button>
             }
-            <div class="sidebar-foot-row">
-                <button class="chip muted" title="Sync now (Ctrl+S)" @onclick="SyncNowAsync">↻ Sync</button>
-                @if (Updater.Available is { } update)
-                {
-                    <button class="chip primary update-chip"
-                            disabled="@Updater.Busy"
-                            title="Install Syncly @update.Version"
-                            @onclick="UpdateAsync">
-                        @(Updater.Busy ? (Updater.Progress ?? "Updating…") : $"Update to {update.Version}")
-                    </button>
-                }
-            </div>
         </div>
     </aside>
 
@@ -186,7 +204,19 @@
     <SpaceSwitcher OnClose="() => State.ToggleSpaceSwitcher(false)" />
 }
 
+@if (_shellMenu is not null)
+{
+    <ContextMenu Items="_shellMenu.Items"
+                 Left="_shellMenu.Left"
+                 Top="_shellMenu.Top"
+                 OnClose="CloseShellMenu" />
+}
+
 @code {
+    private enum ShellMenuKind { Space, Notes, Graph, Settings, Sync, Sidebar }
+
+    private sealed record ShellMenuState(double Left, double Top, IReadOnlyList<ContextMenu.MenuItem> Items);
+
     private DotNetObjectReference<MainLayout>? _self;
     private CancellationTokenSource? _updateCts;
     private string _query = string.Empty;
@@ -197,6 +227,7 @@
     private List<TagCount> _tags = [];
     private string? _tagFilter;
     private List<PageRef> _tagPages = [];
+    private ShellMenuState? _shellMenu;
 
     protected override void OnInitialized()
     {
@@ -400,10 +431,114 @@
         _ => "",
     };
 
-    private bool ShowFootDetail =>
-        App.Sync.Status.Phase is SyncPhase.Failed or SyncPhase.Syncing;
-
     private string SyncSummary => App.Sync.Status.Summary;
+
+    private void OpenShellMenu(MouseEventArgs e, ShellMenuKind kind)
+    {
+        _shellMenu = new(e.ClientX, e.ClientY, ShellMenuItems(kind));
+    }
+
+    private void OpenTagMenu(MouseEventArgs e, string tag)
+    {
+        _shellMenu = new(e.ClientX, e.ClientY,
+        [
+            new(_tagFilter == tag ? "Clear tag filter" : "Filter by tag", () => ToggleTagAsync(tag), "#"),
+            new("New page", () => NewPageAsync(null), "+"),
+            new("Sync now", SyncNowAsync, "↻"),
+        ]);
+    }
+
+    private void OpenTagPageMenu(MouseEventArgs e, PageRef page)
+    {
+        _shellMenu = new(e.ClientX, e.ClientY,
+        [
+            new("Open", () => { OpenTagPage(page); return Task.CompletedTask; }, "↗"),
+            new("Duplicate", async () =>
+            {
+                var copyId = await State.Workspace.DuplicatePageAsync(page.Id);
+                Open(copyId);
+            }, "⧉"),
+            new("Clear tag filter", async () =>
+            {
+                _tagFilter = null;
+                _tagPages = [];
+                await Task.CompletedTask;
+            }, "#"),
+        ]);
+    }
+
+    private void OpenHitMenu(MouseEventArgs e, SearchHit hit)
+    {
+        _shellMenu = new(e.ClientX, e.ClientY,
+        [
+            new("Open", () => { OpenHit(hit); return Task.CompletedTask; }, "↗"),
+            new("Clear search", () =>
+            {
+                _query = string.Empty;
+                _hits = null;
+                return Task.CompletedTask;
+            }, "✕"),
+        ]);
+    }
+
+    private Task CloseShellMenu()
+    {
+        _shellMenu = null;
+        return Task.CompletedTask;
+    }
+
+    private IReadOnlyList<ContextMenu.MenuItem> ShellMenuItems(ShellMenuKind kind) => kind switch
+    {
+        ShellMenuKind.Space =>
+        [
+            new("Switch space", () => { State.ToggleSpaceSwitcher(true); return Task.CompletedTask; }, "▣"),
+            new("New page", () => NewPageAsync(null), "+"),
+            new("Today's note", OpenDailyAsync, "📅"),
+        ],
+        ShellMenuKind.Notes =>
+        [
+            new("Open notes", () => { Go(""); return Task.CompletedTask; }, "✎"),
+            new("New page", () => NewPageAsync(null), "+"),
+            new("Command palette", () => { State.TogglePalette(true); return Task.CompletedTask; }, "⌘"),
+            new(State.ReadingMode ? "Edit mode" : "Reading mode", () =>
+            {
+                State.ToggleReadingMode();
+                return Task.CompletedTask;
+            }, "👁"),
+        ],
+        ShellMenuKind.Graph =>
+        [
+            new("Open graph", () => { Go("graph"); return Task.CompletedTask; }, "◎"),
+            new("New page", () => NewPageAsync(null), "+"),
+        ],
+        ShellMenuKind.Settings =>
+        [
+            new("Open settings", () => { Go("settings"); return Task.CompletedTask; }, "⚙"),
+            new("Sync now", SyncNowAsync, "↻"),
+        ],
+        ShellMenuKind.Sync =>
+        [
+            new("Sync now", SyncNowAsync, "↻"),
+            new("Open settings", () => { Go("settings"); return Task.CompletedTask; }, "⚙"),
+            ..(Updater.Available is not null
+                ? new ContextMenu.MenuItem[] { new("Install update", UpdateAsync, "↑") }
+                : []),
+        ],
+        _ =>
+        [
+            new("New page", () => NewPageAsync(null), "+"),
+            new("Today's note", OpenDailyAsync, "📅"),
+            new("Switch space", () => { State.ToggleSpaceSwitcher(true); return Task.CompletedTask; }, "▣"),
+            new("Sync now", SyncNowAsync, "↻"),
+            new(State.SidebarOpen ? "Hide sidebar" : "Show sidebar", () =>
+            {
+                State.ToggleSidebar();
+                return Task.CompletedTask;
+            }, "☰"),
+            new("Open graph", () => { Go("graph"); return Task.CompletedTask; }, "◎"),
+            new("Open settings", () => { Go("settings"); return Task.CompletedTask; }, "⚙"),
+        ],
+    };
 
     private string SyncTooltip =>
         App.Sync.Status.Detail is { Length: > 0 } detail
@@ -522,6 +657,7 @@
     public void OnEscape()
     {
         _paletteHits = [];
+        _shellMenu = null;
         State.TogglePalette(false);
         State.ToggleSpaceSwitcher(false);
     }

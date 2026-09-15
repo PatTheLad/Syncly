@@ -5,8 +5,12 @@
 @inject NavigationManager Nav
 @inject IJSRuntime Js
 
-<div class="graph-page @(_selectedId is not null || _showPages ? "has-inspector" : null) @(_expanded ? "inspector-expanded" : null)" @onkeydown="OnPageKeyDown">
-    <header class="graph-toolbar">
+<div class="graph-page @(_selectedId is not null || _showPages ? "has-inspector" : null) @(_expanded ? "inspector-expanded" : null)" @onkeydown="OnPageKeyDown"
+     @oncontextmenu="OnGraphContext"
+     @oncontextmenu:preventDefault="true">
+    <header class="graph-toolbar" @oncontextmenu:stopPropagation="true"
+            @oncontextmenu="OnGraphContext"
+            @oncontextmenu:preventDefault="true">
         <div class="graph-heading"><h1>Galaxy</h1><span>@(State.CurrentSpace?.DisplayTitle ?? "This space")</span></div>
         <div class="graph-scope" role="group" aria-label="Graph scope">
             <button type="button" aria-pressed="@(!_connections)" class="@(!_connections ? "active" : null)" @onclick="() => SetScopeAsync(false)">All</button>
@@ -95,9 +99,18 @@
     }
 </div>
 
+@if (_ctxMenu is not null)
+{
+    <ContextMenu Items="_ctxMenu.Items"
+                 Left="_ctxMenu.Left"
+                 Top="_ctxMenu.Top"
+                 OnClose="CloseCtxMenu" />
+}
+
 @code {
     private const string CanvasId = "galaxy-canvas";
     private sealed record ViewOptions(bool Labels, bool Recent);
+    private sealed record CtxMenuState(double Left, double Top, IReadOnlyList<ContextMenu.MenuItem> Items);
     [SupplyParameterFromQuery(Name = "focus")] public string? Focus { get; set; }
     private PageGraph _graph = new([], []);
     private Dictionary<string, GraphNode> _byId = new(StringComparer.Ordinal);
@@ -114,6 +127,7 @@
     private long _loadGeneration;
     private GraphPreview? _preview;
     private CancellationTokenSource? _previewCts;
+    private CtxMenuState? _ctxMenu;
     private GraphNode? SelectedNode => _selectedId is not null ? _byId.GetValueOrDefault(_selectedId) : null;
 
     protected override void OnInitialized()
@@ -351,19 +365,20 @@
     [JSInvokable] public Task OnOpen(string id) => InvokeAsync(() => OpenAsync(id));
     [JSInvokable] public Task OnFocusSearch() => CallAsync("focusElement", "graph-search");
     [JSInvokable] public Task OnEscape() => InvokeAsync(EscapeAsync);
-    [JSInvokable] public Task OnContext(string? id) => InvokeAsync(async () =>
+    [JSInvokable] public Task OnContext(string? id, double x, double y) => InvokeAsync(async () =>
     {
         if (_disposed) return;
-        if (id is null) { _settingsOpen = true; StateHasChanged(); return; }
-        await SelectAsync(id, false);
-        _actionsOpen = _expanded = true;
-        _focusElement = "graph-page-actions";
+        if (id is not null)
+            await SelectAsync(id, false);
+
+        OnGraphContextAt(x, y);
         StateHasChanged();
     });
 
     private async Task EscapeAsync()
     {
-        if (_dialog is not null) CloseDialog();
+        if (_ctxMenu is not null) { _ctxMenu = null; }
+        else if (_dialog is not null) CloseDialog();
         else if (_actionsOpen) _actionsOpen = false;
         else if (_settingsOpen) _settingsOpen = false;
         else if (_showPages && _selectedId is not null) { _showPages = false; _query = string.Empty; await ConfigureAsync(); }
@@ -375,6 +390,40 @@
     private void CloseDialog() { _dialog = null; _focusElement = "graph-page-actions"; }
     private Task OnDialogKeyDown(KeyboardEventArgs args) => args.Key == "Escape" ? EscapeAsync() : Task.CompletedTask;
     private Task OnRenameKeyDown(KeyboardEventArgs args) => args.Key == "Enter" ? CommitDialogAsync() : Task.CompletedTask;
+
+    private void OnGraphContext(MouseEventArgs e) => OnGraphContextAt(e.ClientX, e.ClientY);
+
+    private void OnGraphContextAt(double x, double y)
+    {
+        var items = new List<ContextMenu.MenuItem>
+        {
+            new("New page", () => NewPageAsync(null), "+"),
+            new("Fit graph", () => CanvasAsync("fit"), "⛶"),
+            new("Reset layout", () => CanvasAsync("reset"), "↺"),
+            new(_showPages ? "Hide pages" : "Show pages", () => { TogglePages(); return Task.CompletedTask; }, "☰"),
+        };
+
+        if (SelectedNode is { Missing: false } node)
+        {
+            items.InsertRange(0,
+            [
+                new("Open page", () => OpenAsync(node.Id), "↗"),
+                new("Rename", () => PageActionAsync("rename"), "✎"),
+                new("Duplicate", () => PageActionAsync("duplicate"), "⧉"),
+                new("New sub-page", () => PageActionAsync("child"), "+"),
+                new("Copy [[link]]", () => PageActionAsync("copy"), "⧉"),
+                new("Delete", () => PageActionAsync("delete"), "✕", Danger: true),
+            ]);
+        }
+
+        _ctxMenu = new(x, y, items);
+    }
+
+    private Task CloseCtxMenu()
+    {
+        _ctxMenu = null;
+        return Task.CompletedTask;
+    }
 
     private Task PageActionAsync(string action)
     {

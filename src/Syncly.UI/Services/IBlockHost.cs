@@ -33,6 +33,9 @@ public interface IBlockHost
 
     Task SlashAsync(string blockId);
 
+    /// <summary>Opens a compact right-click menu for this block at the pointer.</summary>
+    Task OpenBlockContextMenuAsync(string blockId, double clientX, double clientY);
+
     Task MenuKeyAsync(string key);
 
     Task EscapeAsync();

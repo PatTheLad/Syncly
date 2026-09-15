@@ -1,7 +1,9 @@
 @namespace Syncly.UI.Components
 @using Syncly.Model
 
-<div class="panel-section">
+<div class="panel-section"
+     @oncontextmenu="e => OpenPanelMenu(e, PanelMenuKind.Outline)"
+     @oncontextmenu:preventDefault="true">
     <h3>Outline</h3>
     @if (Outline.Count == 0)
     {
@@ -14,14 +16,19 @@
             <button type="button"
                     class="outline-item level-@((int)heading.Kind)"
                     @key="heading.Id"
-                    @onclick="() => OnHeading.InvokeAsync(heading.Id)">
+                    @onclick="() => OnHeading.InvokeAsync(heading.Id)"
+                    @oncontextmenu="e => OpenHeadingMenu(e, heading)"
+                    @oncontextmenu:preventDefault="true"
+                    @oncontextmenu:stopPropagation="true">
                 @heading.Text
             </button>
         }
     }
 </div>
 
-<div class="panel-section">
+<div class="panel-section"
+     @oncontextmenu="e => OpenPanelMenu(e, PanelMenuKind.Backlinks)"
+     @oncontextmenu:preventDefault="true">
     <h3>Backlinks</h3>
     @if (Backlinks.Count == 0)
     {
@@ -36,7 +43,10 @@
             <button type="button"
                     class="backlink"
                     @key="link.BlockId"
-                    @onclick="() => OnBacklink.InvokeAsync(link)">
+                    @onclick="() => OnBacklink.InvokeAsync(link)"
+                    @oncontextmenu="e => OpenBacklinkMenu(e, link)"
+                    @oncontextmenu:preventDefault="true"
+                    @oncontextmenu:stopPropagation="true">
                 <strong>@link.Title</strong>
                 <span>@link.Text</span>
             </button>
@@ -44,7 +54,21 @@
     }
 </div>
 
+@if (_menu is not null)
+{
+    <ContextMenu Items="_menu.Items"
+                 Left="_menu.Left"
+                 Top="_menu.Top"
+                 OnClose="CloseMenu" />
+}
+
 @code {
+    private enum PanelMenuKind { Outline, Backlinks }
+
+    private sealed record MenuState(double Left, double Top, IReadOnlyList<ContextMenu.MenuItem> Items);
+
+    private MenuState? _menu;
+
     [Parameter]
     public IReadOnlyList<BlockNode> Outline { get; set; } = [];
 
@@ -59,4 +83,46 @@
 
     [Parameter]
     public EventCallback<Backlink> OnBacklink { get; set; }
+
+    private void OpenPanelMenu(MouseEventArgs e, PanelMenuKind kind)
+    {
+        _menu = new(e.ClientX, e.ClientY, kind switch
+        {
+            PanelMenuKind.Outline when Outline.Count > 0 =>
+            [
+                new("Jump to first heading", () => OnHeading.InvokeAsync(Outline[0].Id), "↑"),
+            ],
+            PanelMenuKind.Backlinks when Backlinks.Count > 0 =>
+            [
+                new("Open first backlink", () => OnBacklink.InvokeAsync(Backlinks[0]), "↗"),
+            ],
+            _ =>
+            [
+                new(kind == PanelMenuKind.Outline ? "No headings yet" : "No backlinks yet",
+                    () => Task.CompletedTask, "·"),
+            ],
+        });
+    }
+
+    private void OpenHeadingMenu(MouseEventArgs e, BlockNode heading)
+    {
+        _menu = new(e.ClientX, e.ClientY,
+        [
+            new("Jump to heading", () => OnHeading.InvokeAsync(heading.Id), "↗"),
+        ]);
+    }
+
+    private void OpenBacklinkMenu(MouseEventArgs e, Backlink link)
+    {
+        _menu = new(e.ClientX, e.ClientY,
+        [
+            new("Open page", () => OnBacklink.InvokeAsync(link), "↗"),
+        ]);
+    }
+
+    private Task CloseMenu()
+    {
+        _menu = null;
+        return Task.CompletedTask;
+    }
 }

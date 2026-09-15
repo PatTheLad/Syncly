@@ -139,7 +139,7 @@ textarea {
   font-size: 13px;
   font-weight: 700;
   letter-spacing: -0.04em;
-  color: var(--accent-ink);
+  color: #1a140c;
   background: var(--accent);
   border-radius: 10px;
 }
@@ -473,24 +473,28 @@ textarea {
 
 .sidebar-foot {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
   gap: 8px;
   padding: 8px 12px;
   border-top: 1px solid var(--line);
+  min-height: 44px;
 }
 
-.sidebar-foot-detail {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
+.sidebar-foot-status {
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.sidebar-foot-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-  justify-content: flex-end;
+.sidebar-foot .update-chip {
+  flex: 0 1 auto;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ----------------------------------------------------------------- editor */

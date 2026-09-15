@@ -9,8 +9,12 @@
 @inject IFileAccess Files
 @inject NavigationManager Nav
 
-<div class="workspace">
-    <div class="topbar">
+<div class="workspace"
+     @oncontextmenu="e => OpenWorkspaceMenu(e)"
+     @oncontextmenu:preventDefault="true">
+    <div class="topbar" @oncontextmenu:stopPropagation="true"
+         @oncontextmenu="e => OpenPageMenu(e)"
+         @oncontextmenu:preventDefault="true">
         <div class="crumbs">
             @if (State.CanGoBack)
             {
@@ -65,7 +69,10 @@
             else
             {
                 <div id="syncly-editor-drop" class="editor-inner @(State.ReadingMode ? null : "can-drop")">
-                    <div class="page-heading">
+                    <div class="page-heading"
+                         @oncontextmenu="e => OpenPageMenu(e)"
+                         @oncontextmenu:preventDefault="true"
+                         @oncontextmenu:stopPropagation="true">
                         <button type="button"
                                 class="page-icon-btn @(_page.Icon is { Length: > 0 } ? null : "empty")"
                                 title="Page icon"
@@ -195,6 +202,14 @@
                  OnClose="ClosePageMenu" />
 }
 
+@if (_blockMenuId is not null)
+{
+    <ContextMenu Items="BlockMenuItems()"
+                 Left="_blockMenuLeft"
+                 Top="_blockMenuTop"
+                 OnClose="CloseBlockMenu" />
+}
+
 @code {
     private static readonly TimeSpan SaveDelay = TimeSpan.FromMilliseconds(350);
 
@@ -212,6 +227,9 @@
     private bool _pageMenuOpen;
     private double _pageMenuLeft;
     private double _pageMenuTop;
+    private string? _blockMenuId;
+    private double _blockMenuLeft;
+    private double _blockMenuTop;
     private string? _attachAfterBlockId;
     private string? _replaceBlockId;
     private string _saveHint = "Saved";
@@ -1026,6 +1044,23 @@
 
     private void OpenPageMenu(MouseEventArgs e)
     {
+        if (_page is null)
+            return;
+
+        _blockMenuId = null;
+        _pageMenuOpen = true;
+        _pageMenuLeft = e.ClientX;
+        _pageMenuTop = e.ClientY;
+    }
+
+    private void OpenWorkspaceMenu(MouseEventArgs e)
+    {
+        if (_page is not null)
+        {
+            OpenPageMenu(e);
+            return;
+        }
+
         _pageMenuOpen = true;
         _pageMenuLeft = e.ClientX;
         _pageMenuTop = e.ClientY;
@@ -1037,14 +1072,72 @@
         return Task.CompletedTask;
     }
 
-    private IReadOnlyList<ContextMenu.MenuItem> PageMenuItems() =>
-    [
-        new("New sub-page", NewSubPageAsync, "+"),
-        new("Show in galaxy", () => { ShowInGalaxy(); return Task.CompletedTask; }, "◎"),
-        new("Export .md", ExportMarkdownAsync, "↓"),
-        new("Print / PDF", PrintAsync, "⎙"),
-        new("Delete", DeletePageAsync, "✕", Danger: true),
-    ];
+    private Task CloseBlockMenu()
+    {
+        _blockMenuId = null;
+        return Task.CompletedTask;
+    }
+
+    public Task OpenBlockContextMenuAsync(string blockId, double clientX, double clientY)
+    {
+        if (State.ReadingMode)
+            return Task.CompletedTask;
+
+        _pageMenuOpen = false;
+        _blockMenuId = blockId;
+        _blockMenuLeft = clientX;
+        _blockMenuTop = clientY;
+        return Task.CompletedTask;
+    }
+
+    private IReadOnlyList<ContextMenu.MenuItem> PageMenuItems()
+    {
+        if (_page is null)
+        {
+            return
+            [
+                new("New page", CreateFirstPageAsync, "+"),
+                new("Switch space", () => { State.ToggleSpaceSwitcher(true); return Task.CompletedTask; }, "▣"),
+            ];
+        }
+
+        return
+        [
+            new(State.ReadingMode ? "Edit" : "Reading mode", () =>
+            {
+                State.ToggleReadingMode();
+                return Task.CompletedTask;
+            }, "👁"),
+            new("New sub-page", NewSubPageAsync, "+"),
+            new("Change icon", () => { _iconPickerOpen = true; return Task.CompletedTask; }, "◻"),
+            new("Show in galaxy", () => { ShowInGalaxy(); return Task.CompletedTask; }, "◎"),
+            new("Export .md", ExportMarkdownAsync, "↓"),
+            new("Print / PDF", PrintAsync, "⎙"),
+            new("Delete page", DeletePageAsync, "✕", Danger: true),
+        ];
+    }
+
+    private IReadOnlyList<ContextMenu.MenuItem> BlockMenuItems()
+    {
+        var blockId = _blockMenuId;
+        if (blockId is null)
+            return [];
+
+        return
+        [
+            new("Turn into…", () => SlashAsync(blockId), "/"),
+            new("Indent", () => IndentAsync(blockId, true), "→"),
+            new("Outdent", () => IndentAsync(blockId, false), "←"),
+            new("Move up", () => MoveAsync(blockId, true), "↑"),
+            new("Move down", () => MoveAsync(blockId, false), "↓"),
+            new("Attach file after", async () =>
+            {
+                await PrepareAttachAfterAsync(blockId);
+                await TriggerAttachAsync();
+            }, "📎"),
+            new("Delete block", () => DeleteFromMenuAsync(blockId), "✕", Danger: true),
+        ];
+    }
 
     private async Task ExportMarkdownAsync()
     {
