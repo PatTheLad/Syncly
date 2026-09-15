@@ -134,6 +134,21 @@ jobs:
           Description: Syncly desktop app
            Syncly is a local-first, end-to-end encrypted notes and sync app.
           CONTROL
+          # Without these, GNOME/KDE keep showing a stale/missing icon after install or upgrade
+          # until the user manually clears their icon cache.
+          cat > "$pkgdir/DEBIAN/postinst" <<'POSTINST'
+          #!/bin/sh
+          set -e
+          if [ -x /usr/bin/gtk-update-icon-cache ] || [ -x /usr/bin/gtk-update-icon-cache-3.0 ]; then
+            gtk-update-icon-cache -f -q /usr/share/icons/hicolor 2>/dev/null || true
+          fi
+          if [ -x /usr/bin/update-desktop-database ]; then
+            update-desktop-database -q /usr/share/applications 2>/dev/null || true
+          fi
+          exit 0
+          POSTINST
+          cp "$pkgdir/DEBIAN/postinst" "$pkgdir/DEBIAN/postrm"
+          chmod 755 "$pkgdir/DEBIAN/postinst" "$pkgdir/DEBIAN/postrm"
           dpkg-deb --build --root-owner-group "$pkgdir" "dist/linux/Syncly-${VERSION}-linux-x64.deb"
       - uses: actions/upload-artifact@v6
         with:
