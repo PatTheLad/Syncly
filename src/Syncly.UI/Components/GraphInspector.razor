@@ -1,0 +1,114 @@
+@namespace Syncly.UI.Components
+
+<aside class="graph-inspector" aria-label="@(Node is null ? "Pages" : "Selected note")">
+    <header class="graph-inspector-header">
+        <div class="graph-inspector-title">
+            @if (Node is { } node)
+            {
+                <span class="graph-note-icon @(node.Missing ? "missing" : null)">@(node.Missing ? "?" : string.IsNullOrWhiteSpace(node.Icon) ? Initial(node.Title) : node.Icon)</span>
+                <div><span class="graph-eyebrow">@(node.Missing ? "Unresolved link" : "Selected note")</span><h2>@node.Title</h2></div>
+            }
+            else
+            {
+                <div><span class="graph-eyebrow">@(string.IsNullOrWhiteSpace(Query) ? "In this view" : "Search results")</span><h2>Pages <span class="graph-count">@Pages.Count</span></h2></div>
+            }
+        </div>
+        <div class="graph-inspector-controls">
+            <button type="button" class="graph-tool graph-expand" title="@(Expanded ? "Collapse details" : "Expand details")" aria-label="@(Expanded ? "Collapse details" : "Expand details")" aria-expanded="@Expanded" @onclick="OnExpand"><span class="graph-icon @(Expanded ? "icon-chevron-down" : "icon-chevron-up")" aria-hidden="true"></span></button>
+            <button type="button" class="graph-tool" title="Close inspector" aria-label="Close inspector" @onclick="OnClose"><span class="graph-icon icon-x" aria-hidden="true"></span></button>
+        </div>
+    </header>
+    @if (Node is { } selected)
+    {
+        <div class="graph-inspector-primary">
+            <button type="button" class="graph-primary" disabled="@Busy" @onclick="() => OnOpen.InvokeAsync(selected.Id)"><span>@(selected.Missing ? "Create page" : "Open page")</span><span class="graph-icon icon-arrow-up-right" aria-hidden="true"></span></button>
+            <div class="graph-page-actions">
+                <button type="button" id="graph-page-actions" class="graph-tool" title="Page actions" aria-label="Page actions" aria-expanded="@ActionsOpen" @onclick="OnToggleActions"><span class="graph-icon icon-ellipsis" aria-hidden="true"></span></button>
+                @if (ActionsOpen)
+                {
+                <div>
+                    <button type="button" disabled="@Busy" @onclick='() => OnAction.InvokeAsync("copy")'><span class="graph-icon icon-copy" aria-hidden="true"></span>Copy link</button>
+                    @if (!selected.Missing)
+                    {
+                        <button type="button" disabled="@Busy" @onclick='() => OnAction.InvokeAsync("child")'><span class="graph-icon icon-file-plus" aria-hidden="true"></span>New subpage</button>
+                        <button type="button" disabled="@Busy" @onclick='() => OnAction.InvokeAsync("rename")'><span class="graph-icon icon-pencil" aria-hidden="true"></span>Rename</button>
+                        <button type="button" disabled="@Busy" @onclick='() => OnAction.InvokeAsync("duplicate")'><span class="graph-icon icon-copy" aria-hidden="true"></span>Duplicate</button>
+                        <button type="button" class="danger" disabled="@Busy" @onclick='() => OnAction.InvokeAsync("delete")'><span class="graph-icon icon-trash-2" aria-hidden="true"></span>Move to trash</button>
+                    }
+                </div>
+                }
+            </div>
+        </div>
+    }
+    <div class="graph-inspector-scroll">
+        @if (Node is null)
+        {
+            @if (Pages.Count == 0) { <p class="graph-muted">No matching notes.</p> }
+            <ul class="graph-note-list" aria-label="Notes">
+                @for (var index = 0; index < Pages.Count; index++)
+                {
+                    var note = Pages[index];
+                    <li @key="note.Id"><button id="@($"graph-result-{index}")" type="button" @onclick="() => OnSelect.InvokeAsync(note.Id)"><span class="graph-list-mark @(note.Missing ? "missing" : null)" aria-hidden="true"></span><span>@note.Title</span><small>@(note.Missing ? "Unresolved" : (note.Inbound + note.Outbound).ToString())</small></button></li>
+                }
+            </ul>
+        }
+        else
+        {
+            @if (Loading) { <p class="graph-muted" role="status">Loading preview...</p> }
+            else if (Error is not null) { <p class="graph-muted" role="alert">@Error</p><button class="graph-command" @onclick="OnRetry">Retry preview</button> }
+            else if (Node.Missing) { <p class="graph-muted">This page has not been created.</p> }
+            else if (Preview is { } preview)
+            {
+                @if (preview.Path.Count > 0) { <p class="graph-note-path">@string.Join(" / ", preview.Path)</p> }
+                <div class="graph-excerpt">
+                    @if (preview.Lines.Count == 0) { <p class="graph-muted">No content yet.</p> }
+                    @foreach (var line in preview.Lines) { <p>@line</p> }
+                </div>
+                <p class="graph-note-meta">Updated @preview.UpdatedAt.ToLocalTime().ToString("dd MMM yyyy")<span>@preview.ChildCount subpages</span></p>
+            }
+            <section class="graph-connection-section">
+                <h3>Links to <span>@Outgoing.Count</span></h3>
+                @if (Outgoing.Count == 0) { <p class="graph-muted">No outgoing links.</p> }
+                <ul class="graph-note-list" aria-label="Outgoing links">
+                    @foreach (var linked in Outgoing)
+                    {
+                        <li @key="linked.Id"><button type="button" @onclick="() => OnSelect.InvokeAsync(linked.Id)"><span class="graph-list-mark @(linked.Missing ? "missing" : null)" aria-hidden="true"></span><span>@linked.Title</span><span class="graph-icon icon-arrow-up-right" aria-hidden="true"></span></button></li>
+                    }
+                </ul>
+            </section>
+            <section class="graph-connection-section">
+                <h3>Linked from <span>@Incoming.Count</span></h3>
+                @if (Incoming.Count == 0) { <p class="graph-muted">No incoming links.</p> }
+                <ul class="graph-note-list" aria-label="Incoming links">
+                    @foreach (var linked in Incoming)
+                    {
+                        <li @key="linked.Id"><button type="button" @onclick="() => OnSelect.InvokeAsync(linked.Id)"><span class="graph-list-mark" aria-hidden="true"></span><span>@linked.Title</span><span class="graph-icon icon-arrow-up-right" aria-hidden="true"></span></button></li>
+                    }
+                </ul>
+            </section>
+        }
+    </div>
+    <span class="graph-sr-only" aria-live="polite">@(Node is null ? $"{Pages.Count} notes" : $"Selected {Node.Title}. {Incoming.Count} incoming and {Outgoing.Count} outgoing links.")</span>
+</aside>
+
+@code {
+    [Parameter] public GraphNode? Node { get; set; }
+    [Parameter] public GraphPreview? Preview { get; set; }
+    [Parameter] public IReadOnlyList<GraphNode> Pages { get; set; } = [];
+    [Parameter] public IReadOnlyList<GraphNode> Incoming { get; set; } = [];
+    [Parameter] public IReadOnlyList<GraphNode> Outgoing { get; set; } = [];
+    [Parameter] public bool Loading { get; set; }
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public bool Expanded { get; set; }
+    [Parameter] public bool ActionsOpen { get; set; }
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public string Query { get; set; } = string.Empty;
+    [Parameter] public EventCallback<string> OnSelect { get; set; }
+    [Parameter] public EventCallback<string> OnOpen { get; set; }
+    [Parameter] public EventCallback<string> OnAction { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback OnExpand { get; set; }
+    [Parameter] public EventCallback OnToggleActions { get; set; }
+    [Parameter] public EventCallback OnRetry { get; set; }
+    private static string Initial(string title) => string.IsNullOrWhiteSpace(title) ? "?" : title.Trim()[..1].ToUpperInvariant();
+}

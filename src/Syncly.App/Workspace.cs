@@ -812,19 +812,13 @@ public sealed class Workspace(
                 if (!seen.Add(page.Id))
                     continue;
 
-                var body = GraphLayout.BodyFor(depth);
                 nodes.Add(new GraphNode(
                     page.Id,
                     page.DisplayTitle,
                     page.Icon,
-                    0,
-                    0,
-                    false,
                     false,
                     depth,
-                    GraphLayout.SizeFor(body),
                     parentId,
-                    body,
                     page.CreatedAt,
                     page.UpdatedAt));
                 Walk(page.Id, depth + 1);
@@ -840,20 +834,14 @@ public sealed class Workspace(
 
             var parentId = page.ParentId is { } pid && byId.ContainsKey(pid) ? pid : null;
             var depth = 0;
-            var body = GraphLayout.BodyFor(depth);
             seen.Add(page.Id);
             nodes.Add(new GraphNode(
                 page.Id,
                 page.DisplayTitle,
                 page.Icon,
-                0,
-                0,
-                false,
                 false,
                 depth,
-                GraphLayout.SizeFor(body),
                 parentId,
-                body,
                 page.CreatedAt,
                 page.UpdatedAt));
             Walk(page.Id, 1);
@@ -879,20 +867,11 @@ public sealed class Workspace(
                 var missingId = "missing:" + link.TargetKey;
                 if (missing.Add(missingId))
                 {
-                    var sourceDepth = nodes.FirstOrDefault(n => n.Id == link.SourceId)?.Depth ?? 0;
-                    var body = GraphBodyKind.Dust;
                     nodes.Add(new GraphNode(
                         missingId,
                         link.TargetKey,
                         null,
-                        0,
-                        0,
-                        false,
-                        true,
-                        sourceDepth + 1,
-                        GraphLayout.SizeFor(body),
-                        link.SourceId,
-                        body));
+                        true));
                 }
 
                 targetId = missingId;
@@ -904,7 +883,6 @@ public sealed class Workspace(
             edges.Add((link.SourceId, targetId));
         }
 
-        // Link degree per body drives the "links" lens and the preview badge.
         var inbound = new Dictionary<string, int>(StringComparer.Ordinal);
         var outbound = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var (from, to) in edges)
@@ -922,10 +900,9 @@ public sealed class Workspace(
                 nodes[i] = node with { Inbound = inCount, Outbound = outCount };
         }
 
-        return GraphLayout.Arrange(nodes, [.. edges.Select(e => new GraphEdge(e.From, e.To))]);
+        return new PageGraph(nodes, [.. edges.Select(e => new GraphEdge(e.From, e.To))]);
     }
 
-    /// <summary>Hover card for the galaxy: breadcrumb, first lines of text, and how connected it is.</summary>
     public async Task<GraphPreview?> PreviewAsync(string pageId, int maxLines = 4, CancellationToken ct = default)
     {
         var page = Page(pageId);
@@ -935,7 +912,6 @@ public sealed class Workspace(
         var snapshot = Open(pageId);
         var path = new List<string>();
         var cursor = page.ParentId;
-        var depth = 0;
         var guard = 0;
         while (cursor is { Length: > 0 } && guard++ < 64)
         {
@@ -944,7 +920,6 @@ public sealed class Workspace(
                 break;
             path.Insert(0, parent.DisplayTitle);
             cursor = parent.ParentId;
-            depth++;
         }
 
         var lines = snapshot.Flatten()
@@ -967,8 +942,7 @@ public sealed class Workspace(
             lines,
             ChildrenOf(pageId, page.SpaceId ?? DefaultSpaceId).Count,
             backlinks.Count + outgoing,
-            snapshot.UpdatedAt,
-            GraphLayout.BodyFor(depth));
+            snapshot.UpdatedAt);
     }
 
     /// <summary>

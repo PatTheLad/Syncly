@@ -4,1166 +4,467 @@
 @inject EditorState State
 @inject NavigationManager Nav
 @inject IJSRuntime Js
-@using System.Globalization
 
-<div class="galaxy-page">
-    <canvas id="@CanvasId"
-            class="galaxy-canvas"
-            tabindex="0"
-            role="application"
-            aria-label="Page galaxy. Drag to pan, scroll to zoom, click to select, Enter to open, double-click to fly in."></canvas>
-
-    <header class="galaxy-hud">
-        <div class="galaxy-hud-copy">
-            <h1 class="galaxy-title">Galaxy</h1>
-            <p class="galaxy-sub">
-                @(State.CurrentSpace?.DisplayTitle ?? "This space")
-                <span class="galaxy-dot">·</span>
-                @Plural(_graph.Nodes.Count(n => !n.Missing), "world")
-                @if (_graph.Edges.Count > 0)
-                {
-                    <span class="galaxy-dot">·</span>
-                    @Plural(_graph.Edges.Count, "link")
-                }
-            </p>
-            @if (_trail.Count > 0)
-            {
-                <nav class="galaxy-trail" aria-label="Where you are">
-                    <button type="button" class="galaxy-trail-chip" @onclick="FitAsync">@(State.CurrentSpace?.DisplayTitle ?? "Space")</button>
-                    @foreach (var crumb in _trail)
-                    {
-                        <span class="galaxy-trail-sep">›</span>
-                        <button type="button"
-                                class="galaxy-trail-chip kind-@crumb.Body.ToString().ToLowerInvariant()"
-                                @onclick="() => FlyToAsync(crumb.Id)">@Label(crumb)</button>
-                    }
-                </nav>
-            }
+<div class="graph-page @(_selectedId is not null || _showPages ? "has-inspector" : null) @(_expanded ? "inspector-expanded" : null)" @onkeydown="OnPageKeyDown">
+    <header class="graph-toolbar">
+        <div class="graph-heading"><h1>Galaxy</h1><span>@(State.CurrentSpace?.DisplayTitle ?? "This space")</span></div>
+        <div class="graph-scope" role="group" aria-label="Graph scope">
+            <button type="button" aria-pressed="@(!_connections)" class="@(!_connections ? "active" : null)" @onclick="() => SetScopeAsync(false)">All</button>
+            <button type="button" aria-pressed="@_connections" class="@(_connections ? "active" : null)" disabled="@(_selectedId is null)" @onclick="() => SetScopeAsync(true)">Connections</button>
         </div>
-
-        <div class="galaxy-tools">
-            <label class="galaxy-search @(_query.Length > 0 ? "active" : null)">
-                <span class="galaxy-search-icon" aria-hidden="true">⌕</span>
-                <input id="@SearchId"
-                       placeholder="Find a world"
-                       value="@_query"
-                       aria-label="Find a page in the galaxy"
-                       @oninput="OnQueryInput"
-                       @onkeydown="OnQueryKeyDown" />
-                @if (_query.Length > 0)
-                {
-                    <span class="galaxy-search-hits">@(_hitCount == 0 ? "none" : _hitCount.ToString(CultureInfo.InvariantCulture))</span>
-                    <button type="button" class="galaxy-search-clear" title="Clear" @onclick="ClearQueryAsync">×</button>
-                }
-            </label>
-
-            <div class="galaxy-lens" role="radiogroup" aria-label="Lens">
-                @foreach (var lens in Lenses)
-                {
-                    <button type="button"
-                            class="galaxy-lens-btn @(_lens == lens.Key ? "on" : null)"
-                            role="radio"
-                            aria-checked="@(_lens == lens.Key ? "true" : "false")"
-                            title="@lens.Hint"
-                            @onclick="() => SetLensAsync(lens.Key)">@lens.Label</button>
-                }
-            </div>
-
-            <button type="button" class="galaxy-btn" title="Fit everything (Home)" @onclick="FitAsync">⤢</button>
-            <button type="button"
-                    class="galaxy-btn"
-                    title="@(State.CurrentPageId is null ? "No page open" : "Fly to the open page")"
-                    disabled="@(State.CurrentPageId is null || !_nodeIds.Contains(State.CurrentPageId))"
-                    @onclick="LocateAsync">◎</button>
-            <button type="button"
-                    class="galaxy-btn @(_opt.Motion ? "on" : null)"
-                    title="@(_opt.Motion ? "Pause motion" : "Resume motion")"
-                    aria-pressed="@(_opt.Motion ? "true" : "false")"
-                    @onclick="ToggleMotionAsync">@(_opt.Motion ? "❚❚" : "▶")</button>
-            <div class="galaxy-pop-anchor">
-                <button type="button"
-                        class="galaxy-btn @(_settingsOpen ? "on" : null)"
-                        title="Galaxy settings"
-                        aria-expanded="@(_settingsOpen ? "true" : "false")"
-                        @onclick="() => _settingsOpen = !_settingsOpen">⚙</button>
-                @if (_settingsOpen)
-                {
-                    <div class="galaxy-pop" role="dialog" aria-label="Galaxy settings">
-                        <div class="galaxy-pop-row">
-                            <span>Motion</span>
-                            <button type="button" class="galaxy-switch @(_opt.Motion ? "on" : null)" role="switch" aria-checked="@(_opt.Motion ? "true" : "false")" @onclick="ToggleMotionAsync"><span></span></button>
-                        </div>
-                        <div class="galaxy-pop-row">
-                            <span>Effects <small>bloom, particles, belts</small></span>
-                            <button type="button" class="galaxy-switch @(_opt.Effects ? "on" : null)" role="switch" aria-checked="@(_opt.Effects ? "true" : "false")" @onclick="() => SetOptionAsync(o => o with { Effects = !o.Effects })"><span></span></button>
-                        </div>
-                        <div class="galaxy-pop-row">
-                            <span>Hover sound</span>
-                            <button type="button" class="galaxy-switch @(_opt.Sound ? "on" : null)" role="switch" aria-checked="@(_opt.Sound ? "true" : "false")" @onclick="() => SetOptionAsync(o => o with { Sound = !o.Sound })"><span></span></button>
-                        </div>
-                        <div class="galaxy-pop-row">
-                            <span>Labels</span>
-                            <div class="galaxy-seg">
-                                <button type="button" class="@(_opt.Labels == "auto" ? "on" : null)" @onclick="() => SetLabelsAsync(LabelsAuto)">Auto</button>
-                                <button type="button" class="@(_opt.Labels == "all" ? "on" : null)" @onclick="() => SetLabelsAsync(LabelsAll)">All</button>
-                                <button type="button" class="@(_opt.Labels == "min" ? "on" : null)" @onclick="() => SetLabelsAsync(LabelsMin)">Minimal</button>
-                            </div>
-                        </div>
-                        <div class="galaxy-pop-row">
-                            <span>Starfield</span>
-                            <div class="galaxy-seg">
-                                <button type="button" class="@(_opt.Density < 0.75 ? "on" : null)" @onclick="() => SetOptionAsync(o => o with { Density = 0.5 })">Sparse</button>
-                                <button type="button" class="@(_opt.Density is >= 0.75 and < 1.25 ? "on" : null)" @onclick="() => SetOptionAsync(o => o with { Density = 1 })">Normal</button>
-                                <button type="button" class="@(_opt.Density >= 1.25 ? "on" : null)" @onclick="() => SetOptionAsync(o => o with { Density = 1.5 })">Dense</button>
-                            </div>
-                        </div>
-                        <div class="galaxy-pop-keys">
-                            <span><kbd>Click</kbd> select</span>
-                            <span><kbd>Enter</kbd> open</span>
-                            <span><kbd>F</kbd> fly</span>
-                            <span><kbd>Tab</kbd> siblings</span>
-                            <span><kbd>↑↓←→</kbd> neighbours</span>
-                            <span><kbd>/</kbd> search</span>
-                            <span><kbd>Home</kbd> fit</span>
-                        </div>
-                    </div>
-                }
-            </div>
+        <label class="graph-search">
+            <span class="graph-icon icon-search" aria-hidden="true"></span>
+            <input id="graph-search" type="search" placeholder="Find a note" aria-label="Find a note" value="@_query" @oninput="OnQueryAsync" @onkeydown="OnSearchKeyDown" />
+        </label>
+        <div class="graph-toolbar-actions">
+            <button class="graph-tool" type="button" title="Pages" aria-label="Pages" aria-pressed="@_showPages" @onclick="TogglePages"><span class="graph-icon icon-list" aria-hidden="true"></span></button>
+            <button class="graph-tool" type="button" title="New page" aria-label="New page" disabled="@_busy" @onclick="() => NewPageAsync(null)"><span class="graph-icon icon-file-plus" aria-hidden="true"></span></button>
+            <button class="graph-tool" type="button" title="Graph settings" aria-label="Graph settings" aria-expanded="@_settingsOpen" @onclick="() => _settingsOpen = !_settingsOpen"><span class="graph-icon icon-sliders-horizontal" aria-hidden="true"></span></button>
         </div>
     </header>
-
-    @if (_legend.Count > 0)
-    {
-        <div class="galaxy-bottom">
-            <nav class="galaxy-legend" aria-label="Body types">
-                @foreach (var entry in _legend)
-                {
-                    var hidden = _hidden.Contains(entry.Body);
-                    <button type="button"
-                            class="galaxy-chip kind-@entry.Key @(hidden ? "off" : null)"
-                            title="@(hidden ? "Show" : "Hide") @entry.Label.ToLowerInvariant()"
-                            aria-pressed="@(hidden ? "false" : "true")"
-                            @onclick="() => ToggleKindAsync(entry.Body)">
-                        <span class="galaxy-chip-dot" aria-hidden="true"></span>
-                        <span class="galaxy-chip-label">@entry.Label</span>
-                        <span class="galaxy-chip-count">@entry.Count</span>
-                    </button>
-                }
-                @if (_timeMax > _timeMin)
-                {
-                    <button type="button"
-                            class="galaxy-chip time @(_timelapse ? "on" : null)"
-                            title="@(_timelapse ? "Close time-lapse" : "Watch pages appear over time")"
-                            aria-pressed="@(_timelapse ? "true" : "false")"
-                            @onclick="ToggleTimelapseAsync">
-                        <span class="galaxy-chip-dot" aria-hidden="true"></span>
-                        <span class="galaxy-chip-label">Time-lapse</span>
-                    </button>
-                }
-            </nav>
-
-            @if (_timelapse)
+    <div class="graph-workspace">
+    <div class="graph-stage">
+        <canvas id="@CanvasId" class="graph-canvas" tabindex="0" aria-label="Note connections. Arrow keys select, Enter opens, Home fits, plus and minus zoom."></canvas>
+        <div class="graph-status" aria-live="polite">
+            @if (_loaded)
             {
-                <div class="galaxy-time" role="group" aria-label="Time-lapse">
-                    <button type="button" class="galaxy-btn small" title="@(_playing ? "Pause" : "Play")" @onclick="TogglePlayAsync">@(_playing ? "❚❚" : "▶")</button>
-                    <input type="range"
-                           min="0"
-                           max="1000"
-                           value="@_timeValue"
-                           aria-label="Point in time"
-                           @oninput="OnTimeInput" />
-                    <span class="galaxy-time-label">@TimeLabel()</span>
-                    <span class="galaxy-time-count">@Plural(BornCount(), "world")</span>
-                </div>
+                <span>@_graph.Nodes.Count(node => !node.Missing) notes</span><span class="graph-status-dot"></span><span>@_graph.Edges.Count links</span>
+                @if (_filter != "all") { <span class="graph-status-filter">@(_filter == "unlinked" ? "Unlinked" : "Unresolved")</span> }
             }
         </div>
-    }
-
-    <div class="galaxy-hint" aria-hidden="true">Drag to pan · Scroll to zoom · Click to select · Enter to open · Right-click for more</div>
-
-    @if (_loaded && _graph.Nodes.Count == 0)
-    {
-        <div class="galaxy-empty">
-            <div class="galaxy-empty-orbit" aria-hidden="true"><span></span></div>
-            <h2>Quiet space</h2>
-            <p>Create a page, then nest another beneath it to light your first star.</p>
+        <div class="graph-camera" role="group" aria-label="Graph camera">
+            <button type="button" class="graph-tool" title="Zoom in" aria-label="Zoom in" @onclick='() => CanvasAsync("zoom", 1.25)'><span class="graph-icon icon-plus" aria-hidden="true"></span></button>
+            <button type="button" class="graph-tool" title="Zoom out" aria-label="Zoom out" @onclick='() => CanvasAsync("zoom", 0.8)'><span class="graph-icon icon-minus" aria-hidden="true"></span></button>
+            <span class="graph-tool-divider"></span>
+            <button type="button" class="graph-tool" title="Fit graph" aria-label="Fit graph" @onclick='() => CanvasAsync("fit")'><span class="graph-icon icon-maximize" aria-hidden="true"></span></button>
+            <button type="button" class="graph-tool" title="Locate open page" aria-label="Locate open page" disabled="@(State.CurrentPageId is null || !_byId.ContainsKey(State.CurrentPageId))" @onclick="LocateAsync"><span class="graph-icon icon-locate-fixed" aria-hidden="true"></span></button>
         </div>
-    }
-
-    @if (_preview is { } preview)
+        @if (_settingsOpen)
+        {
+            <section class="graph-settings" aria-label="Graph settings">
+                <header><h2>View</h2><button type="button" class="graph-tool" title="Close settings" aria-label="Close settings" @onclick="() => _settingsOpen = false"><span class="graph-icon icon-x" aria-hidden="true"></span></button></header>
+                <label><span>Notes</span><select aria-label="Filter notes" value="@_filter" @onchange="OnFilterAsync"><option value="all">All notes</option><option value="unlinked">Unlinked</option><option value="unresolved">Unresolved</option></select></label>
+                <label><span>Labels</span><input type="checkbox" checked="@_labels" @onchange="ToggleLabelsAsync" /></label>
+                <label><span>Recent edits</span><input type="checkbox" checked="@_recent" @onchange="ToggleRecentAsync" /></label>
+                <button type="button" class="graph-command" @onclick='() => CanvasAsync("reset")'><span class="graph-icon icon-rotate-ccw" aria-hidden="true"></span>Reset layout</button>
+            </section>
+        }
+        @if (_loadError is not null || _rendererError is not null)
+        {
+            <div class="graph-state" role="alert"><h2>Graph unavailable</h2><p>@(_loadError ?? _rendererError)</p><button class="graph-primary" @onclick="RetryAsync">Retry</button><button class="graph-command" @onclick="TogglePages">Pages</button></div>
+        }
+        else if (!_loaded)
+        {
+            <div class="graph-state" role="status"><span class="graph-loading-mark"></span><p>Loading notes...</p></div>
+        }
+        else if (_graph.Nodes.Count == 0)
+        {
+            <div class="graph-state"><span class="graph-empty-mark" aria-hidden="true"></span><h2>No notes yet</h2><button class="graph-primary" disabled="@_busy" @onclick="() => NewPageAsync(null)">Create page</button></div>
+        }
+        else if (_filter != "all" && !FilteredNodes().Any())
+        {
+            <div class="graph-state"><h2>No @(_filter == "unlinked" ? "unlinked notes" : "unresolved links")</h2><button class="graph-command" @onclick="ClearFilterAsync">Show all notes</button></div>
+        }
+    </div>
+    @if (_selectedId is not null || _showPages)
     {
-        <article class="galaxy-preview @(_previewVisible ? "show" : null) @(_pinned && preview.Id == _selectedId ? "pinned" : null) @(_cardX is null ? "docked" : null)"
-                 style="@PreviewStyle"
-                 @onmouseenter="HoldPreview"
-                 @onmouseleave="ReleasePreview"
-                 @onclick="() => OpenIdAsync(preview.Id)">
-            <header class="galaxy-preview-head">
-                <span class="galaxy-preview-icon kind-@preview.Body.ToString().ToLowerInvariant()">@(preview.Icon is { Length: > 0 } icon ? icon : Initial(preview.Title))</span>
-                <div class="galaxy-preview-copy">
-                    <h3>@preview.Title</h3>
-                    <div class="galaxy-preview-path">
-                        @if (preview.Path.Count == 0)
-                        {
-                            <span>@State.CurrentSpace?.DisplayTitle</span>
-                        }
-                        else
-                        {
-                            @for (var i = 0; i < preview.Path.Count; i++)
-                            {
-                                if (i > 0)
-                                {
-                                    <span class="galaxy-preview-sep">›</span>
-                                }
-                                <span>@preview.Path[i]</span>
-                            }
-                        }
-                    </div>
-                </div>
-                <span class="galaxy-preview-kind">@KindLabel(preview.Body)</span>
-            </header>
-
-            @if (preview.Lines.Count > 0)
-            {
-                <div class="galaxy-preview-body">
-                    @foreach (var line in preview.Lines)
-                    {
-                        <p>@line</p>
-                    }
-                </div>
-            }
-            else
-            {
-                <div class="galaxy-preview-body empty">Nothing written here yet.</div>
-            }
-
-            <footer class="galaxy-preview-foot">
-                <span>@Plural(preview.ChildCount, "subpage")</span>
-                <span class="galaxy-dot">·</span>
-                <span>@Plural(preview.LinkCount, "link")</span>
-                <span class="galaxy-dot">·</span>
-                <span>@Relative(preview.UpdatedAt)</span>
-                @if (_pinned && preview.Id == _selectedId)
-                {
-                    <button type="button" class="galaxy-preview-open" @onclick="() => OpenIdAsync(preview.Id)" @onclick:stopPropagation="true">Open <kbd>↵</kbd></button>
-                }
-                else
-                {
-                    <span class="galaxy-preview-cta">Click to select</span>
-                }
-            </footer>
-        </article>
+        <GraphInspector Node="@(_showPages ? null : SelectedNode)" Preview="@_preview" Pages="@_results"
+                        Incoming="@ConnectionsTo(true)" Outgoing="@ConnectionsTo(false)" Loading="@_previewLoading"
+                        Error="@_previewError" Busy="@_busy" Expanded="@_expanded" ActionsOpen="@_actionsOpen"
+                        Query="@_query" OnSelect="SelectResultAsync" OnOpen="OpenAsync" OnClose="CloseInspectorAsync"
+                        OnExpand="ToggleExpanded" OnAction="PageActionAsync" OnToggleActions="() => _actionsOpen = !_actionsOpen" OnRetry="LoadPreviewAsync" />
     }
-    else if (_missingPreview is { } missing)
+    </div>
+    @if (_notice is not null)
     {
-        <article class="galaxy-preview missing @(_previewVisible ? "show" : null) @(_pinned && missing.Id == _selectedId ? "pinned" : null) @(_cardX is null ? "docked" : null)"
-                 style="@PreviewStyle"
-                 @onmouseenter="HoldPreview"
-                 @onmouseleave="ReleasePreview"
-                 @onclick="() => OpenIdAsync(missing.Id)">
-            <header class="galaxy-preview-head">
-                <span class="galaxy-preview-icon kind-dust">?</span>
-                <div class="galaxy-preview-copy">
-                    <h3>@missing.Title</h3>
-                    <div class="galaxy-preview-path">Unresolved link</div>
-                </div>
-            </header>
-            <div class="galaxy-preview-body empty">Something links here, but the page does not exist yet.</div>
-            <footer class="galaxy-preview-foot"><span class="galaxy-preview-cta">Create page ↵</span></footer>
-        </article>
+        <div class="graph-notice" role="status"><span>@_notice</span><button class="graph-tool" aria-label="Dismiss" title="Dismiss" @onclick="() => _notice = null"><span class="graph-icon icon-x" aria-hidden="true"></span></button></div>
     }
-
-    @if (_menu is { } menu)
+    @if (_dialog is not null && SelectedNode is { } dialogNode)
     {
-        <div class="galaxy-menu-backdrop" @onclick="CloseMenu" @oncontextmenu="CloseMenu" @oncontextmenu:preventDefault="true"></div>
-        <div class="galaxy-menu" role="menu" style="@MenuStyle" @onkeydown="OnMenuKeyDown">
-            @if (menu.Node is { } node)
-            {
-                <div class="galaxy-menu-head">
-                    <span class="galaxy-menu-icon kind-@node.Body.ToString().ToLowerInvariant()">@(node.Icon is { Length: > 0 } micon ? micon : Initial(node.Title))</span>
-                    <span class="galaxy-menu-title">@node.Title</span>
-                </div>
-                @if (_renaming)
+        <div class="graph-dialog-backdrop" @onclick="CloseDialog">
+            <section class="graph-dialog" role="dialog" aria-modal="true" aria-labelledby="graph-dialog-title" @onclick:stopPropagation="true" @onkeydown="OnDialogKeyDown" @onkeydown:stopPropagation="true">
+                <h2 id="graph-dialog-title">@(_dialog == "rename" ? "Rename page" : "Move to trash?")</h2>
+                @if (_dialog == "rename")
                 {
-                    <input class="galaxy-menu-rename"
-                           id="@RenameId"
-                           value="@_renameText"
-                           aria-label="New title"
-                           @oninput="e => _renameText = e.Value?.ToString() ?? string.Empty"
-                           @onkeydown="OnRenameKeyDown"
-                           @onclick:stopPropagation="true" />
-                    <div class="galaxy-menu-actions">
-                        <button type="button" class="galaxy-menu-item" @onclick="CommitRenameAsync">Save</button>
-                        <button type="button" class="galaxy-menu-item muted" @onclick="() => _renaming = false">Cancel</button>
-                    </div>
+                    <input id="graph-dialog-input" aria-label="Page title" @bind="_renameText" @bind:event="oninput" @onkeydown="OnRenameKeyDown" />
                 }
-                else if (node.Missing)
-                {
-                    <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => OpenIdAsync(node.Id)">Create page</button>
-                    <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => CopyLinkAsync(node.Title)">Copy [[link]]</button>
-                }
-                else
-                {
-                    <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => OpenIdAsync(node.Id)">Open <kbd>↵</kbd></button>
-                    <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => MenuFlyAsync(node.Id)">Fly to <kbd>F</kbd></button>
-                    <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => NewSubpageAsync(node.Id)">New subpage</button>
-                    <div class="galaxy-menu-sep"></div>
-                    <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => StartRenameAsync(node)">Rename</button>
-                    <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => DuplicateAsync(node.Id)">Duplicate</button>
-                    <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => CopyLinkAsync(node.Title)">Copy [[link]]</button>
-                    <div class="galaxy-menu-sep"></div>
-                    <button type="button" role="menuitem" class="galaxy-menu-item danger" @onclick="() => DeleteAsync(node.Id)">@(_confirmDelete ? "Really delete?" : "Delete")</button>
-                }
-            }
-            else
-            {
-                <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="() => NewSubpageAsync(null)">New page</button>
-                <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="MenuFitAsync">Fit everything <kbd>Home</kbd></button>
-                <button type="button" role="menuitem" class="galaxy-menu-item" @onclick="MenuToggleMotionAsync">@(_opt.Motion ? "Pause motion" : "Resume motion")</button>
-            }
+                else { <p>@dialogNode.Title</p> }
+                <footer><button id="graph-dialog-cancel" class="graph-command" disabled="@_busy" @onclick="CloseDialog">Cancel</button><button class="graph-primary @(_dialog == "delete" ? "danger" : null)" disabled="@(_busy || (_dialog == "rename" && string.IsNullOrWhiteSpace(_renameText)))" @onclick="CommitDialogAsync">@(_dialog == "rename" ? "Save" : "Move to trash")</button></footer>
+            </section>
         </div>
     }
 </div>
 
 @code {
     private const string CanvasId = "galaxy-canvas";
-    private const string SearchId = "galaxy-search-input";
-    private const string RenameId = "galaxy-rename-input";
-    private const int TimelapseSeconds = 8;
-
-    private sealed record LegendEntry(GraphBodyKind Body, string Key, string Label, int Count);
-    private sealed record LensEntry(string Key, string Label, string Hint);
-    private sealed record Options(bool Motion, string Labels, double Density, bool Sound, bool Effects);
-    private sealed record MenuState(GraphNode? Node, double X, double Y);
-
-    private static readonly LensEntry[] Lenses =
-    [
-        new("none", "All", "Plain view"),
-        new("recency", "Recent", "Warm rims for recently edited pages, faded for old ones"),
-        new("links", "Links", "Bodies grow with backlinks"),
-        new("orphans", "Orphans", "Spotlight pages with no parent, children or links"),
-    ];
-
-    [SupplyParameterFromQuery(Name = "focus")]
-    public string? Focus { get; set; }
-
-    private PageGraph _graph = new([], [], []);
-    private HashSet<string> _nodeIds = new(StringComparer.Ordinal);
-    private List<LegendEntry> _legend = [];
-    private readonly HashSet<GraphBodyKind> _hidden = [];
-    private Options _opt = new(true, "auto", 1, false, true);
-
+    private sealed record ViewOptions(bool Labels, bool Recent);
+    [SupplyParameterFromQuery(Name = "focus")] public string? Focus { get; set; }
+    private PageGraph _graph = new([], []);
+    private Dictionary<string, GraphNode> _byId = new(StringComparer.Ordinal);
+    private Dictionary<string, List<GraphNode>> _incoming = new(StringComparer.Ordinal);
+    private Dictionary<string, List<GraphNode>> _outgoing = new(StringComparer.Ordinal);
+    private List<GraphNode> _results = [];
+    private IJSObjectReference? _module;
     private DotNetObjectReference<Graph>? _self;
-    private bool _mounted;
-    private bool _loaded;
-    private bool _disposed;
-    private bool _settingsOpen;
+    private bool _mounted, _disposed, _loaded, _busy, _settingsOpen, _showPages, _expanded, _actionsOpen;
+    private bool _connections, _labels = true, _recent, _previewLoading;
+    private string? _selectedId, _spaceKey, _pendingFocus, _handledFocus, _dialog, _focusElement;
+    private string? _loadError, _rendererError, _previewError, _notice;
+    private string _query = string.Empty, _filter = "all", _renameText = string.Empty;
     private long _loadGeneration;
-    private string? _pendingFocus;
-
-    private string _lens = "none";
-    private string _query = string.Empty;
-    private int _hitCount;
-    private CancellationTokenSource? _searchCts;
-
-    private List<GraphNode> _trail = [];
-
-    private bool _timelapse;
-    private bool _playing;
-    private int _timeValue = 1000;
-    private long _timeMin;
-    private long _timeMax;
-    private CancellationTokenSource? _playCts;
-
-    private string? _selectedId;
-    private bool _pinned;
-    private GraphPreview? _pinnedPreview;
     private GraphPreview? _preview;
-    private GraphNode? _missingPreview;
-    private bool _previewVisible;
-    private bool _previewHeld;
-    private double? _cardX;
-    private double? _cardY;
-    private double _pinX;
-    private double _pinY;
-    private string? _hoverId;
-    private CancellationTokenSource? _hideCts;
     private CancellationTokenSource? _previewCts;
-
-    private MenuState? _menu;
-    private bool _renaming;
-    private bool _confirmDelete;
-    private string _renameText = string.Empty;
+    private GraphNode? SelectedNode => _selectedId is not null ? _byId.GetValueOrDefault(_selectedId) : null;
 
     protected override void OnInitialized()
     {
         State.Changed += OnStateChanged;
         State.Workspace.Changed += OnWorkspaceChanged;
-        _pendingFocus = Focus;
     }
 
-    protected override Task OnInitializedAsync() =>
-        LoadAsync(Interlocked.Increment(ref _loadGeneration));
+    protected override Task OnInitializedAsync() => ReloadAsync();
 
     protected override void OnParametersSet()
     {
-        if (Focus is { Length: > 0 } && Focus != _pendingFocus && Focus != _selectedId)
-            _pendingFocus = Focus;
+        if (Focus != _handledFocus) { _pendingFocus = Focus; _handledFocus = Focus; }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (_disposed)
-            return;
-
-        if (firstRender)
+        if (_disposed) return;
+        if (firstRender) await MountAsync();
+        if (_mounted && _loaded && _pendingFocus is { } focus)
         {
-            _self = DotNetObjectReference.Create(this);
-            try
-            {
-                _mounted = await Js.InvokeAsync<bool>("synclyGalaxy.mount", CanvasId, _self, new { reducedMotion = false });
-                if (_mounted)
-                {
-                    _opt = await Js.InvokeAsync<Options>("synclyGalaxy.getOptions", CanvasId);
-                    if (_loaded)
-                        await PushDataAsync();
-                    StateHasChanged();
-                }
-            }
-            catch (JSException)
-            {
-                _mounted = false;
-            }
-            return;
+            _pendingFocus = null;
+            if (_byId.ContainsKey(focus)) await SelectResultAsync(focus);
+            else _notice = "This page is not in the current space.";
+            StateHasChanged();
         }
-
-        if (_renaming && _renameFocusPending)
+        if (_focusElement is { } element)
         {
-            _renameFocusPending = false;
-            await SafeJsAsync(() => Js.InvokeVoidAsync("syncly.focusElement", RenameId, true).AsTask());
+            _focusElement = null;
+            await CallAsync("focusElement", element);
         }
     }
 
-    private bool _renameFocusPending;
+    private async Task MountAsync()
+    {
+        try
+        {
+            _module ??= await Js.InvokeAsync<IJSObjectReference>("import", "./js/galaxy.mjs");
+            if (_disposed) { await _module.DisposeAsync(); return; }
+            _self ??= DotNetObjectReference.Create(this);
+            var options = await _module.InvokeAsync<ViewOptions>("mount", CanvasId, _self);
+            _labels = options.Labels;
+            _recent = options.Recent;
+            _mounted = true;
+            _rendererError = null;
+            if (_loaded) await PushAsync();
+        }
+        catch (Exception exception) when (exception is JSException or InvalidOperationException)
+        {
+            _rendererError = "The canvas could not start. Your notes are still available in Pages.";
+        }
+        if (!_disposed) StateHasChanged();
+    }
 
     private void OnWorkspaceChanged()
     {
-        if (_disposed)
-            return;
-        var generation = Interlocked.Increment(ref _loadGeneration);
-        _ = InvokeAsync(() => LoadAsync(generation));
+        if (!_disposed) _ = InvokeAsync(ReloadAsync);
     }
 
     private void OnStateChanged()
     {
-        if (_disposed)
-            return;
+        if (_disposed) return;
         _ = InvokeAsync(async () =>
         {
-            await SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.setCurrent", CanvasId, State.CurrentPageId).AsTask());
-            StateHasChanged();
+            if (_spaceKey != State.CurrentSpaceId) await ReloadAsync();
+            else await CanvasAsync("setCurrent", State.CurrentPageId);
+            if (!_disposed) StateHasChanged();
         });
     }
 
-    private async Task LoadAsync(long generation)
+    private async Task ReloadAsync()
     {
-        var graph = await State.Workspace.GraphAsync();
-        if (_disposed || generation != Interlocked.Read(ref _loadGeneration))
-            return;
-
-        _graph = graph;
-        _nodeIds = graph.Nodes.Select(n => n.Id).ToHashSet(StringComparer.Ordinal);
-        _legend = BuildLegend(graph);
-        var stamps = graph.Nodes.Where(n => n.CreatedAt != default).Select(n => n.CreatedAt.ToUnixTimeMilliseconds()).ToList();
-        _timeMin = stamps.Count > 0 ? stamps.Min() : 0;
-        _timeMax = stamps.Count > 0 ? stamps.Max() : 0;
-        _loaded = true;
-
-        if (_selectedId is not null && !_nodeIds.Contains(_selectedId))
+        var generation = Interlocked.Increment(ref _loadGeneration);
+        var space = State.CurrentSpaceId;
+        try
         {
-            _selectedId = null;
-            _pinned = false;
-            _pinnedPreview = null;
-        }
-
-        if (_mounted)
-            await PushDataAsync();
-
-        StateHasChanged();
-    }
-
-    private static List<LegendEntry> BuildLegend(PageGraph graph) =>
-        graph.Nodes
-            .GroupBy(n => n.Body)
-            .OrderBy(g => (int)g.Key)
-            .Select(g => new LegendEntry(g.Key, g.Key.ToString().ToLowerInvariant(), KindLabel(g.Key, plural: true), g.Count()))
-            .ToList();
-
-    private Task PushDataAsync()
-    {
-        var payload = new
-        {
-            spaceKey = State.CurrentSpaceId,
-            currentId = State.CurrentPageId,
-            nodes = _graph.Nodes.Select(n => new
+            var graph = await State.Workspace.GraphAsync();
+            if (_disposed || generation != Interlocked.Read(ref _loadGeneration) || space != State.CurrentSpaceId) return;
+            if (_spaceKey != space)
             {
-                id = n.Id,
-                title = n.Title,
-                icon = n.Icon,
-                x = n.X,
-                y = n.Y,
-                size = n.Size,
-                depth = n.Depth,
-                parentId = n.ParentId,
-                body = n.Body.ToString().ToLowerInvariant(),
-                missing = n.Missing,
-                createdAt = n.CreatedAt == default ? 0 : n.CreatedAt.ToUnixTimeMilliseconds(),
-                updatedAt = n.UpdatedAt == default ? 0 : n.UpdatedAt.ToUnixTimeMilliseconds(),
-                inbound = n.Inbound,
-                outbound = n.Outbound,
-            }),
-            edges = _graph.Edges.Select(e => new { from = e.From, to = e.To }),
-        };
-
-        return SafeJsAsync(async () =>
-        {
-            await Js.InvokeVoidAsync("synclyGalaxy.setData", CanvasId, payload);
-            if (_hidden.Count > 0)
-                await Js.InvokeVoidAsync("synclyGalaxy.setFilter", CanvasId, _hidden.Select(h => h.ToString().ToLowerInvariant()));
-            if (_lens != "none")
-                await Js.InvokeVoidAsync("synclyGalaxy.setLens", CanvasId, _lens);
-            if (_timelapse)
-                await PushTimeCursorAsync();
-            if (_query.Length > 0)
-                _hitCount = await Js.InvokeAsync<int>("synclyGalaxy.search", CanvasId, _query);
-            if (_selectedId is not null)
-                await Js.InvokeVoidAsync("synclyGalaxy.select", CanvasId, _selectedId, false);
-
-            if (_pendingFocus is { } focus && _nodeIds.Contains(focus))
-            {
-                _pendingFocus = null;
-                await Js.InvokeVoidAsync("synclyGalaxy.select", CanvasId, focus, true);
-                await SelectAsync(focus, null, null);
+                _selectedId = null;
+                _connections = _showPages = _expanded = _actionsOpen = false;
+                _query = string.Empty;
+                _filter = "all";
+                _dialog = _notice = null;
+                _previewCts?.Cancel();
+                _preview = null;
             }
-        });
-    }
-
-    // ------------------------------------------------------------- HUD
-
-    private Task FitAsync() => SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.fit", CanvasId, false).AsTask());
-
-    private Task LocateAsync() => SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.locate", CanvasId).AsTask());
-
-    private Task FlyToAsync(string id) => SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.flyTo", CanvasId, id).AsTask());
-
-    private Task ToggleMotionAsync() => SetOptionAsync(o => o with { Motion = !o.Motion });
-
-    private async Task SetOptionAsync(Func<Options, Options> change)
-    {
-        var next = change(_opt);
-        _opt = next;
-        await SafeJsAsync(async () =>
-        {
-            var applied = await Js.InvokeAsync<Options?>("synclyGalaxy.setOptions", CanvasId, new
+            _spaceKey = space;
+            _graph = graph;
+            _byId = graph.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
+            _incoming = graph.Edges.GroupBy(edge => edge.To).ToDictionary(group => group.Key,
+                group => group.Select(edge => _byId[edge.From]).DistinctBy(node => node.Id).OrderBy(node => node.Title, StringComparer.OrdinalIgnoreCase).ToList(), StringComparer.Ordinal);
+            _outgoing = graph.Edges.GroupBy(edge => edge.From).ToDictionary(group => group.Key,
+                group => group.Select(edge => _byId[edge.To]).DistinctBy(node => node.Id).OrderBy(node => node.Title, StringComparer.OrdinalIgnoreCase).ToList(), StringComparer.Ordinal);
+            if (_selectedId is not null && !_byId.ContainsKey(_selectedId))
             {
-                motion = next.Motion,
-                labels = next.Labels,
-                density = next.Density,
-                sound = next.Sound,
-                effects = next.Effects,
-            });
-            if (applied is not null)
-                _opt = applied;
-        });
+                _selectedId = null;
+                _connections = false;
+                _dialog = null;
+                _preview = null;
+                _previewCts?.Cancel();
+                _notice = "The selected page is no longer in this space.";
+            }
+            _loaded = true;
+            _loadError = null;
+            UpdateResults();
+            await PushAsync();
+            if (_selectedId is not null) await LoadPreviewAsync();
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            if (!_disposed && generation == Interlocked.Read(ref _loadGeneration)) _loadError = "The notes could not be loaded. Try again.";
+        }
+        if (!_disposed) StateHasChanged();
     }
 
-    private const string LabelsAuto = "auto";
-    private const string LabelsAll = "all";
-    private const string LabelsMin = "min";
-
-    private Task SetLabelsAsync(string labels) => SetOptionAsync(o => o with { Labels = labels });
-
-    private async Task SetLensAsync(string lens)
+    private async Task PushAsync()
     {
-        _lens = lens;
-        await SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.setLens", CanvasId, lens).AsTask());
+        await CanvasAsync("update", new { spaceKey = _spaceKey, currentId = State.CurrentPageId,
+            nodes = _graph.Nodes, edges = _graph.Edges.Select(edge => new { from = edge.From, to = edge.To }) });
+        await CanvasAsync("select", _selectedId, false);
+        await ConfigureAsync();
     }
 
-    private async Task ToggleKindAsync(GraphBodyKind body)
+    private IEnumerable<GraphNode> FilteredNodes() => _graph.Nodes.Where(node =>
+        (_filter != "unlinked" || (!node.Missing && node.Inbound + node.Outbound == 0))
+        && (_filter != "unresolved" || node.Missing)
+        && (!_connections || node.Id == _selectedId || ConnectionsTo(true).Any(other => other.Id == node.Id) || ConnectionsTo(false).Any(other => other.Id == node.Id)));
+
+    private void UpdateResults() => _results = FilteredNodes()
+        .Where(node => node.Title.Contains(_query.Trim(), StringComparison.OrdinalIgnoreCase))
+        .OrderBy(node => node.Title, StringComparer.OrdinalIgnoreCase).ToList();
+
+    private IReadOnlyList<GraphNode> ConnectionsTo(bool incoming) => _selectedId is null ? []
+        : (incoming ? _incoming : _outgoing).GetValueOrDefault(_selectedId) ?? [];
+
+    private Task ConfigureAsync() => CanvasAsync("configure", new { mode = _connections ? "connections" : "all", filter = _filter, query = _query, labels = _labels, recent = _recent });
+
+    private async Task SetScopeAsync(bool connections)
     {
-        if (!_hidden.Remove(body))
-            _hidden.Add(body);
-        await SafeJsAsync(() => Js.InvokeVoidAsync(
-            "synclyGalaxy.setFilter",
-            CanvasId,
-            _hidden.Select(h => h.ToString().ToLowerInvariant())).AsTask());
+        _connections = connections && _selectedId is not null;
+        UpdateResults();
+        await ConfigureAsync();
     }
 
-    private void OnQueryInput(ChangeEventArgs args)
+    private async Task OnQueryAsync(ChangeEventArgs args)
     {
         _query = args.Value?.ToString() ?? string.Empty;
-        _searchCts?.Cancel();
-        var cts = _searchCts = new CancellationTokenSource();
-        _ = DebouncedSearchAsync(cts.Token);
-    }
-
-    private async Task DebouncedSearchAsync(CancellationToken ct)
-    {
-        try
-        {
-            await Task.Delay(140, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
-
-        if (_disposed)
-            return;
-
-        await SafeJsAsync(async () =>
-        {
-            _hitCount = await Js.InvokeAsync<int>("synclyGalaxy.search", CanvasId, _query);
-        });
-        await InvokeAsync(StateHasChanged);
-    }
-
-    private async Task OnQueryKeyDown(KeyboardEventArgs args)
-    {
-        if (args.Key == "Escape")
-            await ClearQueryAsync();
-    }
-
-    private async Task ClearQueryAsync()
-    {
-        _query = string.Empty;
-        _hitCount = 0;
-        _searchCts?.Cancel();
-        await SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.search", CanvasId, string.Empty).AsTask());
-    }
-
-    // ------------------------------------------------------------- time-lapse
-
-    private async Task ToggleTimelapseAsync()
-    {
-        _timelapse = !_timelapse;
-        StopPlaying();
-        if (_timelapse)
-        {
-            _timeValue = 0;
-            await PushTimeCursorAsync();
-            await TogglePlayAsync();
-        }
-        else
-        {
-            await SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.setTimeCursor", CanvasId, null, 0).AsTask());
-        }
-    }
-
-    private async Task OnTimeInput(ChangeEventArgs args)
-    {
-        if (int.TryParse(args.Value?.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
-        {
-            StopPlaying();
-            _timeValue = Math.Clamp(value, 0, 1000);
-            await PushTimeCursorAsync();
-        }
-    }
-
-    private async Task TogglePlayAsync()
-    {
-        if (_playing)
-        {
-            StopPlaying();
-            return;
-        }
-
-        if (_timeValue >= 1000)
-            _timeValue = 0;
-
-        _playing = true;
-        var cts = _playCts = new CancellationTokenSource();
-        _ = PlayAsync(cts.Token);
-        await Task.CompletedTask;
-    }
-
-    private void StopPlaying()
-    {
-        _playing = false;
-        _playCts?.Cancel();
-        _playCts = null;
-    }
-
-    private async Task PlayAsync(CancellationToken ct)
-    {
-        const int stepMs = 40;
-        var step = Math.Max(1, 1000 * stepMs / (TimelapseSeconds * 1000));
-        try
-        {
-            while (!ct.IsCancellationRequested && _timeValue < 1000)
-            {
-                await Task.Delay(stepMs, ct);
-                _timeValue = Math.Min(1000, _timeValue + step);
-                await PushTimeCursorAsync();
-                await InvokeAsync(StateHasChanged);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
-
-        if (!ct.IsCancellationRequested)
-        {
-            _playing = false;
-            await InvokeAsync(StateHasChanged);
-        }
-    }
-
-    private Task PushTimeCursorAsync()
-    {
-        if (_timeMax <= _timeMin)
-            return Task.CompletedTask;
-        var span = _timeMax - _timeMin;
-        var cursor = _timeMin + span * _timeValue / 1000;
-        var window = Math.Max(1000, span * 6 / 100);
-        return SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.setTimeCursor", CanvasId, cursor, window).AsTask());
-    }
-
-    private string TimeLabel()
-    {
-        if (_timeMax <= _timeMin)
-            return string.Empty;
-        var cursor = _timeMin + (_timeMax - _timeMin) * _timeValue / 1000;
-        return DateTimeOffset.FromUnixTimeMilliseconds(cursor).ToLocalTime().ToString("d MMM yyyy", CultureInfo.InvariantCulture);
-    }
-
-    private int BornCount()
-    {
-        if (_timeMax <= _timeMin)
-            return _graph.Nodes.Count(n => !n.Missing);
-        var cursor = _timeMin + (_timeMax - _timeMin) * _timeValue / 1000;
-        return _graph.Nodes.Count(n => !n.Missing && (n.CreatedAt == default || n.CreatedAt.ToUnixTimeMilliseconds() <= cursor));
-    }
-
-    // ------------------------------------------------------------- callbacks from JS
-
-    [JSInvokable]
-    public async Task OnHover(string? id, double clientX, double clientY)
-    {
-        if (_disposed)
-            return;
-
-        _hoverId = id;
-
-        if (id is null)
-        {
-            if (_pinned && _selectedId is not null)
-                await ShowPinnedAsync();
-            else
-                ScheduleHide();
-            return;
-        }
-
-        if (id == _selectedId && _pinned)
-        {
-            _hideCts?.Cancel();
-            await ShowPinnedAsync();
-            return;
-        }
-
-        _hideCts?.Cancel();
-        await ShowPreviewAsync(id, clientX, clientY, pinned: false);
-    }
-
-    [JSInvokable]
-    public Task OnSelect(string? id, double clientX, double clientY) =>
-        InvokeAsync(() => SelectAsync(id, clientX, clientY));
-
-    [JSInvokable]
-    public Task OnOpen(string id) => InvokeAsync(() => OpenIdAsync(id));
-
-    [JSInvokable]
-    public Task OnContextMenu(string? id, double clientX, double clientY) => InvokeAsync(() =>
-    {
-        var node = id is null ? null : _graph.Nodes.FirstOrDefault(n => n.Id == id);
-        _menu = new MenuState(node, clientX, clientY);
-        _renaming = false;
-        _confirmDelete = false;
+        _showPages = _expanded = true;
         _settingsOpen = false;
-        StateHasChanged();
-    });
-
-    [JSInvokable]
-    public Task OnFocusSystem(string? id) => InvokeAsync(() =>
-    {
-        var trail = new List<GraphNode>();
-        var cursor = id is null ? null : _graph.Nodes.FirstOrDefault(n => n.Id == id);
-        var guard = 0;
-        while (cursor is not null && guard++ < 64)
-        {
-            trail.Insert(0, cursor);
-            cursor = cursor.ParentId is null ? null : _graph.Nodes.FirstOrDefault(n => n.Id == cursor.ParentId);
-        }
-        _trail = trail;
-        StateHasChanged();
-    });
-
-    [JSInvokable]
-    public Task OnFocusSearch() =>
-        SafeJsAsync(() => Js.InvokeVoidAsync("syncly.focusElement", SearchId, true).AsTask());
-
-    // ------------------------------------------------------------- selection + preview
-
-    private async Task SelectAsync(string? id, double? clientX, double? clientY)
-    {
-        _menu = null;
-        _selectedId = id;
-
-        if (id is null)
-        {
-            _pinned = false;
-            _pinnedPreview = null;
-            ScheduleHide();
-            StateHasChanged();
-            return;
-        }
-
-        _pinned = true;
-        _hideCts?.Cancel();
-        if (clientX is { } x && clientY is { } y)
-        {
-            _pinX = x;
-            _pinY = y;
-            _cardX = x;
-            _cardY = y;
-        }
-        else
-        {
-            _cardX = null;
-            _cardY = null;
-        }
-
-        await ShowPreviewAsync(id, clientX, clientY, pinned: true);
+        UpdateResults();
+        await ConfigureAsync();
     }
 
-    private async Task ShowPinnedAsync()
+    private async Task OnSearchKeyDown(KeyboardEventArgs args)
     {
-        if (_selectedId is null)
-            return;
-        _cardX = _cardX is null ? null : _pinX;
-        _cardY = _cardY is null ? null : _pinY;
-        if (_pinnedPreview is not null)
-        {
-            _missingPreview = null;
-            _preview = _pinnedPreview;
-            _previewVisible = true;
-            await InvokeAsync(StateHasChanged);
-            return;
-        }
-        await ShowPreviewAsync(_selectedId, _cardX, _cardY, pinned: true);
+        if (args.Key == "Enter" && _results.Count > 0) await SelectResultAsync(_results[0].Id);
+        else if (args.Key == "ArrowDown") await CallAsync("focusElement", "graph-result-0");
     }
 
-    private async Task ShowPreviewAsync(string id, double? clientX, double? clientY, bool pinned)
+    private async Task OnFilterAsync(ChangeEventArgs args)
     {
-        var node = _graph.Nodes.FirstOrDefault(n => n.Id == id);
-        if (node is null)
-            return;
+        _filter = args.Value?.ToString() ?? "all";
+        UpdateResults();
+        await ConfigureAsync();
+        await CanvasAsync("fit");
+    }
 
-        if (clientX is { } x && clientY is { } y)
-        {
-            _cardX = x;
-            _cardY = y;
-        }
+    private Task ClearFilterAsync() => OnFilterAsync(new ChangeEventArgs { Value = "all" });
+    private async Task ToggleLabelsAsync(ChangeEventArgs args) { _labels = args.Value is true; await ConfigureAsync(); }
+    private async Task ToggleRecentAsync(ChangeEventArgs args) { _recent = args.Value is true; await ConfigureAsync(); }
+    private void TogglePages() { _showPages = !_showPages; _expanded = _showPages; _settingsOpen = false; UpdateResults(); }
+    private void ToggleExpanded() => _expanded = !_expanded;
 
-        if (node.Missing)
-        {
-            _previewCts?.Cancel();
-            _preview = null;
-            _missingPreview = node;
-            _previewVisible = true;
-            await InvokeAsync(StateHasChanged);
-            return;
-        }
+    private async Task SelectAsync(string? id, bool center)
+    {
+        if (_disposed) return;
+        _selectedId = id is not null && _byId.ContainsKey(id) ? id : null;
+        _showPages = _actionsOpen = false;
+        _dialog = null;
+        if (_selectedId is null) _connections = false;
+        UpdateResults();
+        await CanvasAsync("select", _selectedId, center);
+        await ConfigureAsync();
+        if (_connections && center) await CanvasAsync("fit");
+        await LoadPreviewAsync();
+        if (!_disposed) StateHasChanged();
+    }
 
+    private async Task SelectResultAsync(string id)
+    {
+        await SelectAsync(id, true);
+        _focusElement = CanvasId;
+    }
+
+    private async Task LoadPreviewAsync()
+    {
         _previewCts?.Cancel();
-        var cts = _previewCts = new CancellationTokenSource();
-        GraphPreview? preview;
-        try
-        {
-            preview = await State.Workspace.PreviewAsync(id, 4, cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
-
-        if (cts.IsCancellationRequested || _disposed)
-            return;
-        if (!pinned && _hoverId != id && !(_pinned && _selectedId == id))
-            return;
-
-        if (pinned || id == _selectedId)
-            _pinnedPreview = preview;
-
-        _missingPreview = null;
-        _preview = preview;
-        _previewVisible = preview is not null;
-        await InvokeAsync(StateHasChanged);
-    }
-
-    private void ScheduleHide()
-    {
-        _hideCts?.Cancel();
-        var cts = _hideCts = new CancellationTokenSource();
-        _ = HideAfterAsync(cts.Token);
-    }
-
-    private async Task HideAfterAsync(CancellationToken ct)
-    {
-        try
-        {
-            await Task.Delay(180, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
-
-        if (_disposed || _previewHeld || _hoverId is not null || (_pinned && _selectedId is not null))
-            return;
-
-        _previewVisible = false;
-        await InvokeAsync(StateHasChanged);
-
-        try
-        {
-            await Task.Delay(180, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
-
-        if (_disposed || _previewVisible)
-            return;
-
+        _previewCts?.Dispose();
+        _previewCts = null;
         _preview = null;
-        _missingPreview = null;
-        await InvokeAsync(StateHasChanged);
+        _previewError = null;
+        _previewLoading = false;
+        if (SelectedNode is not { Missing: false } node) return;
+        var cts = _previewCts = new CancellationTokenSource();
+        _previewLoading = true;
+        StateHasChanged();
+        try
+        {
+            var preview = await State.Workspace.PreviewAsync(node.Id, 5, cts.Token);
+            if (!_disposed && !cts.IsCancellationRequested && node.Id == _selectedId) _preview = preview;
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception)
+        {
+            if (!_disposed && !cts.IsCancellationRequested) _previewError = "Preview unavailable.";
+        }
+        finally
+        {
+            if (!_disposed && !cts.IsCancellationRequested) { _previewLoading = false; StateHasChanged(); }
+        }
     }
 
-    private void HoldPreview()
+    private async Task CloseInspectorAsync()
     {
-        _previewHeld = true;
-        _hideCts?.Cancel();
+        _showPages = _expanded = false;
+        _query = string.Empty;
+        await SelectAsync(null, false);
+        _focusElement = CanvasId;
     }
 
-    private void ReleasePreview()
+    private Task LocateAsync() => State.CurrentPageId is { } id ? SelectResultAsync(id) : Task.CompletedTask;
+    [JSInvokable] public Task OnSelect(string? id) => InvokeAsync(() => SelectAsync(id, false));
+    [JSInvokable] public Task OnOpen(string id) => InvokeAsync(() => OpenAsync(id));
+    [JSInvokable] public Task OnFocusSearch() => CallAsync("focusElement", "graph-search");
+    [JSInvokable] public Task OnEscape() => InvokeAsync(EscapeAsync);
+    [JSInvokable] public Task OnContext(string? id) => InvokeAsync(async () =>
     {
-        _previewHeld = false;
-        if (_hoverId is null && !(_pinned && _selectedId is not null))
-            ScheduleHide();
+        if (_disposed) return;
+        if (id is null) { _settingsOpen = true; StateHasChanged(); return; }
+        await SelectAsync(id, false);
+        _actionsOpen = _expanded = true;
+        _focusElement = "graph-page-actions";
+        StateHasChanged();
+    });
+
+    private async Task EscapeAsync()
+    {
+        if (_dialog is not null) CloseDialog();
+        else if (_actionsOpen) _actionsOpen = false;
+        else if (_settingsOpen) _settingsOpen = false;
+        else if (_showPages && _selectedId is not null) { _showPages = false; _query = string.Empty; await ConfigureAsync(); }
+        else await CloseInspectorAsync();
+        if (!_disposed) StateHasChanged();
     }
 
-    private string PreviewStyle =>
-        _cardX is { } x && _cardY is { } y ? $"--px:{F(x)}px;--py:{F(y)}px" : string.Empty;
+    private Task OnPageKeyDown(KeyboardEventArgs args) => args.Key == "Escape" ? EscapeAsync() : Task.CompletedTask;
+    private void CloseDialog() { _dialog = null; _focusElement = "graph-page-actions"; }
+    private Task OnDialogKeyDown(KeyboardEventArgs args) => args.Key == "Escape" ? EscapeAsync() : Task.CompletedTask;
+    private Task OnRenameKeyDown(KeyboardEventArgs args) => args.Key == "Enter" ? CommitDialogAsync() : Task.CompletedTask;
 
-    private string MenuStyle =>
-        _menu is { } m ? $"--px:{F(m.X)}px;--py:{F(m.Y)}px" : string.Empty;
-
-    // ------------------------------------------------------------- context menu actions
-
-    private void CloseMenu()
+    private Task PageActionAsync(string action)
     {
-        _menu = null;
-        _renaming = false;
-        _confirmDelete = false;
+        if (SelectedNode is not { } node || _busy) return Task.CompletedTask;
+        _actionsOpen = false;
+        switch (action)
+        {
+            case "rename":
+            case "delete":
+                _dialog = action;
+                _renameText = node.Title;
+                _focusElement = action == "rename" ? "graph-dialog-input" : "graph-dialog-cancel";
+                return Task.CompletedTask;
+            case "copy": return RunActionAsync(async () =>
+            {
+                if (_module is null) throw new InvalidOperationException("Graph module is unavailable.");
+                await _module.InvokeVoidAsync("copyText", $"[[{node.Title}]]");
+                _notice = "Link copied.";
+            });
+            case "child": return NewPageAsync(node.Id);
+            case "duplicate": return RunActionAsync(async () =>
+            {
+                var copy = await State.Workspace.DuplicatePageAsync(node.Id);
+                await ReloadAsync();
+                await SelectResultAsync(copy);
+            });
+            default: return Task.CompletedTask;
+        }
     }
 
-    private void OnMenuKeyDown(KeyboardEventArgs args)
+    private Task CommitDialogAsync()
     {
-        if (args.Key == "Escape")
-            CloseMenu();
+        if (SelectedNode is not { } node) return Task.CompletedTask;
+        var action = _dialog;
+        var title = _renameText.Trim();
+        if (action == "rename" && title.Length == 0) return Task.CompletedTask;
+        return RunActionAsync(async () =>
+        {
+            if (action == "rename") await State.Workspace.RenamePageAsync(node.Id, title);
+            else if (action == "delete")
+            {
+                await State.Workspace.DeletePageAsync(node.Id);
+                if (State.CurrentPageId == node.Id) State.Back();
+            }
+            CloseDialog();
+            await ReloadAsync();
+        });
     }
 
-    private async Task MenuFlyAsync(string id)
+    private Task OpenAsync(string id) => RunActionAsync(async () =>
     {
-        CloseMenu();
-        await FlyToAsync(id);
-    }
+        if (!_byId.TryGetValue(id, out var node)) return;
+        var pageId = node.Missing ? await State.Workspace.EnsurePageByTitleAsync(node.Title) : node.Id;
+        State.Open(pageId);
+        Nav.NavigateTo("");
+    });
 
-    private async Task MenuFitAsync()
+    private Task NewPageAsync(string? parentId) => RunActionAsync(async () =>
     {
-        CloseMenu();
-        await FitAsync();
-    }
-
-    private async Task MenuToggleMotionAsync()
-    {
-        CloseMenu();
-        await ToggleMotionAsync();
-    }
-
-    private async Task NewSubpageAsync(string? parentId)
-    {
-        CloseMenu();
-        if (parentId is not null)
-            State.ExpandPage(parentId);
+        if (parentId is not null) State.ExpandPage(parentId);
         var pageId = await State.Workspace.CreatePageAsync(parentId);
         State.Open(pageId);
         State.SetReadingMode(false);
         Nav.NavigateTo("");
+    });
+
+    private async Task RunActionAsync(Func<Task> action)
+    {
+        if (_busy || _disposed) return;
+        _busy = true;
+        try { await action(); }
+        catch (Exception) { if (!_disposed) _notice = "The action could not be completed. Please try again."; }
+        finally { _busy = false; if (!_disposed) StateHasChanged(); }
     }
 
-    private Task StartRenameAsync(GraphNode node)
+    private async Task RetryAsync()
     {
-        _renaming = true;
-        _renameText = node.Title;
-        _renameFocusPending = true;
-        return Task.CompletedTask;
+        if (_rendererError is not null) await MountAsync();
+        await ReloadAsync();
     }
 
-    private async Task OnRenameKeyDown(KeyboardEventArgs args)
+    private Task CanvasAsync(string method, params object?[] args) => CallAsync(method, new object?[] { CanvasId }.Concat(args).ToArray());
+    private async Task CallAsync(string method, params object?[] args)
     {
-        if (args.Key == "Enter")
-            await CommitRenameAsync();
-        else if (args.Key == "Escape")
-            _renaming = false;
-    }
-
-    private async Task CommitRenameAsync()
-    {
-        if (_menu?.Node is not { } node)
-            return;
-        var title = _renameText.Trim();
-        CloseMenu();
-        if (title.Length == 0 || title == node.Title)
-            return;
-        await State.Workspace.RenamePageAsync(node.Id, title);
-    }
-
-    private async Task DuplicateAsync(string id)
-    {
-        CloseMenu();
-        var copy = await State.Workspace.DuplicatePageAsync(id);
-        _selectedId = copy;
-        _pinned = false;
-        _pinnedPreview = null;
-        await SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.select", CanvasId, copy, true).AsTask());
-    }
-
-    private async Task CopyLinkAsync(string title)
-    {
-        CloseMenu();
-        await SafeJsAsync(() => Js.InvokeVoidAsync("synclyGalaxy.copyText", $"[[{title}]]").AsTask());
-    }
-
-    private async Task DeleteAsync(string id)
-    {
-        if (!_confirmDelete)
+        if (_disposed || !_mounted || _module is null) return;
+        try { await _module.InvokeVoidAsync(method, args); }
+        catch (JSDisconnectedException) { }
+        catch (Exception exception) when (exception is JSException or InvalidOperationException)
         {
-            _confirmDelete = true;
-            return;
-        }
-
-        CloseMenu();
-        if (_selectedId == id)
-        {
-            _selectedId = null;
-            _pinned = false;
-            _pinnedPreview = null;
-            _preview = null;
-            _missingPreview = null;
-            _previewVisible = false;
-        }
-        await State.Workspace.DeletePageAsync(id);
-        if (State.CurrentPageId == id)
-            State.Back();
-    }
-
-    // ------------------------------------------------------------- open
-
-    private async Task OpenIdAsync(string id)
-    {
-        CloseMenu();
-        var node = _graph.Nodes.FirstOrDefault(n => n.Id == id);
-        if (node is null)
-            return;
-
-        if (node.Missing)
-        {
-            var pageId = await State.Workspace.EnsurePageByTitleAsync(node.Title);
-            State.Open(pageId);
-        }
-        else
-        {
-            State.Open(node.Id);
-        }
-
-        Nav.NavigateTo("");
-    }
-
-    // ------------------------------------------------------------- helpers
-
-    private static string KindLabel(GraphBodyKind body, bool plural = false) => body switch
-    {
-        GraphBodyKind.Star => plural ? "Stars" : "Star",
-        GraphBodyKind.Planet => plural ? "Planets" : "Planet",
-        GraphBodyKind.Moon => plural ? "Moons" : "Moon",
-        GraphBodyKind.Asteroid => plural ? "Asteroids" : "Asteroid",
-        GraphBodyKind.Meteor => plural ? "Meteors" : "Meteor",
-        _ => plural ? "Unresolved" : "Unresolved",
-    };
-
-    private static string Label(GraphNode node) =>
-        node.Icon is { Length: > 0 } icon ? $"{icon} {node.Title}" : node.Title;
-
-    private static string Plural(int count, string noun) =>
-        $"{count.ToString(CultureInfo.InvariantCulture)} {noun}{(count == 1 ? string.Empty : "s")}";
-
-    private static string Initial(string title)
-    {
-        var t = title.Trim();
-        return t.Length == 0 ? "?" : char.ToUpperInvariant(t[0]).ToString();
-    }
-
-    private static string Relative(DateTimeOffset when)
-    {
-        if (when == default)
-            return "never edited";
-
-        var span = DateTimeOffset.Now - when;
-        if (span < TimeSpan.FromMinutes(1))
-            return "edited just now";
-        if (span < TimeSpan.FromHours(1))
-            return $"edited {(int)span.TotalMinutes} min ago";
-        if (span < TimeSpan.FromDays(1))
-            return $"edited {(int)span.TotalHours} h ago";
-        if (span < TimeSpan.FromDays(2))
-            return "edited yesterday";
-        if (span < TimeSpan.FromDays(30))
-            return $"edited {(int)span.TotalDays} d ago";
-        return "edited " + when.ToLocalTime().ToString("d MMM yyyy", CultureInfo.InvariantCulture);
-    }
-
-    private static string F(double value) => value.ToString("0.#", CultureInfo.InvariantCulture);
-
-    private async Task SafeJsAsync(Func<Task> call)
-    {
-        if (_disposed || !_mounted)
-            return;
-        try
-        {
-            await call();
-        }
-        catch (JSDisconnectedException)
-        {
-        }
-        catch (JSException)
-        {
-        }
-        catch (InvalidOperationException)
-        {
+            _rendererError = "The graph stopped responding. Retry to restore the view.";
         }
     }
 
@@ -1173,28 +474,13 @@
         Interlocked.Increment(ref _loadGeneration);
         State.Changed -= OnStateChanged;
         State.Workspace.Changed -= OnWorkspaceChanged;
-        _searchCts?.Cancel();
-        _hideCts?.Cancel();
         _previewCts?.Cancel();
-        _playCts?.Cancel();
-
-        if (_mounted)
+        _previewCts?.Dispose();
+        if (_module is not null)
         {
-            try
-            {
-                await Js.InvokeVoidAsync("synclyGalaxy.destroy", CanvasId);
-            }
-            catch (JSDisconnectedException)
-            {
-            }
-            catch (JSException)
-            {
-            }
-            catch (InvalidOperationException)
-            {
-            }
+            try { await _module.InvokeVoidAsync("destroy", CanvasId); await _module.DisposeAsync(); }
+            catch (Exception exception) when (exception is JSException or InvalidOperationException) { }
         }
-
         _self?.Dispose();
     }
 }

@@ -28,6 +28,21 @@ jobs:
         with:
           dotnet-version: "10.0.x"
       - run: dotnet test Syncly.slnx -c Release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/Syncly.UI.Tests/package-lock.json
+      - run: npm ci
+        working-directory: tests/Syncly.UI.Tests
+      - run: npm run vendor:check
+        working-directory: tests/Syncly.UI.Tests
+      - run: npm run test:unit
+        working-directory: tests/Syncly.UI.Tests
+      - run: npx playwright install --with-deps chromium
+        working-directory: tests/Syncly.UI.Tests
+      - run: npm run test:e2e
+        working-directory: tests/Syncly.UI.Tests
 
   windows:
     needs: test

@@ -75,7 +75,7 @@ public class WorkspaceWritingTests
     }
 
     [Fact]
-    public async Task Graph_nests_pages_as_star_planet_and_moon()
+    public async Task Graph_reports_hierarchy_without_inventing_connections()
     {
         await using var app = await StartAsync();
         var workspace = app.Workspace;
@@ -88,18 +88,13 @@ public class WorkspaceWritingTests
         var earth = graph.Nodes.Single(n => n.Id == planet);
         var luna = graph.Nodes.Single(n => n.Id == moon);
 
-        Assert.Equal(GraphBodyKind.Star, sun.Body);
-        Assert.Equal(GraphBodyKind.Planet, earth.Body);
-        Assert.Equal(GraphBodyKind.Moon, luna.Body);
+        Assert.Equal(0, sun.Depth);
+        Assert.Equal(1, earth.Depth);
+        Assert.Equal(2, luna.Depth);
         Assert.Equal(star, earth.ParentId);
         Assert.Equal(planet, luna.ParentId);
-
-        var sunEarth = Dist(sun, earth);
-        var earthLuna = Dist(earth, luna);
-        var sunLuna = Dist(sun, luna);
-        Assert.True(earthLuna < sunEarth);
-        Assert.True(earthLuna < sunLuna);
-        Assert.NotEmpty(graph.Orbits);
+        Assert.Empty(graph.Edges);
+        Assert.All(graph.Nodes, node => Assert.Equal(0, node.Inbound + node.Outbound));
     }
 
     [Fact]
@@ -126,7 +121,7 @@ public class WorkspaceWritingTests
     }
 
     [Fact]
-    public async Task Preview_describes_a_page_for_the_galaxy_hover_card()
+    public async Task Preview_describes_a_page_for_the_graph_inspector()
     {
         await using var app = await StartAsync();
         var workspace = app.Workspace;
@@ -151,15 +146,47 @@ public class WorkspaceWritingTests
         Assert.Equal(2, preview.Lines.Count);
         Assert.Equal(1, preview.ChildCount);
         Assert.True(preview.LinkCount >= 1);
-        Assert.Equal(GraphBodyKind.Planet, preview.Body);
         Assert.Null(await workspace.PreviewAsync("missing:nope"));
     }
 
-    private static double Dist(GraphNode a, GraphNode b)
+    [Fact]
+    public async Task Graph_preserves_reciprocal_parent_child_links_without_duplicates_or_self_links()
     {
-        var dx = a.X - b.X;
-        var dy = a.Y - b.Y;
-        return Math.Sqrt(dx * dx + dy * dy);
+        await using var app = await StartAsync();
+        var workspace = app.Workspace;
+        var parent = await workspace.CreatePageAsync(null, "Parent");
+        var child = await workspace.CreatePageAsync(parent, "Child");
+        await workspace.SetBlockTextAsync(parent, workspace.Tree(parent).Order[0].Id, "[[Child]] [[Child]] [[Parent]]");
+        await workspace.SetBlockTextAsync(child, workspace.Tree(child).Order[0].Id, "[[Parent]]");
+
+        var graph = await workspace.GraphAsync();
+        Assert.Equal(2, graph.Edges.Count);
+        Assert.Contains(graph.Edges, edge => edge.From == parent && edge.To == child);
+        Assert.Contains(graph.Edges, edge => edge.From == child && edge.To == parent);
+        Assert.All(graph.Nodes, node => { Assert.Equal(1, node.Inbound); Assert.Equal(1, node.Outbound); });
+    }
+
+    [Fact]
+    public async Task Graph_unresolved_targets_have_no_parent_and_resolve_when_created()
+    {
+        await using var app = await StartAsync();
+        var workspace = app.Workspace;
+        var source = await workspace.CreatePageAsync(null, "Source");
+        await workspace.SetBlockTextAsync(source, workspace.Tree(source).Order[0].Id, "[[Missing]]");
+        var graph = await workspace.GraphAsync();
+        var missing = Assert.Single(graph.Nodes, node => node.Missing);
+        Assert.Null(missing.ParentId);
+        Assert.Equal(1, missing.Inbound);
+
+        var created = await workspace.EnsurePageByTitleAsync("Missing");
+        graph = await workspace.GraphAsync();
+        Assert.DoesNotContain(graph.Nodes, node => node.Missing);
+        Assert.Contains(graph.Edges, edge => edge.From == source && edge.To == created);
+
+        await workspace.DeletePageAsync(source);
+        graph = await workspace.GraphAsync();
+        Assert.DoesNotContain(graph.Nodes, node => node.Id == source);
+        Assert.Empty(graph.Edges);
     }
 
     [Fact]
