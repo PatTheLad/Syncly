@@ -99,6 +99,43 @@ jobs:
           -o dist/linux
           --channel linux
           --packTitle Syncly
+      - name: Build .deb package
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y imagemagick
+          pkgdir="dist/deb/syncly_${VERSION}_amd64"
+          rm -rf "$pkgdir"
+          mkdir -p "$pkgdir/DEBIAN" "$pkgdir/usr/lib/syncly" "$pkgdir/usr/bin" \
+            "$pkgdir/usr/share/applications" "$pkgdir/usr/share/icons/hicolor/256x256/apps"
+          cp -r publish/linux/. "$pkgdir/usr/lib/syncly/"
+          chmod +x "$pkgdir/usr/lib/syncly/Syncly"
+          ln -s /usr/lib/syncly/Syncly "$pkgdir/usr/bin/syncly"
+          convert src/Syncly.Desktop/Assets/app.ico -resize 256x256 \
+            "$pkgdir/usr/share/icons/hicolor/256x256/apps/syncly.png"
+          cat > "$pkgdir/usr/share/applications/syncly.desktop" <<DESKTOP
+          [Desktop Entry]
+          Type=Application
+          Name=Syncly
+          Comment=Local-first, end-to-end encrypted notes and sync
+          Exec=/usr/bin/syncly
+          Icon=syncly
+          Categories=Office;
+          Terminal=false
+          DESKTOP
+          size=$(du -sk "$pkgdir/usr" | cut -f1)
+          cat > "$pkgdir/DEBIAN/control" <<CONTROL
+          Package: syncly
+          Version: ${VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Installed-Size: ${size}
+          Depends: libgtk-3-0, libwebkit2gtk-4.1-0 | libwebkit2gtk-4.0-37
+          Maintainer: PatTheLad <github.boastful839@passmail.net>
+          Description: Syncly desktop app
+           Syncly is a local-first, end-to-end encrypted notes and sync app.
+          CONTROL
+          dpkg-deb --build --root-owner-group "$pkgdir" "dist/linux/Syncly-${VERSION}-linux-x64.deb"
       - uses: actions/upload-artifact@v6
         with:
           name: linux
