@@ -27,7 +27,7 @@ export function mount(id, dotnet) {
     pointers: new Map(), gesture: null, longPress: 0, abort: new AbortController(),
     sprites: new Map(), labelWidths: new Map(), screenNodes: [], hitGrid: new Map(),
     labels: [], frames: 0, maxTickMs: 0, media: matchMedia('(prefers-reduced-motion: reduce)'),
-    stars: [], comets: [], nextComet: 0, startedAt: performance.now(), lastSave: 0 };
+    stars: [], comets: [], nextComet: 0, startedAt: performance.now(), lastSave: 0, animateUntil: 0 };
 
   instances.set(id, view);
   const on = (target, event, handler, options = {}) => target.addEventListener(event, handler, { ...options, signal: view.abort.signal });
@@ -36,7 +36,7 @@ export function mount(id, dotnet) {
   on(view.media, 'change', () => { view.flight = null; invalidate(view); });
   on(document, 'visibilitychange', () => {
     if (document.hidden) { cancelAnimationFrame(view.frame); view.frame = 0; save(view); }
-    else invalidate(view);
+    else wake(view);
   });
   on(window, 'pagehide', () => save(view));
   on(document, 'keydown', event => {
@@ -108,7 +108,7 @@ export function update(id, data) {
   view.currentId = data.currentId;
   if (!view.layout.byId.has(view.selectedId)) { view.selectedId = null; view.mode = 'all'; }
   if (!view.layout.byId.has(view.hoverId)) view.hoverId = null;
-  invalidate(view);
+  wake(view);
 }
 
 export function configure(id, settings) {
@@ -130,7 +130,7 @@ export function configure(id, settings) {
   if (settings.labels !== undefined) view.options.labels = !!settings.labels;
   if (settings.recent !== undefined) view.options.recent = !!settings.recent;
   write(localStorage, optionsKey, view.options);
-  invalidate(view);
+  wake(view);
 }
 
 export function select(id, nodeId, center = false) {
@@ -139,12 +139,12 @@ export function select(id, nodeId, center = false) {
   view.selectedId = view.layout.byId.has(nodeId) ? nodeId : null;
   if (!view.selectedId && view.mode === 'connections') configure(id, { mode: 'all' });
   if (center && view.selectedId) focus(id, view.selectedId);
-  invalidate(view);
+  wake(view);
 }
 
 export function setCurrent(id, nodeId) {
   const view = instances.get(id);
-  if (view) { view.currentId = nodeId; invalidate(view); }
+  if (view) { view.currentId = nodeId; wake(view); }
 }
 
 export function focus(id, nodeId) {
@@ -169,7 +169,7 @@ export function zoom(id, factor) {
 
 export function reset(id) {
   const view = instances.get(id);
-  if (view) { view.layout.reset(); view.initialFit = true; invalidate(view); }
+  if (view) { view.layout.reset(); view.initialFit = true; wake(view); }
 }
 
 export function focusElement(id) { document.getElementById(id)?.focus({ preventScroll: true }); }
@@ -273,7 +273,7 @@ function resize(view) {
       view.flight = null;
     }
   }
-  invalidate(view);
+  wake(view);
 }
 
 function local(view, event) {
@@ -315,7 +315,7 @@ function fitCamera(view) {
 function moveCamera(view, camera) {
   if (view.media.matches) { view.camera = { ...camera }; view.flight = null; }
   else view.flight = { from: { ...view.camera }, to: { ...camera }, started: performance.now() };
-  invalidate(view);
+  wake(view);
 }
 
 function zoomAt(view, x, y, factor) {
@@ -324,7 +324,7 @@ function zoomAt(view, x, y, factor) {
   view.camera.scale = clamp(view.camera.scale * factor, 0.04, 4);
   view.camera.x = anchor.x - (x - view.width / 2) / view.camera.scale;
   view.camera.y = anchor.y - (y - view.height / 2) / view.camera.scale;
-  invalidate(view);
+  wake(view);
 }
 
 function hit(view, x, y, touch = false) {
@@ -375,7 +375,7 @@ function pointerMove(view, event) {
   if (!view.pointers.has(event.pointerId)) {
     if (event.pointerType !== 'touch') {
       const hovered = hit(view, point.x, point.y)?.id ?? null;
-      if (hovered !== view.hoverId) { view.hoverId = hovered; invalidate(view); }
+      if (hovered !== view.hoverId) { view.hoverId = hovered; wake(view); }
       view.canvas.style.cursor = hovered ? 'pointer' : 'grab';
     }
     return;
@@ -410,7 +410,7 @@ function pointerMove(view, event) {
     gesture.last = point;
   }
   view.canvas.style.cursor = 'grabbing';
-  invalidate(view);
+  wake(view);
 }
 
 function pointerUp(view, event) {
@@ -430,7 +430,7 @@ function pointerUp(view, event) {
   if (view.canvas.hasPointerCapture(event.pointerId)) view.canvas.releasePointerCapture(event.pointerId);
   view.canvas.style.cursor = 'grab';
   save(view);
-  invalidate(view);
+  wake(view);
 }
 
 function cancelPointer(view, event) {
@@ -473,6 +473,12 @@ function invalidate(view) {
   if (!view.frame && !view.disposed && !document.hidden) view.frame = requestAnimationFrame(time => frame(view, time));
 }
 
+// Extends the cosmetic-animation window (orbits/twinkle/comets) so interactions feel alive, then the loop settles again.
+function wake(view, duration = 1200) {
+  view.animateUntil = Math.max(view.animateUntil, performance.now() + duration);
+  invalidate(view);
+}
+
 function frame(view, time) {
   view.frame = 0;
   if (view.disposed || document.hidden) return;
@@ -483,7 +489,8 @@ function frame(view, time) {
     view.layout.tick();
     view.maxTickMs = Math.max(view.maxTickMs, performance.now() - tickStarted);
   }
-  if (!reduced) view.layout.orbit(time);
+  const ambient = !reduced && time < view.animateUntil;
+  if (ambient) view.layout.orbit(time);
   if (view.initialFit) view.camera = fitCamera(view);
   if (view.flight) {
     const progress = clamp((time - view.flight.started) / 260, 0, 1);
@@ -491,19 +498,22 @@ function frame(view, time) {
     for (const key of ['x', 'y', 'scale']) view.camera[key] = view.flight.from[key] + (view.flight.to[key] - view.flight.from[key]) * eased;
     if (progress === 1) { view.camera = { ...view.flight.to }; view.flight = null; }
   }
-  if (!reduced && !view.pointers.size && time >= view.nextComet) {
+  if (ambient && !view.pointers.size && time >= view.nextComet) {
     view.nextComet = time + 7000 + Math.random() * 11000;
     const fromLeft = Math.random() < 0.5;
+    const life = 1100;
     view.comets.push({ x: fromLeft ? -30 : view.width + 30, y: Math.random() * view.height * 0.65,
-      vx: (fromLeft ? 1 : -1) * (240 + Math.random() * 180), vy: 70 + Math.random() * 70, born: time, life: 1100 });
+      vx: (fromLeft ? 1 : -1) * (240 + Math.random() * 180), vy: 70 + Math.random() * 70, born: time, life });
+    view.animateUntil = Math.max(view.animateUntil, time + life + 50);
   }
   draw(view, time);
   view.frames++;
-  const animating = (!reduced && !view.pointers.size) || (view.layout.active && !view.pointers.size) || view.flight;
+  const animating = (ambient && !view.pointers.size) || (view.layout.active && !view.pointers.size) || view.flight;
   if (animating) invalidate(view);
   else if (!view.pointers.size) { view.initialFit = false; save(view); }
   if (time - view.lastSave > 4000) { view.lastSave = time; save(view); }
 }
+
 
 function colorFor(node) {
   const set = palettes[node.kind] || palettes.planet;
