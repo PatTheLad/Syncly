@@ -6,13 +6,43 @@ export function hash(value) {
   return result >>> 0;
 }
 
-export function radiusFor(degree, missing = false) {
-  return missing ? 7 : 9 + Math.min(10, Math.log2(1 + degree) * 2.3);
+export function radiusFor(depth, degree, missing = false) {
+  if (missing) return 6;
+  const boost = Math.min(9, Math.log2(1 + degree) * 1.7);
+  if (depth <= 0) return 21 + boost;
+  if (depth === 1) return 12.5 + boost * 0.6;
+  if (depth === 2) return 7.5 + boost * 0.35;
+  return Math.max(3.5, 5.5 - (depth - 3) * 0.5);
+}
+
+export function kindFor(depth) {
+  return depth <= 0 ? 'sun' : depth === 1 ? 'planet' : depth === 2 ? 'moon' : 'asteroid';
 }
 
 const compare = (left, right) => left < right ? -1 : left > right ? 1 : 0;
 const pairKey = (from, to) => JSON.stringify([from, to]);
 const finite = value => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) < 1e6;
+
+function assignOrbits(nodes, byId) {
+  const groups = new Map();
+  for (const node of nodes) {
+    if (node.depth <= 0 || !byId.has(node.parentId)) continue;
+    if (!groups.has(node.parentId)) groups.set(node.parentId, []);
+    groups.get(node.parentId).push(node);
+  }
+  for (const [parentId, children] of groups) {
+    children.sort((left, right) => compare(left.id, right.id));
+    const parent = byId.get(parentId);
+    children.forEach((child, index) => {
+      const gap = child.depth === 1 ? 48 : child.depth === 2 ? 24 : 14;
+      child.orbitRadius = (parent.radius || 16) + child.radius + 30 + index * gap;
+      const direction = hash(child.id) % 2 === 0 ? 1 : -1;
+      const base = child.depth === 1 ? 0.000062 : child.depth === 2 ? 0.00016 : 0.00028;
+      child.orbitSpeed = direction * base / (1 + index * 0.12);
+      child.orbitAngle0 = (hash(child.id + ':a') % 6283) / 1000;
+    });
+  }
+}
 
 export function restorePositions(value) {
   if (!Array.isArray(value)) return new Map();
@@ -27,8 +57,8 @@ export function createLayout(data = {}, saved = [], savedTopology = null) {
   let signature = '';
   let remaining = 0;
   const restored = restorePositions(saved);
-  const layout = { nodes: [], edges: [], links: [], neighbors: new Map(), byId: new Map(),
-    update, tick, pin, reset, destroy, snapshot,
+  const layout = { nodes: [], edges: [], links: [], neighbors: new Map(), byId: new Map(), roots: [],
+    update, tick, pin, reset, destroy, snapshot, orbit,
     get active() { return remaining > 0 && simulation?.alpha() > 0.001; },
     get topology() { return signature; } };
 
@@ -44,8 +74,9 @@ export function createLayout(data = {}, saved = [], savedTopology = null) {
       const spread = 40 + Math.sqrt(index + 1) * 25;
       const node = old || { x: stored?.x ?? Math.cos(angle) * spread, y: stored?.y ?? Math.sin(angle) * spread,
         vx: 0, vy: 0, fx: stored?.fx ?? null, fy: stored?.fy ?? null };
+      const depth = Number.isFinite(metadata.depth) ? Math.max(0, metadata.depth) : 0;
       Object.assign(node, { id: metadata.id, title: metadata.title || 'Untitled', icon: metadata.icon || '',
-        missing: !!metadata.missing, parentId: metadata.parentId || null,
+        missing: !!metadata.missing, parentId: metadata.parentId || null, depth, kind: kindFor(depth),
         updatedAt: metadata.updatedAt || 0, inbound: metadata.inbound || 0, outbound: metadata.outbound || 0 });
       byId.set(node.id, node);
     }
@@ -61,10 +92,11 @@ export function createLayout(data = {}, saved = [], savedTopology = null) {
       neighbors.get(target).add(source);
     }
     const edges = [...directed.values()].sort((left, right) => compare(pairKey(left.from, left.to), pairKey(right.from, right.to)));
-    const links = [...pairs.values()].sort((left, right) => compare(pairKey(left.source, left.target), pairKey(right.source, right.target)));
+    const idLinks = [...pairs.values()].sort((left, right) => compare(pairKey(left.source, left.target), pairKey(right.source, right.target)));
+    const links = idLinks.map(pair => ({ source: byId.get(pair.source), target: byId.get(pair.target) }));
     for (const node of byId.values()) {
       node.degree = neighbors.get(node.id).size;
-      node.radius = radiusFor(node.degree, node.missing);
+      node.radius = radiusFor(node.depth, node.degree, node.missing);
       if (!previous.has(node.id) && !restored.has(node.id)) {
         const anchors = [...neighbors.get(node.id)].map(id => previous.get(id)).filter(Boolean);
         if (anchors.length) {
@@ -73,8 +105,12 @@ export function createLayout(data = {}, saved = [], savedTopology = null) {
         }
       }
     }
-    const nextSignature = JSON.stringify([[...byId.values()].map(node => [node.id, node.missing]), links]);
-    layout.nodes = [...byId.values()];
+    const roots = [...byId.values()].filter(node => node.depth <= 0);
+    assignOrbits([...byId.values()], byId);
+    const rootLinks = links.filter(link => link.source.depth <= 0 && link.target.depth <= 0);
+    const nextSignature = JSON.stringify([[...byId.values()].map(node => [node.id, node.missing, node.parentId]), idLinks]);
+    layout.nodes = [...byId.values()].sort((left, right) => left.depth - right.depth);
+    layout.roots = roots;
     layout.byId = byId;
     layout.edges = edges;
     layout.neighbors = neighbors;
@@ -82,19 +118,30 @@ export function createLayout(data = {}, saved = [], savedTopology = null) {
     signature = nextSignature;
     simulation?.stop();
     layout.links = links;
-    simulation = forceSimulation(layout.nodes).stop()
-      .force('link', forceLink(links).id(node => node.id).distance(100).strength(0.55))
-      .force('charge', forceManyBody().strength(-230).distanceMax(900))
-      .force('collision', forceCollide(node => node.radius + 17).iterations(2))
-      .force('x', forceX(0).strength(0.012))
-      .force('y', forceY(0).strength(0.012))
+    simulation = forceSimulation(roots).stop()
+      .force('link', forceLink(rootLinks).id(node => node.id).distance(220).strength(0.4))
+      .force('charge', forceManyBody().strength(-620).distanceMax(1400))
+      .force('collision', forceCollide(node => node.radius + 90).iterations(2))
+      .force('x', forceX(0).strength(0.01))
+      .force('y', forceY(0).strength(0.01))
       .alpha(previous.size ? 0.35 : 1).alphaDecay(0.035).velocityDecay(0.45);
     remaining = 220;
-    if (!previous.size && savedTopology === signature && layout.nodes.every(node => restored.has(node.id))) {
+    if (!previous.size && savedTopology === signature && roots.every(node => restored.has(node.id))) {
       remaining = 0;
       simulation.alpha(0);
     }
     return true;
+  }
+
+  function orbit(time) {
+    for (const node of layout.nodes) {
+      if (node.depth <= 0 || node.fx != null) continue;
+      const parent = layout.byId.get(node.parentId);
+      if (!parent) continue;
+      const angle = node.orbitAngle0 + time * node.orbitSpeed;
+      node.x = parent.x + Math.cos(angle) * node.orbitRadius;
+      node.y = parent.y + Math.sin(angle) * node.orbitRadius;
+    }
   }
 
   function tick(count = 1) {

@@ -1,7 +1,12 @@
 import { createLayout, hash } from './galaxy-layout.mjs';
 
 const instances = new Map();
-const palette = ['#a4dace', '#edbb91', '#a9c9ee', '#daa3ae', '#d9dba9'];
+const palettes = {
+  sun: ['#ffd27a', '#ffb14e', '#ff9d5c', '#ffe29a', '#ff8f6b'],
+  planet: ['#7fd8ff', '#9adfb0', '#c792ea', '#7ea8ff', '#5fd9c9', '#e3a8f2'],
+  moon: ['#cfd6e4', '#b9c2d4', '#a8b3c9', '#dfe4ee'],
+  asteroid: ['#8d97a8', '#767f8f', '#9aa2b0'],
+};
 const cachePrefix = 'syncly.galaxy.v2.space.';
 const optionsKey = 'syncly.galaxy.v2.options';
 const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
@@ -21,7 +26,9 @@ export function mount(id, dotnet) {
     frame: 0, disposed: false, initialFit: true, flight: null, overview: null,
     pointers: new Map(), gesture: null, longPress: 0, abort: new AbortController(),
     sprites: new Map(), labelWidths: new Map(), screenNodes: [], hitGrid: new Map(),
-    labels: [], frames: 0, maxTickMs: 0, media: matchMedia('(prefers-reduced-motion: reduce)') };
+    labels: [], frames: 0, maxTickMs: 0, media: matchMedia('(prefers-reduced-motion: reduce)'),
+    stars: [], comets: [], nextComet: 0, startedAt: performance.now(), lastSave: 0 };
+
   instances.set(id, view);
   const on = (target, event, handler, options = {}) => target.addEventListener(event, handler, { ...options, signal: view.abort.signal });
   view.observer = new ResizeObserver(() => resize(view));
@@ -225,15 +232,36 @@ function resize(view) {
   view.background.height = view.canvas.height;
   const background = view.background.getContext('2d');
   background.scale(view.dpr, view.dpr);
-  background.fillStyle = '#090a0d';
+  background.fillStyle = '#06070c';
   background.fillRect(0, 0, view.width, view.height);
-  const count = Math.round(view.width * view.height / 7000);
+  const nebulae = [
+    { color: '#4a2f8f', a: 0.22 }, { color: '#164a6b', a: 0.18 },
+    { color: '#5c2350', a: 0.16 }, { color: '#1f5a4d', a: 0.12 },
+  ];
+  nebulae.forEach((cloud, index) => {
+    const seed = hash(`nebula-${index}`);
+    const x = (seed % 10000) / 10000 * view.width;
+    const y = (hash(seed + 1) % 10000) / 10000 * view.height;
+    const radius = Math.max(view.width, view.height) * (0.32 + (seed % 5) / 18);
+    const gradient = background.createRadialGradient(x, y, 0, x, y, radius);
+    const alphaHex = Math.round(cloud.a * 255).toString(16).padStart(2, '0');
+    gradient.addColorStop(0, cloud.color + alphaHex);
+    gradient.addColorStop(1, cloud.color + '00');
+    background.fillStyle = gradient;
+    background.fillRect(0, 0, view.width, view.height);
+  });
+  view.stars = [];
+  const count = Math.round(view.width * view.height / 4600);
   for (let index = 0; index < count; index++) {
     const seed = hash(`star-${index}`);
-    background.fillStyle = `rgba(213,221,232,${0.10 + (seed % 9) / 70})`;
-    background.beginPath();
-    background.arc((seed % 10000) / 10000 * view.width, (hash(seed) % 10000) / 10000 * view.height, index % 9 === 0 ? 1 : 0.55, 0, Math.PI * 2);
-    background.fill();
+    view.stars.push({
+      x: (seed % 10000) / 10000 * view.width,
+      y: (hash(seed) % 10000) / 10000 * view.height,
+      size: index % 13 === 0 ? 1.7 : index % 5 === 0 ? 1.1 : 0.6,
+      phase: (seed % 6283) / 1000,
+      speed: 0.0009 + (seed % 50) / 60000,
+      base: 0.12 + (seed % 9) / 55,
+    });
   }
   if (hadSize && view.selectedId) {
     const node = view.layout.byId.get(view.selectedId);
@@ -448,12 +476,14 @@ function invalidate(view) {
 function frame(view, time) {
   view.frame = 0;
   if (view.disposed || document.hidden) return;
+  const reduced = view.media.matches;
   const started = performance.now();
   while (view.layout.active && performance.now() - started < 4 && !view.pointers.size) {
     const tickStarted = performance.now();
     view.layout.tick();
     view.maxTickMs = Math.max(view.maxTickMs, performance.now() - tickStarted);
   }
+  if (!reduced) view.layout.orbit(time);
   if (view.initialFit) view.camera = fitCamera(view);
   if (view.flight) {
     const progress = clamp((time - view.flight.started) / 260, 0, 1);
@@ -461,37 +491,104 @@ function frame(view, time) {
     for (const key of ['x', 'y', 'scale']) view.camera[key] = view.flight.from[key] + (view.flight.to[key] - view.flight.from[key]) * eased;
     if (progress === 1) { view.camera = { ...view.flight.to }; view.flight = null; }
   }
-  draw(view);
+  if (!reduced && !view.pointers.size && time >= view.nextComet) {
+    view.nextComet = time + 7000 + Math.random() * 11000;
+    const fromLeft = Math.random() < 0.5;
+    view.comets.push({ x: fromLeft ? -30 : view.width + 30, y: Math.random() * view.height * 0.65,
+      vx: (fromLeft ? 1 : -1) * (240 + Math.random() * 180), vy: 70 + Math.random() * 70, born: time, life: 1100 });
+  }
+  draw(view, time);
   view.frames++;
-  if ((view.layout.active && !view.pointers.size) || view.flight) invalidate(view);
+  const animating = (!reduced && !view.pointers.size) || (view.layout.active && !view.pointers.size) || view.flight;
+  if (animating) invalidate(view);
   else if (!view.pointers.size) { view.initialFit = false; save(view); }
+  if (time - view.lastSave > 4000) { view.lastSave = time; save(view); }
 }
 
-function sprite(view, color) {
-  if (view.sprites.has(color)) return view.sprites.get(color);
+function colorFor(node) {
+  const set = palettes[node.kind] || palettes.planet;
+  return set[hash(node.id) % set.length];
+}
+
+function sprite(view, color, kind) {
+  const key = kind + ':' + color;
+  if (view.sprites.has(key)) return view.sprites.get(key);
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 96;
   const context = canvas.getContext('2d');
   context.beginPath(); context.arc(48, 48, 44, 0, Math.PI * 2); context.clip();
+  const highlight = kind === 'sun' ? '#fff6df' : kind === 'planet' ? '#f5f1e8' : '#eceff4';
   const surface = context.createRadialGradient(30, 26, 1, 53, 53, 57);
-  surface.addColorStop(0, '#f5f1e8'); surface.addColorStop(0.23, color);
-  surface.addColorStop(0.65, color); surface.addColorStop(1, '#1d222c');
+  surface.addColorStop(0, highlight);
+  surface.addColorStop(kind === 'sun' ? 0.14 : 0.23, color);
+  surface.addColorStop(0.65, color);
+  surface.addColorStop(1, kind === 'sun' ? '#5a2a0f' : '#1d222c');
   context.fillStyle = surface; context.fillRect(0, 0, 96, 96);
-  context.strokeStyle = '#ffffff18'; context.lineWidth = 2;
-  for (let index = 0; index < 6; index++) {
-    context.beginPath(); context.ellipse(43, 20 + index * 14, 55, 8, -0.3, 0, Math.PI * 2); context.stroke();
+  if (kind === 'sun') {
+    context.strokeStyle = '#ffffff26'; context.lineWidth = 2;
+    for (let index = 0; index < 6; index++) {
+      context.beginPath(); context.ellipse(43, 20 + index * 14, 55, 8, -0.3, 0, Math.PI * 2); context.stroke();
+    }
+  } else if (kind === 'moon' || kind === 'asteroid') {
+    context.fillStyle = '#00000024';
+    for (let index = 0; index < 4; index++) {
+      const seed = hash(color + ':' + index);
+      context.beginPath(); context.arc(18 + (seed % 52), 22 + (hash(seed) % 48), 3 + (seed % 5), 0, Math.PI * 2); context.fill();
+    }
   }
   const shadow = context.createLinearGradient(15, 0, 90, 70);
-  shadow.addColorStop(0, '#00000000'); shadow.addColorStop(0.55, '#00000010'); shadow.addColorStop(1, '#000000a0');
+  shadow.addColorStop(0, '#00000000');
+  shadow.addColorStop(0.55, kind === 'sun' ? '#00000006' : '#00000012');
+  shadow.addColorStop(1, kind === 'sun' ? '#00000030' : '#000000a0');
   context.fillStyle = shadow; context.fillRect(0, 0, 96, 96);
-  view.sprites.set(color, canvas);
+  view.sprites.set(key, canvas);
   return canvas;
 }
 
-function draw(view) {
+function drawStars(view, time) {
+  if (!view.stars.length) return;
+  const context = view.context;
+  const reduced = view.media.matches;
+  context.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+  for (const star of view.stars) {
+    const twinkle = reduced ? star.base : star.base + Math.sin(time * star.speed + star.phase) * 0.1;
+    context.globalAlpha = clamp(twinkle, 0.02, 0.95);
+    context.fillStyle = '#e9edf9';
+    context.beginPath(); context.arc(star.x, star.y, star.size, 0, Math.PI * 2); context.fill();
+  }
+  context.globalAlpha = 1;
+}
+
+function drawComets(view, time) {
+  if (!view.comets.length) return;
+  const context = view.context;
+  context.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+  view.comets = view.comets.filter(comet => time - comet.born < comet.life);
+  for (const comet of view.comets) {
+    const t = clamp((time - comet.born) / comet.life, 0, 1);
+    const x = comet.x + comet.vx * t;
+    const y = comet.y + comet.vy * t;
+    const angle = Math.atan2(comet.vy, comet.vx);
+    const length = 76;
+    const tailX = x - Math.cos(angle) * length, tailY = y - Math.sin(angle) * length;
+    const fade = t < 0.15 ? t / 0.15 : 1 - (t - 0.15) / 0.85;
+    const gradient = context.createLinearGradient(x, y, tailX, tailY);
+    gradient.addColorStop(0, `rgba(255,255,255,${0.85 * fade})`);
+    gradient.addColorStop(1, 'rgba(255,255,255,0)');
+    context.strokeStyle = gradient; context.lineWidth = 2; context.lineCap = 'round';
+    context.beginPath(); context.moveTo(x, y); context.lineTo(tailX, tailY); context.stroke();
+    context.fillStyle = `rgba(255,255,255,${fade})`;
+    context.beginPath(); context.arc(x, y, 1.6, 0, Math.PI * 2); context.fill();
+  }
+  context.globalAlpha = 1;
+}
+
+function draw(view, time = performance.now()) {
   const context = view.context;
   context.setTransform(1, 0, 0, 1, 0, 0);
   if (view.background) context.drawImage(view.background, 0, 0);
+  drawStars(view, time);
+  drawComets(view, time);
   context.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
   const focusId = view.hoverId || view.selectedId;
   const neighborhood = view.layout.neighbors.get(focusId);
@@ -501,7 +598,7 @@ function draw(view) {
   for (const node of view.layout.nodes) {
     if (!visible(view, node)) continue;
     const point = screen(view, node);
-    const radius = clamp(node.radius * Math.sqrt(view.camera.scale), 4, 29);
+    const radius = clamp(node.radius * Math.sqrt(view.camera.scale), 3, 34);
     const relevant = !focusId || node.id === focusId || neighborhood?.has(node.id);
     const matches = !view.query || node.title.toLocaleLowerCase().includes(view.query);
     const item = { node, ...point, radius, alpha: relevant && matches ? 1 : 0.22, matches };
@@ -512,6 +609,20 @@ function draw(view) {
     if (!view.hitGrid.has(cell)) view.hitGrid.set(cell, []);
     view.hitGrid.get(cell).push(item);
   }
+  for (const node of view.layout.nodes) {
+    if (node.depth <= 0 || !visible(view, node)) continue;
+    const parent = view.layout.byId.get(node.parentId);
+    if (!parent) continue;
+    const center = screen(view, parent);
+    const radius = node.orbitRadius * view.camera.scale;
+    if (radius < 8 || radius > Math.max(view.width, view.height) * 1.6) continue;
+    context.globalAlpha = node.id === focusId ? 0.4 : 0.14;
+    context.strokeStyle = node.depth === 1 ? '#ffcf8a' : node.depth === 2 ? '#9fd6ff' : '#c3c8d4';
+    context.lineWidth = 1;
+    context.setLineDash([1.5, 5]);
+    context.beginPath(); context.arc(center.x, center.y, radius, 0, Math.PI * 2); context.stroke();
+  }
+  context.setLineDash([]);
   const directed = new Set(view.layout.edges.map(edge => JSON.stringify([edge.from, edge.to])));
   for (const link of view.layout.links) {
     const source = projected.get(link.source.id), target = projected.get(link.target.id);
@@ -519,10 +630,12 @@ function draw(view) {
     if ((source.x < 0 && target.x < 0) || (source.x > view.width && target.x > view.width)
       || (source.y < 0 && target.y < 0) || (source.y > view.height && target.y > view.height)) continue;
     const highlighted = source.node.id === focusId || target.node.id === focusId;
-    context.strokeStyle = highlighted ? '#a6b8c7' : '#79858f';
-    context.globalAlpha = highlighted ? 0.75 : focusId || view.query ? 0.065 : 0.23;
-    context.lineWidth = highlighted ? 1.35 : 0.8;
+    context.strokeStyle = highlighted ? '#bcd8f2' : '#79858f';
+    context.globalAlpha = highlighted ? 0.8 : focusId || view.query ? 0.065 : 0.23;
+    context.lineWidth = highlighted ? 1.4 : 0.8;
+    if (highlighted) { context.setLineDash([5, 4]); context.lineDashOffset = -(time * 0.026) % 9; }
     context.beginPath(); context.moveTo(source.x, source.y); context.lineTo(target.x, target.y); context.stroke();
+    context.setLineDash([]);
     if (highlighted) {
       if (directed.has(JSON.stringify([source.node.id, target.node.id]))) arrow(context, source, target);
       if (directed.has(JSON.stringify([target.node.id, source.node.id]))) arrow(context, target, source);
@@ -530,7 +643,19 @@ function draw(view) {
   }
   for (const item of view.screenNodes) {
     const { node, x, y, radius, alpha } = item;
-    const color = palette[hash(node.id) % palette.length];
+    const color = colorFor(node);
+    context.globalAlpha = alpha;
+    if (node.kind === 'sun') {
+      const pulse = 1 + Math.sin(time * 0.0012 + hash(node.id) % 1000) * 0.16;
+      const glow = context.createRadialGradient(x, y, radius * 0.3, x, y, radius * 2.6 * pulse);
+      glow.addColorStop(0, color + 'b0');
+      glow.addColorStop(1, color + '00');
+      context.fillStyle = glow;
+      context.beginPath(); context.arc(x, y, radius * 2.6 * pulse, 0, Math.PI * 2); context.fill();
+    } else if (node.kind === 'planet' && hash(node.id) % 3 === 0) {
+      context.strokeStyle = color + '80'; context.lineWidth = Math.max(1, radius * 0.16);
+      context.beginPath(); context.ellipse(x, y, radius * 1.75, radius * 0.55, 0.5, 0, Math.PI * 2); context.stroke();
+    }
     context.globalAlpha = alpha;
     if (node.id === view.selectedId || node.id === view.hoverId) {
       context.strokeStyle = node.id === view.selectedId ? '#ffffff' : '#9ba6b3';
@@ -541,7 +666,7 @@ function draw(view) {
       context.strokeStyle = '#a6a3b3'; context.lineWidth = 1.4; context.setLineDash([3, 3]);
       context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.stroke(); context.setLineDash([]);
     } else {
-      context.drawImage(sprite(view, color), x - radius, y - radius, radius * 2, radius * 2);
+      context.drawImage(sprite(view, color, node.kind), x - radius, y - radius, radius * 2, radius * 2);
     }
     if (node.id === view.currentId) {
       context.fillStyle = '#ffffff'; context.beginPath(); context.arc(x + radius, y - radius, 3, 0, Math.PI * 2); context.fill();
