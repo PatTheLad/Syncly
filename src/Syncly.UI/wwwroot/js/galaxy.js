@@ -1337,7 +1337,6 @@
     }
 
     if (g.hits.size > 0 || g.currentId || g.selectedId) animating = animating || g.motion;
-    if (g.timeCursor !== null && g.timeWindow > 0) animating = true;
 
     if (g.opt.effects) {
       updateComets(g, dt);
