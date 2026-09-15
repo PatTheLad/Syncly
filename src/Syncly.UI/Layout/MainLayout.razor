@@ -68,10 +68,10 @@
                 }
                 else
                 {
-                    @foreach (var page in _tagPages)
+                    @foreach (var entry in _tagPages)
                     {
-                        <button type="button" class="search-hit" @key="page.Id" @onclick="() => OpenTagPage(page)">
-                            <strong>@page.DisplayTitle</strong>
+                        <button type="button" class="search-hit" @key="entry.Id" @onclick="() => OpenTagPage(entry)">
+                            <strong>@entry.DisplayTitle</strong>
                         </button>
                     }
                 }
@@ -522,7 +522,7 @@
         Open(pageId);
     }
 
-    private sealed record LinkPreviewInfo(string Title, bool Missing, IReadOnlyList<string> Lines);
+    public sealed record LinkPreviewInfo(string Title, bool Missing, IReadOnlyList<string> Lines);
 
     [JSInvokable]
     public async Task<LinkPreviewInfo> OnLinkPreview(string title)

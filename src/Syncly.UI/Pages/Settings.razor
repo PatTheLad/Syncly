@@ -284,14 +284,14 @@
                         }
                         else
                         {
-                            @foreach (var page in _trash)
+                            @foreach (var entry in _trash)
                             {
                                 <div class="row wrap" style="margin-top:0.5rem;align-items:flex-start;">
                                     <div class="grow">
-                                        <div class="card-title">@page.DisplayTitle</div>
-                                        <div class="card-sub">Deleted @page.UpdatedAt.ToLocalTime().ToString("g")</div>
+                                        <div class="card-title">@entry.DisplayTitle</div>
+                                        <div class="card-sub">Deleted @entry.UpdatedAt.ToLocalTime().ToString("g")</div>
                                     </div>
-                                    <button class="chip" @onclick="() => RestorePageAsync(page.Id, page.DisplayTitle)">Restore</button>
+                                    <button class="chip" @onclick="() => RestorePageAsync(entry.Id, entry.DisplayTitle)">Restore</button>
                                 </div>
                             }
                         }
