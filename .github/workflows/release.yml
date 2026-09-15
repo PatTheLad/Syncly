@@ -101,7 +101,12 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      # Default packages include the obsolete `tools` package Google removed;
+      # sdkmanager then exits 1 with "Failed to find package 'tools'".
       - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - run: dotnet workload install maui-android
       # Android refuses to replace an installed app unless the new APK is signed with the
       # same certificate. A fresh debug.keystore on each runner made every release look
