@@ -1936,231 +1936,651 @@ html.phone .icon-grid {
 }
 
 .graph-page {
+  --graph-head-x: 22px;
+  --graph-head-y: 16px;
+  --graph-subtitle-display: block;
   position: relative;
+  isolation: isolate;
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: #03010a;
   overflow: hidden;
+  background:
+    radial-gradient(circle at 48% 52%, #11162b 0, #080b17 42%, #020309 100%);
+}
+
+.graph-page::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  content: "";
+  background:
+    radial-gradient(ellipse at 16% 30%, rgb(74 82 159 / 10%), transparent 42%),
+    radial-gradient(ellipse at 82% 70%, rgb(58 113 146 / 8%), transparent 38%);
+  pointer-events: none;
 }
 
 .graph-head {
   position: absolute;
-  z-index: 2;
+  z-index: 4;
   top: 0;
-  left: 0;
   right: 0;
+  left: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  padding: 14px 20px 28px;
-  background: linear-gradient(to bottom, rgb(3 1 10 / 82%), rgb(3 1 10 / 0%));
-  border-bottom: none;
-  pointer-events: none;
-}
-
-.graph-head .chip {
+  gap: 16px;
+  min-height: 76px;
+  padding: var(--graph-head-y) var(--graph-head-x) 30px;
+  background: linear-gradient(to bottom, rgb(2 3 9 / 92%), rgb(2 3 9 / 56%) 52%, transparent);
   pointer-events: auto;
 }
 
+.graph-head-copy {
+  min-width: 0;
+}
+
 .graph-title {
-  font-size: 16px;
-  font-weight: 650;
-  letter-spacing: 0.04em;
+  margin: 0;
+  color: #f7f8ff;
+  font-size: 15px;
+  font-weight: 680;
+  letter-spacing: 0.13em;
+  line-height: 1.35;
+  text-shadow: 0 0 20px rgb(159 183 255 / 24%);
   text-transform: uppercase;
 }
 
 .graph-head .card-sub {
-  color: #9aa0c8;
+  display: var(--graph-subtitle-display);
+  overflow: hidden;
+  margin-top: 2px;
+  color: #8f98b8;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-count {
+  flex: none;
+  padding: 4px 10px;
+  color: #9da6c5;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  background: rgb(14 18 35 / 58%);
+  border: 1px solid rgb(174 190 255 / 10%);
+  border-radius: 99px;
+  box-shadow: inset 0 1px rgb(255 255 255 / 3%);
+  backdrop-filter: blur(8px);
 }
 
 .graph-canvas {
+  display: block;
   flex: 1;
-  min-height: 0;
   width: 100%;
   height: 100%;
-  background: #03010a;
+  min-height: 0;
+  overflow: hidden;
+  background: transparent;
+  opacity: 0;
+  touch-action: manipulation;
+  transition: opacity 180ms ease;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.graph-canvas.ready {
+  opacity: 1;
 }
 
 .graph-empty {
-  margin-top: 72px;
+  position: relative;
+  z-index: 1;
+  margin-top: 76px;
 }
 
-.graph-nebula {
-  fill: #6b4cff;
-  opacity: 0.09;
+.graph-empty-orbit {
+  position: relative;
+  width: 86px;
+  height: 38px;
+  margin: 0 auto 22px;
+  border: 1px solid rgb(164 183 235 / 18%);
+  border-radius: 50%;
+  transform: rotate(-14deg);
+}
+
+.graph-empty-orbit::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 20px;
+  height: 20px;
+  content: "";
+  background: radial-gradient(circle at 35% 30%, #fff, #ffd37c 36%, #b64f33 76%, transparent 78%);
+  border-radius: 50%;
+  box-shadow: 0 0 24px rgb(255 171 79 / 55%);
+  transform: translate(-50%, -50%);
+}
+
+.graph-empty-orbit span {
+  position: absolute;
+  top: -2px;
+  left: 48%;
+  width: 7px;
+  height: 7px;
+  background: #8ab9d4;
+  border-radius: 50%;
+  box-shadow: 0 0 8px rgb(112 192 233 / 42%);
+}
+
+.graph-space,
+.graph-deep-field,
+.galaxy-field,
+.graph-vignette,
+.graph-connections {
   pointer-events: none;
 }
 
-.graph-nebula.two {
-  fill: #ff5b8a;
-  opacity: 0.07;
+.space-star {
+  --star-alpha: 0.45;
+  fill: #e8edff;
+  opacity: var(--star-alpha);
 }
 
-.graph-nebula.three {
-  fill: #3ec7ff;
-  opacity: 0.06;
+.space-star.tone-0 {
+  fill: #dcecff;
+  color: #dcecff;
 }
 
-.graph-speck {
-  fill: #f4f1ff;
+.space-star.tone-1 {
+  fill: #fff7de;
+  color: #fff7de;
+}
+
+.space-star.tone-2 {
+  fill: #c1d0ff;
+  color: #c1d0ff;
+}
+
+.space-star.flare line {
+  stroke: currentcolor;
+  stroke-width: 0.55;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.space-star.flare circle {
+  fill: currentcolor;
+  filter: url(#star-soft-glow);
+}
+
+.space-star.twinkle {
+  animation: space-twinkle 5.4s ease-in-out var(--twinkle-delay) infinite;
+}
+
+.galaxy-field {
+  mix-blend-mode: screen;
+}
+
+.galaxy-halo {
+  opacity: 0.68;
+  filter: url(#galaxy-soft-blur);
+}
+
+.nebula-cloud {
+  opacity: 0.55;
+  filter: url(#galaxy-soft-blur);
+}
+
+.nebula-violet {
+  fill: url(#nebula-violet);
+}
+
+.nebula-blue {
+  fill: url(#nebula-blue);
+}
+
+.galaxy-arm-wash,
+.galaxy-arm,
+.galaxy-dust-lane {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.galaxy-arm-wash {
+  stroke: url(#galaxy-arm);
+  opacity: 0.2;
+  filter: url(#galaxy-soft-blur);
+}
+
+.galaxy-arm {
+  stroke: url(#galaxy-arm);
+  opacity: 0.34;
+}
+
+.galaxy-dust-lane {
+  stroke: #03040b;
+  opacity: 0.24;
+}
+
+.galaxy-particle {
+  fill: #dfe9ff;
+}
+
+.galaxy-particle.tone-1 {
+  fill: #ffe7ad;
+}
+
+.galaxy-particle.tone-2 {
+  fill: #8dcfff;
+}
+
+.galaxy-nucleus-glow {
+  fill: #ffdca2;
+  opacity: 0.44;
+  filter: url(#galaxy-core-blur);
+}
+
+.galaxy-nucleus {
+  fill: #fff8df;
+  opacity: 0.78;
+  filter: url(#star-soft-glow);
+  animation: nucleus-shimmer 7s ease-in-out infinite;
+}
+
+.graph-orbit,
+.graph-link {
+  fill: none;
   pointer-events: none;
+  vector-effect: non-scaling-stroke;
 }
 
 .graph-orbit {
-  fill: none;
-  stroke: rgb(180 190 255 / 18%);
-  stroke-width: 1;
-  pointer-events: none;
+  stroke: rgb(174 196 229 / 14%);
+  stroke-width: 0.8;
 }
 
 .graph-orbit.depth-0 {
-  stroke: rgb(255 210 120 / 28%);
-  stroke-width: 1.2;
+  stroke: rgb(235 211 157 / 19%);
+  stroke-width: 0.9;
 }
 
 .graph-orbit.depth-1 {
-  stroke: rgb(160 200 255 / 22%);
+  stroke: rgb(145 188 223 / 16%);
 }
 
 .graph-orbit.depth-2,
 .graph-orbit.depth-3,
 .graph-orbit.depth-4 {
-  stroke: rgb(160 160 180 / 16%);
-  stroke-dasharray: 3 5;
+  stroke: rgb(151 165 193 / 11%);
+  stroke-dasharray: 2 5;
 }
 
 .graph-link {
-  fill: none;
-  stroke: rgb(170 140 255 / 28%);
-  stroke-width: 1.1;
-  stroke-dasharray: 5 7;
-  pointer-events: none;
+  stroke: rgb(133 164 211 / 17%);
+  stroke-width: 0.9;
+  stroke-dasharray: 2 6;
+  transition: stroke 180ms ease, stroke-width 180ms ease;
 }
 
-.graph-body.quiet .graph-glyph,
-.graph-body.quiet .graph-label {
-  display: none;
+.graph-link.active {
+  stroke: rgb(146 205 255 / 48%);
+  stroke-width: 1.2;
+  stroke-dasharray: none;
 }
 
-.planet-ring.hidden {
-  display: none;
+.graph-body {
+  cursor: pointer;
+  outline: none;
+}
+
+.graph-object {
+  transform-origin: 0 0;
+  transition: filter 180ms ease, transform 180ms ease;
+}
+
+.graph-body:hover .graph-object,
+.graph-body:focus-visible .graph-object {
+  filter: brightness(1.14);
+  transform: scale(1.055);
 }
 
 .graph-hit {
   fill: transparent;
+  stroke: transparent;
+  stroke-width: 1;
+  pointer-events: all;
+  vector-effect: non-scaling-stroke;
+}
+
+.graph-body:focus-visible .graph-hit {
+  fill: rgb(150 193 255 / 7%);
+  stroke: rgb(184 218 255 / 72%);
+  stroke-dasharray: 2 3;
+}
+
+.star-rays {
+  opacity: 0.38;
+  filter: url(#star-soft-glow);
+}
+
+.star-rays line {
+  stroke: #f6f4e9;
+  stroke-width: 0.62;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.star-corona {
+  opacity: 0.4;
 }
 
 .star-halo {
-  fill: #ffd36a;
-  opacity: 0.16;
-  animation: star-breathe 5.5s ease-in-out infinite;
+  opacity: 0.32;
+  animation: star-breathe var(--pulse-speed) ease-in-out var(--pulse-delay) infinite;
 }
 
 .star-glow {
-  fill: #ffe29a;
-  opacity: 0.42;
+  opacity: 0.6;
+  filter: url(#star-soft-glow);
 }
 
 .star-core {
-  fill: url(#graph-star-core);
-  stroke: #fff6d2;
+  stroke: rgb(255 252 232 / 58%);
+  stroke-width: 0.85;
+  vector-effect: non-scaling-stroke;
+}
+
+.star-hotspot {
+  fill: rgb(255 255 255 / 58%);
+  pointer-events: none;
+}
+
+.planet-atmosphere {
+  fill: rgb(85 165 213 / 11%);
+  stroke: rgb(115 204 240 / 36%);
   stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.planet-atmosphere.palette-1 {
+  fill: rgb(194 221 235 / 9%);
+  stroke: rgb(211 233 244 / 30%);
+}
+
+.planet-atmosphere.palette-2,
+.planet-atmosphere.palette-5 {
+  fill: rgb(224 143 86 / 10%);
+  stroke: rgb(246 179 118 / 32%);
+}
+
+.planet-atmosphere.palette-3 {
+  fill: rgb(124 177 155 / 10%);
+  stroke: rgb(161 211 184 / 30%);
+}
+
+.planet-atmosphere.palette-4 {
+  fill: rgb(159 132 210 / 10%);
+  stroke: rgb(193 166 238 / 30%);
 }
 
 .planet-core {
-  stroke: rgb(255 255 255 / 22%);
-  stroke-width: 1;
+  stroke: rgb(235 244 255 / 25%);
+  stroke-width: 0.8;
+  vector-effect: non-scaling-stroke;
 }
 
-.planet-lit {
-  fill: rgb(255 255 255 / 28%);
+.planet-band {
+  fill: rgb(235 245 255 / 15%);
+  mix-blend-mode: screen;
   pointer-events: none;
 }
 
-.planet-ring {
+.planet-band.faint {
+  fill: rgb(1 7 18 / 22%);
+  mix-blend-mode: multiply;
+}
+
+.planet-glint {
+  fill: rgb(255 255 255 / 22%);
+  pointer-events: none;
+}
+
+.planet-rings {
+  pointer-events: none;
+}
+
+.planet-ring-back,
+.planet-ring-front {
   fill: none;
-  stroke: rgb(230 220 200 / 55%);
-  stroke-width: 1.6;
-  pointer-events: none;
+  stroke: rgb(221 207 178 / 54%);
+  stroke-width: 1.3;
+  vector-effect: non-scaling-stroke;
+}
+
+.planet-ring-back {
+  opacity: 0.42;
+}
+
+.planet-ring-front {
+  opacity: 0.88;
 }
 
 .moon-core {
-  fill: #d5d8e8;
-  stroke: #9aa0b8;
+  fill: url(#moon-surface);
+  stroke: rgb(230 237 246 / 28%);
   stroke-width: 0.8;
+  vector-effect: non-scaling-stroke;
 }
 
 .moon-crater {
-  fill: #b7bccf;
+  fill: #3d4652;
   pointer-events: none;
 }
 
 .asteroid-rock {
-  fill: #8a7a68;
-  stroke: #c4b49a;
-  stroke-width: 0.7;
+  fill: url(#asteroid-surface);
+  stroke: rgb(207 192 174 / 42%);
+  stroke-width: 0.75;
+  vector-effect: non-scaling-stroke;
+}
+
+.asteroid-facet {
+  fill: none;
+  stroke: rgb(31 28 31 / 42%);
+  stroke-width: 0.65;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.meteor-tail {
+  fill: url(#meteor-tail);
+  opacity: 0.62;
+}
+
+.meteor-glow {
+  fill: #9fdcff;
+  opacity: 0.34;
+  filter: url(#star-soft-glow);
 }
 
 .meteor-core {
-  fill: #e8b07a;
-  opacity: 0.95;
+  fill: #fff1d4;
+  stroke: rgb(255 255 255 / 48%);
+  stroke-width: 0.6;
+  vector-effect: non-scaling-stroke;
+}
+
+.dust-haze {
+  fill: rgb(124 146 196 / 8%);
+  stroke: rgb(158 181 224 / 14%);
+  stroke-width: 0.7;
+  stroke-dasharray: 1 4;
+  vector-effect: non-scaling-stroke;
 }
 
 .dust-core {
-  fill: transparent;
-  stroke: rgb(200 210 255 / 55%);
-  stroke-width: 1.2;
-  stroke-dasharray: 3 3;
+  fill: rgb(8 12 27 / 62%);
+  stroke: rgb(179 197 235 / 48%);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+  vector-effect: non-scaling-stroke;
 }
 
 .graph-body text {
-  fill: #f4f1ff;
+  fill: #f6f7ff;
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 620;
   text-anchor: middle;
   pointer-events: none;
   paint-order: stroke fill;
-  stroke: #03010a;
-  stroke-width: 3px;
+  stroke: rgb(2 3 10 / 92%);
+  stroke-linejoin: round;
+  stroke-width: 3.5px;
+  transition: fill 160ms ease, opacity 160ms ease;
+}
+
+.graph-body .graph-glyph {
+  font-size: 12px;
+  stroke-width: 2.5px;
 }
 
 .graph-body .graph-label {
-  fill: #c8c6e0;
+  fill: #c3cbe2;
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 520;
+  letter-spacing: 0.01em;
 }
 
 .graph-body.body-moon .graph-label,
 .graph-body.body-dust .graph-label {
+  fill: #9aa6c3;
   font-size: 10px;
-  fill: #9aa0c8;
 }
 
+.graph-body.quiet .graph-glyph,
+.graph-body.quiet .graph-label {
+  opacity: 0;
+}
+
+.graph-body.quiet:hover .graph-glyph,
+.graph-body.quiet:hover .graph-label,
+.graph-body.quiet:focus-visible .graph-glyph,
+.graph-body.quiet:focus-visible .graph-label {
+  opacity: 1;
+}
+
+.graph-body.current .star-corona,
 .graph-body.current .star-halo {
-  opacity: 0.34;
+  opacity: 0.62;
 }
 
 .graph-body.current .star-core,
 .graph-body.current .planet-core,
 .graph-body.current .moon-core {
   stroke: #ffffff;
-  stroke-width: 2;
+  stroke-width: 1.6;
 }
 
 .graph-body.current .graph-label {
   fill: #ffffff;
+  font-weight: 650;
 }
 
 .graph-body.missing .graph-label,
 .graph-body.missing .graph-glyph {
-  fill: #7c82a8;
+  fill: #8f99ba;
+}
+
+html.phone .graph-page,
+.graph-page.compact {
+  --graph-head-x: 14px;
+  --graph-head-y: 11px;
+  --graph-subtitle-display: none;
+}
+
+html.phone .graph-head,
+.graph-page.compact .graph-head {
+  min-height: 58px;
+  padding-bottom: 22px;
+}
+
+html.phone .graph-title,
+.graph-page.compact .graph-title {
+  font-size: 14px;
+}
+
+html.phone .graph-count,
+.graph-page.compact .graph-count {
+  padding: 3px 8px;
+}
+
+@media (max-width: 720px), (max-height: 500px) {
+  .graph-page {
+    --graph-head-x: 14px;
+    --graph-head-y: 11px;
+    --graph-subtitle-display: none;
+  }
+
+  .graph-head {
+    min-height: 58px;
+    padding-bottom: 22px;
+  }
+
+  .graph-title {
+    font-size: 14px;
+  }
+
+  .graph-count {
+    padding: 3px 8px;
+  }
+
+  .graph-body .graph-label {
+    font-size: 11.5px;
+  }
+
+  .graph-body.body-moon .graph-label,
+  .graph-body.body-dust .graph-label {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 360px) {
+  .graph-count-word {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .space-star.twinkle,
+  .galaxy-nucleus,
+  .star-halo {
+    animation: none;
+  }
+
+  .graph-object,
+  .graph-body text,
+  .graph-canvas {
+    transition: none;
+  }
+}
+
+@keyframes space-twinkle {
+  0%, 100% { opacity: var(--star-alpha); }
+  48% { opacity: 0.22; }
+  58% { opacity: var(--star-alpha); }
+}
+
+@keyframes nucleus-shimmer {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 0.9; }
 }
 
 @keyframes star-breathe {
-  0%, 100% { opacity: 0.12; }
-  50% { opacity: 0.26; }
+  0%, 100% { opacity: 0.24; }
+  50% { opacity: 0.46; }
 }
 

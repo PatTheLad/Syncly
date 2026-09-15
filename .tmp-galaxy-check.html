@@ -1,0 +1,11 @@
+<!doctype html><html><body>
+<svg id="page-galaxy" style="width:338px;height:700px"></svg><output id="result">pending</output>
+<script src="src/Syncly.UI/wwwroot/js/editor.js"></script>
+<script>
+const calls=[];
+const dotnet={invokeMethodAsync(name,width,height){calls.push({name,width,height});return Promise.resolve();}};
+const first=syncly.attachGalaxy('page-galaxy','old',dotnet);
+const second=syncly.attachGalaxy('page-galaxy','new',dotnet);
+const staleDetach=syncly.detachGalaxy('page-galaxy','old');
+setTimeout(()=>{const activeDetach=syncly.detachGalaxy('page-galaxy','new');document.querySelector('#result').textContent=JSON.stringify({first,second,staleDetach,activeDetach,calls});},100);
+</script></body></html>

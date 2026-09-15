@@ -7,7 +7,7 @@
 @using System.Globalization
 @using System.Text
 
-<div class="graph-page">
+<div class="graph-page @(IsCompact ? "compact" : null)">
     <header class="graph-head">
         <div class="graph-head-copy">
             <h1 class="graph-title">Galaxy</h1>
@@ -27,7 +27,7 @@
     else
     {
         <svg id="page-galaxy"
-             class="graph-canvas"
+             class="graph-canvas @(_viewportMeasured ? "ready" : null)"
              viewBox="@ViewBox"
              preserveAspectRatio="none"
              role="img"
@@ -167,7 +167,15 @@
                     <stop offset="100%" stop-color="#312d31" />
                 </linearGradient>
 
-                <filter id="galaxy-soft-blur" x="-35%" y="-35%" width="170%" height="170%" color-interpolation-filters="sRGB">
+                <filter id="galaxy-soft-blur" filterUnits="userSpaceOnUse"
+                        x="@F(-GalaxyRadius * 1.25)" y="@F(-GalaxyRadius * 0.85)"
+                        width="@F(GalaxyRadius * 2.5)" height="@F(GalaxyRadius * 1.7)"
+                        color-interpolation-filters="sRGB">
+                    <feGaussianBlur stdDeviation="24" />
+                </filter>
+                <filter id="galaxy-core-blur" filterUnits="userSpaceOnUse"
+                        x="-120" y="-120" width="240" height="240"
+                        color-interpolation-filters="sRGB">
                     <feGaussianBlur stdDeviation="24" />
                 </filter>
                 <filter id="star-soft-glow" x="-180%" y="-180%" width="460%" height="460%" color-interpolation-filters="sRGB">
@@ -178,7 +186,7 @@
             <rect class="graph-space" width="@F(_viewportWidth)" height="@F(_viewportHeight)" fill="url(#graph-space)" />
 
             <g class="graph-deep-field" aria-hidden="true">
-                @foreach (var speck in _specks)
+                @foreach (var speck in _specks.Take(SpeckCount))
                 {
                     var x = speck.X * _viewportWidth;
                     var y = speck.Y * _viewportHeight;
@@ -208,11 +216,17 @@
                 @for (var arm = 0; arm < 3; arm++)
                 {
                     <path class="galaxy-arm-wash" d="@GalaxyArmPath(arm, 0)" stroke-width="@F(GalaxyRadius * 0.1)" />
+                }
+                @for (var arm = 0; arm < 3; arm++)
+                {
                     <path class="galaxy-arm" d="@GalaxyArmPath(arm, 0.025)" stroke-width="@F(Math.Max(1.2, GalaxyRadius * 0.012))" />
+                }
+                @for (var arm = 0; arm < 3; arm++)
+                {
                     <path class="galaxy-dust-lane" d="@GalaxyArmPath(arm, -0.045)" stroke-width="@F(Math.Max(2.4, GalaxyRadius * 0.02))" />
                 }
 
-                @foreach (var particle in _galaxyParticles)
+                @foreach (var particle in _galaxyParticles.Take(GalaxyParticleCount))
                 {
                     <circle class="galaxy-particle tone-@particle.Tone"
                             cx="@F(particle.X * GalaxyRadius)"
@@ -337,10 +351,7 @@
                                 <circle class="dust-core" r="@F(radius)" />
                             }
 
-                            @if (glyph.Length > 0)
-                            {
-                                <text class="graph-glyph" y="@F(radius * 0.18)">@glyph</text>
-                            }
+                            <text class="graph-glyph" y="@F(radius * 0.18)">@glyph</text>
                         </g>
 
                         <text class="graph-label" y="@F(radius + LabelGap(node.Body))">@Truncate(node.Title, node.Body)</text>
@@ -357,10 +368,14 @@
     private static readonly string[] PlanetNames = ["ocean", "ice", "amber", "sage", "violet", "rust"];
 
     private PageGraph _graph = new([], [], []);
+    private readonly string _observerToken = Guid.NewGuid().ToString("N");
     private IReadOnlyDictionary<string, GraphNode> _nodesById = new Dictionary<string, GraphNode>();
     private IReadOnlyList<SpaceSpeck> _specks = [];
     private IReadOnlyList<GalaxyParticle> _galaxyParticles = [];
     private DotNetObjectReference<Graph>? _self;
+    private bool _galaxyAttached;
+    private bool _viewportMeasured;
+    private bool _disposed;
     private string? _backdropKey;
     private double _viewportWidth = 1100;
     private double _viewportHeight = 760;
@@ -375,11 +390,33 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender || _graph.Nodes.Count == 0)
+        if (_disposed)
             return;
 
-        _self = DotNetObjectReference.Create(this);
-        await Js.InvokeVoidAsync("syncly.attachGalaxy", GalaxyElementId, _self);
+        if (_graph.Nodes.Count == 0)
+        {
+            if (_galaxyAttached)
+            {
+                await Js.InvokeVoidAsync("syncly.detachGalaxy", GalaxyElementId, _observerToken);
+                _galaxyAttached = false;
+                _viewportMeasured = false;
+            }
+            return;
+        }
+
+        if (_galaxyAttached)
+            return;
+
+        _self ??= DotNetObjectReference.Create(this);
+        var attached = await Js.InvokeAsync<bool>("syncly.attachGalaxy", GalaxyElementId, _observerToken, _self);
+        if (_disposed)
+        {
+            if (attached)
+                await Js.InvokeVoidAsync("syncly.detachGalaxy", GalaxyElementId, _observerToken);
+            return;
+        }
+
+        _galaxyAttached = attached;
     }
 
     private void Refresh() => _ = InvokeAsync(LoadAsync);
@@ -408,9 +445,14 @@
     [JSInvokable]
     public void OnGalaxyResize(double width, double height)
     {
+        if (_disposed)
+            return;
+
         width = Math.Clamp(width, 220, 4096);
         height = Math.Clamp(height, 220, 4096);
-        if (Math.Abs(width - _viewportWidth) < 1 && Math.Abs(height - _viewportHeight) < 1)
+        var firstMeasurement = !_viewportMeasured;
+        _viewportMeasured = true;
+        if (!firstMeasurement && Math.Abs(width - _viewportWidth) < 1 && Math.Abs(height - _viewportHeight) < 1)
             return;
 
         _viewportWidth = width;
@@ -424,6 +466,10 @@
     private string ViewBox => $"0 0 {F(_viewportWidth)} {F(_viewportHeight)}";
 
     private bool IsCompact => _viewportWidth < 640 || _viewportHeight < 500;
+
+    private int SpeckCount => (int)Math.Clamp(_viewportWidth * _viewportHeight / 3500, 180, _specks.Count);
+
+    private int GalaxyParticleCount => (int)Math.Clamp(GalaxyRadius * GalaxyRadius / 900, 210, _galaxyParticles.Count);
 
     private PlotBounds Plot
     {
@@ -496,10 +542,10 @@
         return $"{title}, {kind}";
     }
 
-    private static string Truncate(string title, GraphBodyKind body)
+    private string Truncate(string title, GraphBodyKind body)
     {
         var text = string.IsNullOrWhiteSpace(title) ? "Untitled" : title;
-        var cap = body == GraphBodyKind.Star ? 28 : 20;
+        var cap = IsCompact ? (body == GraphBodyKind.Star ? 17 : 14) : (body == GraphBodyKind.Star ? 28 : 20);
         return text.Length <= cap ? text : text[..(cap - 3)] + "...";
     }
 
@@ -619,8 +665,8 @@
     private static IReadOnlyList<SpaceSpeck> BuildSpecks(string key)
     {
         var state = GraphLayout.StableHash($"stars:{key}");
-        var stars = new List<SpaceSpeck>(280);
-        for (var i = 0; i < 280; i++)
+        var stars = new List<SpaceSpeck>(440);
+        for (var i = 0; i < 440; i++)
         {
             var brightness = Math.Pow(NextUnit(ref state), 3.1);
             var radius = 0.42 + brightness * 1.55;
@@ -642,10 +688,10 @@
     private static IReadOnlyList<GalaxyParticle> BuildGalaxyParticles(string key)
     {
         var state = GraphLayout.StableHash($"galaxy:{key}");
-        var particles = new List<GalaxyParticle>(300);
-        for (var i = 0; i < 300; i++)
+        var particles = new List<GalaxyParticle>(480);
+        for (var i = 0; i < 480; i++)
         {
-            var core = i >= 240;
+            var core = i % 5 == 0;
             var radial = core
                 ? Math.Pow(NextUnit(ref state), 1.8) * 0.28
                 : Math.Pow(NextUnit(ref state), 0.7) * 0.98;
@@ -699,6 +745,7 @@
 
     public async ValueTask DisposeAsync()
     {
+        _disposed = true;
         State.Changed -= Refresh;
         State.Workspace.Changed -= Refresh;
 
@@ -707,7 +754,7 @@
 
         try
         {
-            await Js.InvokeVoidAsync("syncly.detachGalaxy", GalaxyElementId);
+            await Js.InvokeVoidAsync("syncly.detachGalaxy", GalaxyElementId, _observerToken);
         }
         catch (JSDisconnectedException)
         {

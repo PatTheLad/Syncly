@@ -7,6 +7,7 @@
     paletteOpen: false,
     shell: null,
   };
+  const galaxyObservers = new Map();
 
   function element(id) {
     const root = document.getElementById(id);
@@ -422,6 +423,61 @@
     if (select && el.select) el.select();
   }
 
+  // Keep the SVG coordinate system in CSS pixels. That lets the galaxy use the
+  // long side of every screen while labels and touch targets remain legible.
+  function attachGalaxy(id, token, dotnet) {
+    detachGalaxy(id);
+
+    const el = document.getElementById(id);
+    if (!el || !dotnet) return false;
+
+    let frame = 0;
+    let lastWidth = 0;
+    let lastHeight = 0;
+
+    const report = () => {
+      frame = 0;
+      if (!el.isConnected) return;
+
+      const rect = el.getBoundingClientRect();
+      const width = Math.max(1, Math.round(rect.width));
+      const height = Math.max(1, Math.round(rect.height));
+      if (width === lastWidth && height === lastHeight) return;
+
+      lastWidth = width;
+      lastHeight = height;
+      dotnet.invokeMethodAsync('OnGalaxyResize', width, height).catch(() => {});
+    };
+
+    const schedule = () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(report);
+    };
+
+    let observer = null;
+    if (window.ResizeObserver) {
+      observer = new ResizeObserver(schedule);
+      observer.observe(el);
+    } else {
+      window.addEventListener('resize', schedule);
+    }
+
+    galaxyObservers.set(id, { token, observer, schedule, get frame() { return frame; } });
+    report();
+    return true;
+  }
+
+  function detachGalaxy(id, token) {
+    const attached = galaxyObservers.get(id);
+    if (!attached || (token && attached.token !== token)) return false;
+
+    if (attached.observer) attached.observer.disconnect();
+    else window.removeEventListener('resize', attached.schedule);
+    if (attached.frame) window.cancelAnimationFrame(attached.frame);
+    galaxyObservers.delete(id);
+    return true;
+  }
+
   function isNarrow() {
     return window.matchMedia('(max-width: 720px)').matches;
   }
@@ -512,6 +568,8 @@
     focusBlock,
     revealBlock,
     focusElement,
+    attachGalaxy,
+    detachGalaxy,
     getText,
     getCaret,
     anchorOf,
