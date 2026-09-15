@@ -8,7 +8,7 @@ const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 await mkdir('test-results', { recursive: true });
 const graphState = () => page.evaluate(async () => (await import('./js/galaxy.mjs')).inspect('galaxy-canvas'));
-const settle = () => expect.poll(async () => (await graphState())?.scheduled, { timeout: 20000 }).toBe(false);
+const settle = () => expect.poll(async () => (await graphState())?.settled, { timeout: 20000 }).toBe(true);
 const enterGraph = async () => { await page.getByTitle('Graph', { exact: true }).click(); await page.locator('.graph-page').waitFor(); await settle(); };
 const selectNote = async title => {
   await page.getByRole('searchbox', { name: 'Find a note' }).fill(title);

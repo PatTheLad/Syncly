@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test';
 
 const state = page => page.evaluate(() => window.graph.inspect('galaxy-canvas'));
-const settle = page => expect.poll(async () => (await state(page))?.scheduled, { timeout: 20000 }).toBe(false);
+const settle = page => expect.poll(async () => (await state(page))?.settled, { timeout: 20000 }).toBe(true);
 test.beforeEach(async ({ page }) => { await page.goto('/'); await settle(page); });
 
-test('renders actual nodes, collision-free labels and stops drawing at rest', async ({ page }) => {
+test('renders actual nodes, collision-free labels and keeps ambient animation running', async ({ page }) => {
   const view = await state(page);
   expect(view.nodes.length).toBeGreaterThan(20);
   expect(view.labels.length).toBeGreaterThan(5);
@@ -25,7 +25,7 @@ test('renders actual nodes, collision-free labels and stops drawing at rest', as
   }
   await page.screenshot({ path: 'test-results/galaxy-desktop.png' });
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  expect((await state(page)).frames).toBe(view.frames);
+  expect((await state(page)).frames).toBeGreaterThan(view.frames);
 });
 
 test('select, open and drag are separate actions', async ({ page }) => {
@@ -57,7 +57,10 @@ test('zoom anchors to pointer and title edits preserve positions', async ({ page
   expect(anchor(after.camera).y).toBeCloseTo(anchor(before.camera).y, 6);
   await page.evaluate(() => { window.data.nodes[0].title = 'Renamed note'; window.graph.update('galaxy-canvas', window.data); });
   await settle(page);
-  expect((await state(page)).positions).toEqual(before.positions);
+  // Orbiting subpages keep drifting by design; only compare the settled, force-simulated root notes.
+  const childIds = await page.evaluate(() => window.data.nodes.filter(node => node.parentId).map(node => node.id));
+  const stable = list => list.filter(node => !childIds.includes(node.id));
+  expect(stable((await state(page)).positions)).toEqual(stable(before.positions));
 });
 
 test('neighborhood exit restores camera and space state is isolated', async ({ page }) => {

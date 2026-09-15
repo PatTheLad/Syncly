@@ -27,7 +27,7 @@ export function mount(id, dotnet) {
     pointers: new Map(), gesture: null, longPress: 0, abort: new AbortController(),
     sprites: new Map(), labelWidths: new Map(), screenNodes: [], hitGrid: new Map(),
     labels: [], frames: 0, maxTickMs: 0, media: matchMedia('(prefers-reduced-motion: reduce)'),
-    stars: [], comets: [], nextComet: 0, startedAt: performance.now(), lastSave: 0, animateUntil: 0 };
+    stars: [], comets: [], nextComet: 0, startedAt: performance.now(), lastSave: 0 };
 
   instances.set(id, view);
   const on = (target, event, handler, options = {}) => target.addEventListener(event, handler, { ...options, signal: view.abort.signal });
@@ -473,9 +473,8 @@ function invalidate(view) {
   if (!view.frame && !view.disposed && !document.hidden) view.frame = requestAnimationFrame(time => frame(view, time));
 }
 
-// Extends the cosmetic-animation window (orbits/twinkle/comets) so interactions feel alive, then the loop settles again.
-function wake(view, duration = 1200) {
-  view.animateUntil = Math.max(view.animateUntil, performance.now() + duration);
+// Alias kept at interaction call sites for readability; ambient animation runs continuously below.
+function wake(view) {
   invalidate(view);
 }
 
@@ -489,7 +488,7 @@ function frame(view, time) {
     view.layout.tick();
     view.maxTickMs = Math.max(view.maxTickMs, performance.now() - tickStarted);
   }
-  const ambient = !reduced && time < view.animateUntil;
+  const ambient = !reduced;
   if (ambient) view.layout.orbit(time);
   if (view.initialFit) view.camera = fitCamera(view);
   if (view.flight) {
@@ -501,10 +500,8 @@ function frame(view, time) {
   if (ambient && !view.pointers.size && time >= view.nextComet) {
     view.nextComet = time + 7000 + Math.random() * 11000;
     const fromLeft = Math.random() < 0.5;
-    const life = 1100;
     view.comets.push({ x: fromLeft ? -30 : view.width + 30, y: Math.random() * view.height * 0.65,
-      vx: (fromLeft ? 1 : -1) * (240 + Math.random() * 180), vy: 70 + Math.random() * 70, born: time, life });
-    view.animateUntil = Math.max(view.animateUntil, time + life + 50);
+      vx: (fromLeft ? 1 : -1) * (240 + Math.random() * 180), vy: 70 + Math.random() * 70, born: time, life: 1100 });
   }
   draw(view, time);
   view.frames++;
@@ -748,6 +745,9 @@ export function inspect(id) {
   if (!view) return null;
   return { camera: { ...view.camera }, selectedId: view.selectedId, mode: view.mode,
     active: view.layout.active, scheduled: !!view.frame, frames: view.frames, maxTickMs: view.maxTickMs,
+    // Physically settled: force layout finished and no camera flight running. Ambient orbit/twinkle/comet
+    // redraws keep `scheduled` true forever by design, so callers waiting for a stable graph should use this.
+    settled: !view.layout.active && !view.flight,
     nodes: view.screenNodes.map(item => ({ id: item.node.id, x: item.x, y: item.y, radius: item.radius })),
     positions: view.layout.snapshot(), labels: view.labels, edges: view.layout.edges.length };
 }
