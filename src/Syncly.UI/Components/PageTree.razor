@@ -41,19 +41,10 @@
                 tabindex="@(childCount == 0 ? -1 : 0)"
                 @onclick:stopPropagation="true"
                 @onclick="() => State.TogglePageExpanded(id)">
-            <svg class="tree-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-                <path d="M6 4l4 4-4 4"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="1.6"
-                      stroke-linecap="round"
-                      stroke-linejoin="round" />
-            </svg>
+            <Icon Name="chevron_right" Class="tree-chevron" />
         </button>
-        @if (!string.IsNullOrEmpty(page.Icon) && !renaming)
-        {
-            <span class="tree-icon" aria-hidden="true">@(page.Icon)</span>
-        }
+        @* Always drawn, so a page with an icon sits at the same indent as one without. *@
+        <PageIcon Icon="@(page.Icon)" Class="tree-icon" />
         @if (renaming)
         {
             <input id="tree-rename"
@@ -72,7 +63,9 @@
                 class="tree-menu"
                 title="Page actions"
                 @onclick:stopPropagation="true"
-                @onclick="e => OpenMenu(id, e)">⋮</button>
+                @onclick="e => OpenMenu(id, e)">
+            <Icon Name="more_vert" />
+        </button>
     </div>
 }
 </div>
@@ -91,6 +84,9 @@
              Placeholder="Move under…"
              InputId="tree-move-menu"
              EmptyText="No pages"
+             Anchored="true"
+             Left="_menuLeft"
+             Top="_menuTop"
              OnClose="() => _movingId = null" />
 }
 
@@ -202,7 +198,7 @@
         {
             return
             [
-                new("New page", () => OnAddChild.InvokeAsync(null), "+"),
+                new("New page", () => OnAddChild.InvokeAsync(null), "add"),
             ];
         }
 
@@ -212,11 +208,11 @@
 
         return
         [
-            new("New sub-page", () => AddChildAsync(pageId), "+"),
-            new("Rename", () => StartRenameAsync(pageId), "✎"),
-            new("Duplicate", () => DuplicateAsync(pageId), "⧉"),
-            new("Move to…", () => StartMoveAsync(pageId), "↗"),
-            new("Delete", () => DeleteAsync(pageId), "✕", Danger: true),
+            new("New sub-page", () => AddChildAsync(pageId), "add"),
+            new("Rename", () => StartRenameAsync(pageId), "edit"),
+            new("Duplicate", () => DuplicateAsync(pageId), "content_copy"),
+            new("Move to…", () => StartMoveAsync(pageId), "drive_file_move"),
+            new("Delete", () => DeleteAsync(pageId), "delete", Danger: true),
         ];
     }
 
@@ -229,13 +225,13 @@
         var blocked = DescendantsAndSelf(pageId).ToHashSet(StringComparer.Ordinal);
         var items = new List<Palette.PaletteItem>
         {
-            new("⌂", "Top level", null, () => MoveAsync(pageId, null)),
+            new("home", "Top level", null, () => MoveAsync(pageId, null)),
         };
 
         items.AddRange(Workspace.PagesIn(State.CurrentSpaceId)
             .Where(p => !blocked.Contains(p.Id))
             .Select(p => new Palette.PaletteItem(
-                p.Icon is { Length: > 0 } icon ? icon : "◻",
+                p.Icon is { Length: > 0 } icon ? icon : "description",
                 p.DisplayTitle,
                 "Page",
                 () => MoveAsync(pageId, p.Id))));

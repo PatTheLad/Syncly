@@ -20,26 +20,38 @@
         </button>
 
         <button class="rail-item @(IsAt("") ? "active" : null)" title="Notes (Ctrl+K to jump)"
+                aria-label="Notes"
                 @onclick='() => Go("")'
                 @oncontextmenu="e => OpenShellMenu(e, ShellMenuKind.Notes)"
-                @oncontextmenu:preventDefault="true">✎</button>
+                @oncontextmenu:preventDefault="true">
+            <Icon Name="edit_note" />
+        </button>
         <button class="rail-item @(IsAt("graph") ? "active" : null)" title="Graph"
+                aria-label="Graph"
                 @onclick='() => Go("graph")'
                 @oncontextmenu="e => OpenShellMenu(e, ShellMenuKind.Graph)"
-                @oncontextmenu:preventDefault="true">◎</button>
+                @oncontextmenu:preventDefault="true">
+            <Icon Name="hub" />
+        </button>
         <button class="rail-item @(IsAt("settings") ? "active" : null)" title="Settings"
+                aria-label="Settings"
                 @onclick='() => Go("settings")'
                 @oncontextmenu="e => OpenShellMenu(e, ShellMenuKind.Settings)"
-                @oncontextmenu:preventDefault="true">⚙</button>
+                @oncontextmenu:preventDefault="true">
+            <Icon Name="settings" />
+        </button>
 
         <div class="rail-spacer"></div>
 
         <div class="rail-dot @StatusClass" title="@SyncTooltip"
              @oncontextmenu="e => OpenShellMenu(e, ShellMenuKind.Sync)"
              @oncontextmenu:preventDefault="true"></div>
-        <button type="button" class="rail-item" title="Toggle sidebar" @onclick="State.ToggleSidebar"
+        <button type="button" class="rail-item" title="Toggle sidebar" aria-label="Toggle sidebar"
+                @onclick="State.ToggleSidebar"
                 @oncontextmenu="e => OpenShellMenu(e, ShellMenuKind.Sidebar)"
-                @oncontextmenu:preventDefault="true">☰</button>
+                @oncontextmenu:preventDefault="true">
+            <Icon Name="menu" />
+        </button>
     </nav>
 
     <aside class="sidebar"
@@ -54,7 +66,7 @@
                     @(State.CurrentSpace?.Initial ?? "S")
                 </span>
                 <span class="sidebar-title">@(State.CurrentSpace?.DisplayTitle ?? "Space")</span>
-                <span class="sidebar-caret">▾</span>
+                <Icon Name="keyboard_arrow_down" Class="sidebar-caret" />
             </button>
             <button class="chip primary" title="New page (Ctrl+N)" @onclick="() => NewPageAsync(null)">New</button>
         </div>
@@ -97,10 +109,7 @@
                                 @onclick="() => OpenTagPage(entry)"
                                 @oncontextmenu="e => OpenTagPageMenu(e, entry)"
                                 @oncontextmenu:preventDefault="true">
-                            @if (!string.IsNullOrEmpty(entry.Icon))
-                            {
-                                <span class="tree-icon" aria-hidden="true">@entry.Icon</span>
-                            }
+                            <PageIcon Icon="@entry.Icon" Class="tree-icon" />
                             <span class="tree-label">@entry.DisplayTitle</span>
                         </button>
                     }
@@ -152,7 +161,10 @@
              @oncontextmenu:stopPropagation="true">
             <span class="status-dot @StatusClass"></span>
             <span class="sidebar-foot-status grow">@SyncSummary</span>
-            <button class="chip muted" title="Sync now (Ctrl+S)" @onclick="SyncNowAsync">↻</button>
+            <button class="chip muted icon-only" title="Sync now (Ctrl+S)" aria-label="Sync now"
+                    @onclick="SyncNowAsync">
+                <Icon Name="sync" />
+            </button>
             @if (Updater.Available is { } update)
             {
                 <button class="chip primary update-chip"
@@ -442,9 +454,9 @@
     {
         _shellMenu = new(e.ClientX, e.ClientY,
         [
-            new(_tagFilter == tag ? "Clear tag filter" : "Filter by tag", () => ToggleTagAsync(tag), "#"),
-            new("New page", () => NewPageAsync(null), "+"),
-            new("Sync now", SyncNowAsync, "↻"),
+            new(_tagFilter == tag ? "Clear tag filter" : "Filter by tag", () => ToggleTagAsync(tag), "tag"),
+            new("New page", () => NewPageAsync(null), "add"),
+            new("Sync now", SyncNowAsync, "sync"),
         ]);
     }
 
@@ -452,18 +464,18 @@
     {
         _shellMenu = new(e.ClientX, e.ClientY,
         [
-            new("Open", () => { OpenTagPage(page); return Task.CompletedTask; }, "↗"),
+            new("Open", () => { OpenTagPage(page); return Task.CompletedTask; }, "open_in_new"),
             new("Duplicate", async () =>
             {
                 var copyId = await State.Workspace.DuplicatePageAsync(page.Id);
                 Open(copyId);
-            }, "⧉"),
+            }, "content_copy"),
             new("Clear tag filter", async () =>
             {
                 _tagFilter = null;
                 _tagPages = [];
                 await Task.CompletedTask;
-            }, "#"),
+            }, "filter_alt"),
         ]);
     }
 
@@ -471,13 +483,13 @@
     {
         _shellMenu = new(e.ClientX, e.ClientY,
         [
-            new("Open", () => { OpenHit(hit); return Task.CompletedTask; }, "↗"),
+            new("Open", () => { OpenHit(hit); return Task.CompletedTask; }, "open_in_new"),
             new("Clear search", () =>
             {
                 _query = string.Empty;
                 _hits = null;
                 return Task.CompletedTask;
-            }, "✕"),
+            }, "close"),
         ]);
     }
 
@@ -491,52 +503,52 @@
     {
         ShellMenuKind.Space =>
         [
-            new("Switch space", () => { State.ToggleSpaceSwitcher(true); return Task.CompletedTask; }, "▣"),
-            new("New page", () => NewPageAsync(null), "+"),
-            new("Today's note", OpenDailyAsync, "📅"),
+            new("Switch space", () => { State.ToggleSpaceSwitcher(true); return Task.CompletedTask; }, "workspaces"),
+            new("New page", () => NewPageAsync(null), "add"),
+            new("Today's note", OpenDailyAsync, "today"),
         ],
         ShellMenuKind.Notes =>
         [
-            new("Open notes", () => { Go(""); return Task.CompletedTask; }, "✎"),
-            new("New page", () => NewPageAsync(null), "+"),
-            new("Command palette", () => { State.TogglePalette(true); return Task.CompletedTask; }, "⌘"),
+            new("Open notes", () => { Go(""); return Task.CompletedTask; }, "edit_note"),
+            new("New page", () => NewPageAsync(null), "add"),
+            new("Command palette", () => { State.TogglePalette(true); return Task.CompletedTask; }, "keyboard_command_key"),
             new(State.ReadingMode ? "Edit mode" : "Reading mode", () =>
             {
                 State.ToggleReadingMode();
                 return Task.CompletedTask;
-            }, "👁"),
+            }, "visibility"),
         ],
         ShellMenuKind.Graph =>
         [
-            new("Open graph", () => { Go("graph"); return Task.CompletedTask; }, "◎"),
-            new("New page", () => NewPageAsync(null), "+"),
+            new("Open graph", () => { Go("graph"); return Task.CompletedTask; }, "hub"),
+            new("New page", () => NewPageAsync(null), "add"),
         ],
         ShellMenuKind.Settings =>
         [
-            new("Open settings", () => { Go("settings"); return Task.CompletedTask; }, "⚙"),
-            new("Sync now", SyncNowAsync, "↻"),
+            new("Open settings", () => { Go("settings"); return Task.CompletedTask; }, "settings"),
+            new("Sync now", SyncNowAsync, "sync"),
         ],
         ShellMenuKind.Sync =>
         [
-            new("Sync now", SyncNowAsync, "↻"),
-            new("Open settings", () => { Go("settings"); return Task.CompletedTask; }, "⚙"),
+            new("Sync now", SyncNowAsync, "sync"),
+            new("Open settings", () => { Go("settings"); return Task.CompletedTask; }, "settings"),
             ..(Updater.Available is not null
-                ? new ContextMenu.MenuItem[] { new("Install update", UpdateAsync, "↑") }
+                ? new ContextMenu.MenuItem[] { new("Install update", UpdateAsync, "upgrade") }
                 : []),
         ],
         _ =>
         [
-            new("New page", () => NewPageAsync(null), "+"),
-            new("Today's note", OpenDailyAsync, "📅"),
-            new("Switch space", () => { State.ToggleSpaceSwitcher(true); return Task.CompletedTask; }, "▣"),
-            new("Sync now", SyncNowAsync, "↻"),
+            new("New page", () => NewPageAsync(null), "add"),
+            new("Today's note", OpenDailyAsync, "today"),
+            new("Switch space", () => { State.ToggleSpaceSwitcher(true); return Task.CompletedTask; }, "workspaces"),
+            new("Sync now", SyncNowAsync, "sync"),
             new(State.SidebarOpen ? "Hide sidebar" : "Show sidebar", () =>
             {
                 State.ToggleSidebar();
                 return Task.CompletedTask;
-            }, "☰"),
-            new("Open graph", () => { Go("graph"); return Task.CompletedTask; }, "◎"),
-            new("Open settings", () => { Go("settings"); return Task.CompletedTask; }, "⚙"),
+            }, "menu"),
+            new("Open graph", () => { Go("graph"); return Task.CompletedTask; }, "hub"),
+            new("Open settings", () => { Go("settings"); return Task.CompletedTask; }, "settings"),
         ],
     };
 
@@ -549,25 +561,25 @@
     {
         var items = new List<Palette.PaletteItem>
         {
-            new("+", "New page", "Ctrl+N", () => NewPageAsync(null)),
-            new("▣", "New space", null, () =>
+            new("add", "New page", "Ctrl+N", () => NewPageAsync(null)),
+            new("workspaces", "New space", null, () =>
             {
                 State.ToggleSpaceSwitcher(true);
                 return Task.CompletedTask;
             }),
-            new("◎", "Graph", null, () =>
+            new("hub", "Graph", null, () =>
             {
                 Go("graph");
                 return Task.CompletedTask;
             }),
-            new("↻", "Sync now", "Ctrl+S", SyncNowAsync),
-            new("📅", "Today's note", "Ctrl+D", OpenDailyAsync),
-            new("👁", State.ReadingMode ? "Edit this page" : "Reading mode", "Ctrl+E", () =>
+            new("sync", "Sync now", "Ctrl+S", SyncNowAsync),
+            new("today", "Today's note", "Ctrl+D", OpenDailyAsync),
+            new("visibility", State.ReadingMode ? "Edit this page" : "Reading mode", "Ctrl+E", () =>
             {
                 State.ToggleReadingMode();
                 return Task.CompletedTask;
             }),
-            new("⚙", "Settings", null, () =>
+            new("settings", "Settings", null, () =>
             {
                 Go("settings");
                 return Task.CompletedTask;
@@ -576,7 +588,7 @@
 
         if (State.CurrentPageId is { } current)
         {
-            items.Add(new("⧉", "Duplicate this page", null, () => DuplicateCurrentAsync(current)));
+            items.Add(new("content_copy", "Duplicate this page", null, () => DuplicateCurrentAsync(current)));
         }
 
         items.AddRange(_paletteHits
@@ -588,7 +600,7 @@
                     snippet = snippet[..80] + "…";
                 var title = string.IsNullOrWhiteSpace(hit.Title) ? "Untitled" : hit.Title;
                 return new Palette.PaletteItem(
-                    "⌕",
+                    "search",
                     title,
                     snippet,
                     () =>
@@ -601,7 +613,7 @@
 
         items.AddRange(_unresolved.Take(20).Select(title =>
             new Palette.PaletteItem(
-                "?",
+                "help",
                 title,
                 "Missing page",
                 async () =>
@@ -612,7 +624,7 @@
 
         items.AddRange(State.Workspace.PagesIn(State.CurrentSpaceId).Select(page =>
             new Palette.PaletteItem(
-                page.Icon is { Length: > 0 } icon ? icon : "◻",
+                page.Icon is { Length: > 0 } icon ? icon : "description",
                 page.DisplayTitle,
                 "Page",
                 () =>

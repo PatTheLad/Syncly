@@ -1,8 +1,10 @@
 @namespace Syncly.UI.Components
 @inject IJSRuntime Js
 
-<div class="overlay" @onclick="Close">
-    <div class="palette" @onclick:stopPropagation="true">
+<div class="overlay @(Anchored ? "anchored" : null)" @onclick="Close">
+    <div class="palette @(Anchored ? "anchored" : null)"
+         style="@AnchorStyle"
+         @onclick:stopPropagation="true">
         <input id="@InputId"
                placeholder="@Placeholder"
                value="@_query"
@@ -23,7 +25,7 @@
                     var item = _matches[i];
                     <button class="palette-item @(index == _active ? "active" : null)"
                             @onclick="() => RunAsync(item)">
-                        <span class="glyph">@item.Glyph</span>
+                        <span class="glyph"><PageIcon Icon="@item.Glyph" Fallback="" /></span>
                         <span class="label">@item.Label</span>
                         @if (!string.IsNullOrEmpty(item.Hint))
                         {
@@ -59,8 +61,21 @@
     [Parameter]
     public string InputId { get; set; } = "palette-input";
 
+    /// <summary>Hangs the list off <see cref="Left"/>/<see cref="Top"/> instead of centring it.</summary>
+    [Parameter]
+    public bool Anchored { get; set; }
+
+    [Parameter]
+    public double Left { get; set; }
+
+    [Parameter]
+    public double Top { get; set; }
+
     [Parameter]
     public EventCallback OnClose { get; set; }
+
+    private string? AnchorStyle =>
+        Anchored ? $"left:{Left.ToString("0")}px; top:{Top.ToString("0")}px" : null;
 
     /// <summary>Called on every keystroke, so the caller can search asynchronously.</summary>
     [Parameter]
@@ -70,8 +85,13 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
-            await Js.InvokeVoidAsync("syncly.focusElement", InputId, true);
+        if (!firstRender)
+            return;
+
+        if (Anchored)
+            await Js.InvokeVoidAsync("syncly.clampFloating", ".palette.anchored");
+
+        await Js.InvokeVoidAsync("syncly.focusElement", InputId, true);
     }
 
     private async Task OnQueryChanged(ChangeEventArgs args)

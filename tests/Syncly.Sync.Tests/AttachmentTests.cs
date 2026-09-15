@@ -18,11 +18,11 @@ public class AttachmentTests
         Assert.Equal(kind, FilePreview.ForMime(mime));
 
     [Theory]
-    [InlineData("application/pdf", "doc.pdf", "📄")]
-    [InlineData("application/zip", "a.zip", "📦")]
-    [InlineData("text/plain", "notes.txt", "📝")]
-    [InlineData("application/octet-stream", "blob.bin", "📎")]
-    [InlineData(null, "file.pdf", "📄")]
+    [InlineData("application/pdf", "doc.pdf", "picture_as_pdf")]
+    [InlineData("application/zip", "a.zip", "folder_zip")]
+    [InlineData("text/plain", "notes.txt", "description")]
+    [InlineData("application/octet-stream", "blob.bin", "attach_file")]
+    [InlineData(null, "file.pdf", "picture_as_pdf")]
     public void Card_icon_follows_mime_or_extension(string? mime, string fileName, string icon) =>
         Assert.Equal(icon, FilePreview.CardIcon(mime, fileName));
 

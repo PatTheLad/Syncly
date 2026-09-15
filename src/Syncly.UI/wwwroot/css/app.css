@@ -87,6 +87,35 @@ textarea {
   background-clip: content-box;
 }
 
+/* ------------------------------------------------------------------ icons */
+
+/* Material Symbols shipped as SVG and tinted with the current text colour, so
+   every icon is monochrome and inherits the surface it sits on. */
+.mi {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  background: currentColor;
+  mask: var(--mi) center / contain no-repeat;
+  -webkit-mask: var(--mi) center / contain no-repeat;
+}
+
+.mi.faint {
+  opacity: 0.45;
+}
+
+/* Legacy emoji icons from older versions still render as text. */
+.mi-text {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  font-size: 15px;
+  line-height: 1;
+}
+
 /* ------------------------------------------------------------------ shell */
 
 .shell {
@@ -172,6 +201,11 @@ textarea {
   touch-action: manipulation;
 }
 
+.rail-item .mi {
+  width: 19px;
+  height: 19px;
+}
+
 .rail-item:hover {
   color: var(--ink-0);
   background: var(--hover);
@@ -255,7 +289,8 @@ textarea {
 
 .sidebar-caret {
   flex: 0 0 auto;
-  font-size: 11px;
+  width: 16px;
+  height: 16px;
   color: var(--ink-3);
 }
 
@@ -387,21 +422,30 @@ textarea {
 
 .tree-icon {
   flex: none;
-  width: 1.25em;
-  font-size: 14px;
-  line-height: 1;
-  text-align: center;
+  width: 16px;
+  height: 16px;
+  color: var(--ink-1);
+  font-size: 13px;
+}
+
+.tree-row.selected .tree-icon {
+  color: var(--ink-0);
 }
 
 .tree-menu {
+  display: grid;
+  place-items: center;
   width: 22px;
   height: 22px;
   flex: 0 0 22px;
-  font-size: 14px;
-  line-height: 1;
   color: var(--ink-3);
   opacity: 0;
   border-radius: 4px;
+}
+
+.tree-menu .mi {
+  width: 16px;
+  height: 16px;
 }
 
 .tree-row:hover .tree-menu,
@@ -528,8 +572,22 @@ textarea {
   white-space: nowrap;
 }
 
+/* Every crumb can shrink, so a long title never pushes the actions onto a second row. */
+.crumbs button,
+.crumb-current {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .crumbs button {
   color: var(--ink-2);
+}
+
+.crumbs .mi {
+  width: 17px;
+  height: 17px;
 }
 
 .crumbs button:hover {
@@ -546,17 +604,34 @@ textarea {
 
 .topbar-actions {
   display: flex;
+  flex: 0 0 auto;
   gap: 6px;
   align-items: center;
 }
 
 .chip {
-  padding: 4px 9px;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 10px;
   font-size: 12px;
   color: var(--ink-1);
   border: 1px solid var(--line);
   border-radius: 99px;
   white-space: nowrap;
+}
+
+.chip .mi {
+  width: 15px;
+  height: 15px;
+}
+
+.chip.icon-only {
+  justify-content: center;
+  width: 28px;
+  padding: 0;
 }
 
 .chip:hover {
@@ -663,9 +738,15 @@ textarea {
   background: var(--bg-3);
 }
 
+.page-icon-btn .mi,
+.page-icon-btn .mi-text {
+  width: 30px;
+  height: 30px;
+  font-size: 28px;
+}
+
 .page-icon-btn.empty {
   color: var(--ink-3);
-  font-size: 22px;
 }
 
 .page-icon-btn.empty:hover {
@@ -711,7 +792,9 @@ textarea {
   border-radius: var(--radius-sm);
 }
 
-.block:hover > .block-handle {
+/* Keyboard users reach the handle by tabbing into the block. */
+.block:hover > .block-handle,
+.block:focus-within > .block-handle {
   opacity: 1;
 }
 
@@ -734,21 +817,27 @@ textarea {
 
 .block-handle {
   position: absolute;
-  top: 4px;
-  left: 4px;
-  width: 18px;
-  height: 18px;
-  font-size: 14px;
-  line-height: 1;
+  top: 2px;
+  left: 0;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
   color: var(--ink-3);
-  text-align: center;
+  border-radius: 5px;
   opacity: 0;
   cursor: grab;
   transition: opacity 120ms ease;
 }
 
+.block-handle .mi {
+  width: 16px;
+  height: 16px;
+}
+
 .block-handle:hover {
   color: var(--ink-1);
+  background: var(--bg-3);
 }
 
 .block-marker {
@@ -897,10 +986,10 @@ button.code-lang:hover {
 
 .page-link-icon {
   flex: none;
-  width: 1.4em;
-  font-size: 18px;
-  line-height: 1;
-  text-align: center;
+  width: 18px;
+  height: 18px;
+  color: var(--ink-1);
+  font-size: 16px;
 }
 
 .page-link-title {
@@ -923,7 +1012,8 @@ button.code-lang:hover {
   opacity: 0.35;
 }
 
-.block.page-link:hover .block-handle.page-link-menu {
+.block.page-link:hover .block-handle.page-link-menu,
+.block.page-link:focus-within .block-handle.page-link-menu {
   opacity: 1;
 }
 
@@ -980,7 +1070,9 @@ button.code-lang:hover {
 }
 
 .file-card-icon {
-  font-size: 18px;
+  width: 20px;
+  height: 20px;
+  color: var(--ink-2);
 }
 
 .file-card-body {
@@ -1042,6 +1134,11 @@ button.code-lang:hover {
 .checkbox.checked {
   background: var(--accent);
   border-color: var(--accent);
+}
+
+.checkbox .mi {
+  width: 11px;
+  height: 11px;
 }
 
 .block-text a {
@@ -1222,23 +1319,101 @@ button.code-lang:hover {
 
 /* --------------------------------------------------------------- overlays */
 
+/* Without align-items the dialog stretches to the whole viewport height. */
 .overlay {
   position: fixed;
   inset: 0;
   z-index: 60;
   display: flex;
+  align-items: flex-start;
   justify-content: center;
-  padding-top: 14vh;
+  padding: clamp(48px, 12vh, 140px) 16px 24px;
+  overflow: auto;
   background: rgb(0 0 0 / 55%);
 }
 
+/* Shared shell: head and foot stay put, only the body scrolls. */
+.dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: min(80vh, 720px);
+  overflow: hidden;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+.dialog-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.dialog-kicker {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+  text-transform: uppercase;
+}
+
+.dialog-title {
+  margin-top: 2px;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--ink-0);
+}
+
+.dialog-tools {
+  padding: 12px 18px 0;
+}
+
+.dialog-body {
+  flex: 1;
+  min-height: 0;
+  padding: 14px 18px;
+  overflow-y: auto;
+}
+
+.dialog-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+}
+
 .palette {
+  display: flex;
+  flex-direction: column;
   width: min(620px, 92vw);
+  max-height: min(60vh, 520px);
   overflow: hidden;
   background: var(--bg-2);
   border: 1px solid var(--line-strong);
   border-radius: 12px;
   box-shadow: var(--shadow);
+}
+
+/* Per-object menus hang off the block or row instead of taking over the screen. */
+.overlay.anchored {
+  padding: 0;
+  overflow: visible;
+  background: transparent;
+}
+
+.palette.anchored {
+  position: fixed;
+  width: min(300px, calc(100vw - 16px));
+  max-height: min(340px, 55vh);
+  border-radius: 10px;
 }
 
 .palette input {
@@ -1251,12 +1426,23 @@ button.code-lang:hover {
   font-size: 16px;
 }
 
+.palette.anchored input {
+  padding: 9px 12px;
+  font-size: 14px;
+}
+
+.palette.anchored .palette-item {
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
 .palette input::placeholder {
   color: var(--ink-3);
 }
 
 .palette-list {
-  max-height: 52vh;
+  flex: 1;
+  min-height: 0;
   padding: 6px;
   overflow-y: auto;
 }
@@ -1277,9 +1463,18 @@ button.code-lang:hover {
 }
 
 .palette-item .glyph {
+  display: grid;
+  flex: 0 0 20px;
+  place-items: center;
   width: 20px;
   color: var(--ink-2);
-  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.palette-item .glyph .mi {
+  width: 17px;
+  height: 17px;
 }
 
 .palette-item .label {
@@ -1338,10 +1533,17 @@ button.code-lang:hover {
 }
 
 .context-item .glyph {
+  display: grid;
+  flex: 0 0 16px;
+  place-items: center;
   width: 16px;
   color: var(--ink-2);
-  text-align: center;
-  font-size: 13px;
+  font-size: 12px;
+}
+
+.context-item .glyph .mi {
+  width: 16px;
+  height: 16px;
 }
 
 .context-item.danger .glyph {
@@ -1354,35 +1556,35 @@ button.code-lang:hover {
 }
 
 .icon-picker {
-  width: min(420px, 92vw);
-  padding: 16px;
-  background: var(--bg-2);
-  border: 1px solid var(--line-strong);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
+  width: min(460px, 92vw);
 }
 
-.icon-picker-head {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: 14px;
+.icon-picker-search {
+  width: 100%;
+  padding: 8px 10px;
+  color: var(--ink-0);
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  outline: none;
 }
 
-.icon-picker-kicker {
+.icon-picker-search:focus {
+  border-color: var(--line-strong);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.icon-group + .icon-group {
+  margin-top: 16px;
+}
+
+.icon-group-name {
+  margin-bottom: 8px;
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   color: var(--ink-3);
   text-transform: uppercase;
-}
-
-.icon-picker-title {
-  margin-top: 2px;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--ink-0);
 }
 
 .icon-grid {
@@ -1395,57 +1597,34 @@ button.code-lang:hover {
   display: grid;
   place-items: center;
   aspect-ratio: 1;
-  font-size: 22px;
-  line-height: 1;
+  color: var(--ink-1);
   border-radius: var(--radius-sm);
-  transition: background 120ms ease;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.icon-cell .mi {
+  width: 20px;
+  height: 20px;
 }
 
 .icon-cell:hover {
+  color: var(--ink-0);
   background: var(--bg-3);
 }
 
 .icon-cell.picked {
+  color: var(--ink-0);
   background: var(--bg-3);
   outline: 1px solid var(--line-strong);
 }
 
-.space-overlay {
-  align-items: flex-start;
-  padding: 10vh 16px 24px;
+.icon-cell.active {
+  color: var(--ink-0);
+  outline: 1px solid var(--accent);
 }
 
 .space-switcher {
   width: min(640px, 94vw);
-  max-height: 80vh;
-  overflow: auto;
-  padding: 22px 22px 18px;
-  background: var(--bg-2);
-  border: 1px solid var(--line-strong);
-  border-radius: 16px;
-  box-shadow: var(--shadow);
-}
-
-.space-switcher-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 18px;
-}
-
-.space-switcher-kicker {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-}
-
-.space-switcher-title {
-  font-size: 22px;
-  font-weight: 650;
-  letter-spacing: -0.03em;
 }
 
 .space-grid {
@@ -1466,15 +1645,21 @@ button.code-lang:hover {
   position: absolute;
   top: 8px;
   right: 8px;
-  padding: 2px 8px;
-  font-size: 11px;
-  font-weight: 600;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
   color: var(--ink-2);
   background: var(--bg-0);
   border: 1px solid var(--line);
   border-radius: 999px;
   opacity: 0;
   transition: opacity 120ms ease;
+}
+
+.space-card-edit .mi {
+  width: 15px;
+  height: 15px;
 }
 
 .space-card-wrap:hover .space-card-edit,
@@ -1605,13 +1790,18 @@ button.code-lang:hover {
   border-radius: 14px;
 }
 
+.space-avatar.lg .mi {
+  width: 22px;
+  height: 22px;
+}
+
 .space-avatar.ghost {
   color: var(--ink-2);
   background: var(--bg-3);
 }
 
 .slash-menu {
-  position: absolute;
+  position: fixed;
   z-index: 30;
   width: 260px;
   max-height: 320px;
@@ -2011,13 +2201,11 @@ html.phone .workspace {
 }
 
 html.phone .topbar {
-  flex-wrap: wrap;
   gap: 8px;
   padding: 10px 12px;
 }
 
 html.phone .topbar-actions {
-  flex-wrap: wrap;
   justify-content: flex-end;
 }
 
@@ -2047,22 +2235,33 @@ html.phone .panel {
   display: none;
 }
 
-html.phone .overlay.page-panel-sheet {
-  padding-top: 0;
+/* Dialogs and the command palette become bottom sheets where thumbs can reach them. */
+html.phone .overlay {
+  align-items: flex-end;
+  padding: 0;
 }
 
-html.phone .overlay,
-html.phone .space-overlay {
-  padding-top: calc(var(--safe-top) + 24px);
+html.phone .dialog,
+html.phone .palette:not(.anchored) {
+  width: 100%;
+  max-height: 85vh;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: 16px 16px 0 0;
+}
+
+html.phone .dialog-foot {
+  padding-bottom: calc(12px + var(--safe-bottom));
+}
+
+html.phone .palette:not(.anchored) .palette-list {
+  padding-bottom: calc(6px + var(--safe-bottom));
 }
 
 html.phone .banner {
   top: calc(var(--safe-top) + 8px);
   width: min(92vw, 420px);
-}
-
-html.phone .space-switcher {
-  padding: 18px 16px 16px;
 }
 
 html.phone .space-card-edit {
@@ -2076,7 +2275,13 @@ html.phone .editor-inner {
 html.phone .page-icon-btn {
   width: 40px;
   height: 40px;
-  font-size: 24px;
+}
+
+html.phone .page-icon-btn .mi,
+html.phone .page-icon-btn .mi-text {
+  width: 24px;
+  height: 24px;
+  font-size: 22px;
 }
 
 html.phone .icon-grid {
@@ -2152,6 +2357,13 @@ html.phone .format-bar {
   .crumb-current {
     color: #000 !important;
   }
+
+  /* Icons are masked fills, so they vanish when the printer drops backgrounds. */
+  .mi {
+    background: #000;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
 }
 
 .qr-wrap {
@@ -2189,8 +2401,18 @@ html.phone .format-bar {
   background: #000;
 }
 
-.update-chip {
-  margin-top: 8px;
-  width: 100%;
-  justify-content: center;
+@media (prefers-reduced-motion: reduce) {
+  .rail-item,
+  .tree-twisty,
+  .page-icon-btn,
+  .block-handle,
+  .page-link-card,
+  .icon-cell,
+  .space-card-edit {
+    transition: none;
+  }
+
+  .block.search-flash {
+    animation: none;
+  }
 }

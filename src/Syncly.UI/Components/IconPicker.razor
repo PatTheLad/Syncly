@@ -1,32 +1,71 @@
 @namespace Syncly.UI.Components
+@inject IJSRuntime Js
 
 <div class="overlay" @onclick="Close">
-    <div class="icon-picker" @onclick:stopPropagation="true">
-        <div class="icon-picker-head">
+    <div class="dialog icon-picker"
+         id="icon-picker"
+         tabindex="-1"
+         @onclick:stopPropagation="true"
+         @onkeydown="OnKeyDown">
+        <div class="dialog-head">
             <div>
-                <div class="icon-picker-kicker">Page icon</div>
-                <div class="icon-picker-title">Pick a mark for this page</div>
+                <div class="dialog-kicker">Page icon</div>
+                <div class="dialog-title">Pick a mark for this page</div>
             </div>
             <button type="button" class="chip muted" @onclick="ClearAsync" disabled="@string.IsNullOrEmpty(Current)">
                 Remove
             </button>
         </div>
 
-        <div class="icon-grid">
-            @foreach (var icon in PageIcons.All)
+        <div class="dialog-tools">
+            <input id="icon-picker-search"
+                   class="icon-picker-search"
+                   placeholder="Search icons"
+                   value="@_query"
+                   autocomplete="off"
+                   @oninput="OnQueryChanged" />
+        </div>
+
+        <div class="dialog-body">
+            @if (_groups.Count == 0)
             {
-                <button type="button"
-                        class="icon-cell @(icon == Current ? "picked" : null)"
-                        title="@icon"
-                        @onclick="() => PickAsync(icon)">
-                    @icon
-                </button>
+                <div class="panel-empty">No icon matches “@_query”.</div>
             }
+
+            @foreach (var group in _groups)
+            {
+                <div class="icon-group">
+                    <div class="icon-group-name">@group.Name</div>
+                    <div class="icon-grid">
+                        @foreach (var icon in group.Icons)
+                        {
+                            var index = _flat.IndexOf(icon);
+                            <button type="button"
+                                    class="icon-cell @(icon == Current ? "picked" : null) @(index == _active ? "active" : null)"
+                                    title="@Label(icon)"
+                                    @onclick="() => PickAsync(icon)">
+                                <PageIcon Icon="@icon" Fallback="" />
+                            </button>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+
+        <div class="dialog-foot">
+            <button type="button" class="chip" @onclick="Close">Close</button>
         </div>
     </div>
 </div>
 
 @code {
+    private const int Columns = 8;
+
+    private string _query = string.Empty;
+    private List<PageIcons.Group> _groups = [];
+    private List<string> _flat = [];
+    private int _active;
+
     [Parameter]
     public string? Current { get; set; }
 
@@ -35,6 +74,76 @@
 
     [Parameter]
     public EventCallback OnClose { get; set; }
+
+    protected override void OnInitialized() => Filter();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await Js.InvokeVoidAsync("syncly.focusElement", "icon-picker-search", true);
+    }
+
+    private void OnQueryChanged(ChangeEventArgs args)
+    {
+        _query = args.Value?.ToString() ?? string.Empty;
+        _active = 0;
+        Filter();
+    }
+
+    private void Filter()
+    {
+        var terms = _query.Trim().Replace(' ', '_');
+
+        _groups = PageIcons.Groups
+            .Select(group => new PageIcons.Group(
+                group.Name,
+                group.Icons.Where(i => terms.Length == 0 || i.Contains(terms, StringComparison.OrdinalIgnoreCase)).ToList()))
+            .Where(group => group.Icons.Count > 0)
+            .ToList();
+
+        _flat = _groups.SelectMany(g => g.Icons).ToList();
+        _active = Math.Clamp(_active, 0, Math.Max(_flat.Count - 1, 0));
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs args)
+    {
+        switch (args.Key)
+        {
+            case "Escape":
+                await Close();
+                return;
+
+            case "Enter" when _active < _flat.Count:
+                await PickAsync(_flat[_active]);
+                return;
+
+            case "ArrowRight":
+                Step(1);
+                return;
+
+            case "ArrowLeft":
+                Step(-1);
+                return;
+
+            case "ArrowDown":
+                Step(Columns);
+                return;
+
+            case "ArrowUp":
+                Step(-Columns);
+                return;
+        }
+    }
+
+    private void Step(int delta)
+    {
+        if (_flat.Count == 0)
+            return;
+
+        _active = Math.Clamp(_active + delta, 0, _flat.Count - 1);
+    }
+
+    private static string Label(string icon) => icon.Replace('_', ' ');
 
     private Task Close() => OnClose.InvokeAsync();
 

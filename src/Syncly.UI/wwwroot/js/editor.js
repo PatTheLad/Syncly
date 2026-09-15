@@ -272,17 +272,14 @@
     return el ? caretOffset(el) : 0;
   }
 
-  // Where to hang a popup so it follows the block instead of floating in the middle of the screen.
+  // Where to hang a popup so it follows the block instead of floating in the middle of the
+  // screen. Fitting it to the viewport is clampFloating's job once the popup has a size.
   function anchorOf(id) {
     const el = element(id);
     if (!el) return null;
 
     const rect = el.getBoundingClientRect();
-    const left = Math.min(rect.left, window.innerWidth - 280);
-    const below = rect.bottom + 6;
-    const fits = below + 320 < window.innerHeight;
-
-    return { left: Math.max(8, left), top: fits ? below : Math.max(8, rect.top - 326) };
+    return { left: Math.max(8, rect.left), top: rect.bottom + 6 };
   }
 
   // -------------------------------------------------------------------- shell
@@ -509,12 +506,14 @@
     return clientY < rect.top + rect.height / 2 ? 'before' : 'after';
   }
 
-  function clampContextMenu() {
-    const menu = document.querySelector('.context-menu');
-    if (!menu) return;
+  // Anything anchored to a click or a block is placed first and fitted afterwards, so the
+  // caller never has to guess how tall the popup will turn out to be.
+  function clampFloating(selector, focus) {
+    const el = document.querySelector(selector);
+    if (!el) return;
 
     const pad = 8;
-    const rect = menu.getBoundingClientRect();
+    const rect = el.getBoundingClientRect();
     let left = rect.left;
     let top = rect.top;
 
@@ -525,11 +524,12 @@
     if (left < pad) left = pad;
     if (top < pad) top = pad;
 
-    menu.style.left = `${left}px`;
-    menu.style.top = `${top}px`;
-    if (typeof menu.focus === 'function') {
-      menu.tabIndex = -1;
-      menu.focus({ preventScroll: true });
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+
+    if (focus && typeof el.focus === 'function') {
+      el.tabIndex = -1;
+      el.focus({ preventScroll: true });
     }
   }
 
@@ -631,7 +631,7 @@
     isNarrow,
     confirm: confirmDialog,
     treeDropHint,
-    clampContextMenu,
+    clampFloating,
     blockDropHint,
     scanQr,
     downloadText,

@@ -30,13 +30,13 @@ public static class FilePreview
         var ext = Path.GetExtension(fileName ?? "").ToLowerInvariant();
 
         if (value is "application/pdf" || ext is ".pdf")
-            return "📄";
+            return "picture_as_pdf";
         if (IsArchive(value, ext))
-            return "📦";
+            return "folder_zip";
         if (value.StartsWith("text/", StringComparison.Ordinal) || ext is ".txt" or ".md")
-            return "📝";
+            return "description";
 
-        return "📎";
+        return "attach_file";
     }
 
     public static string GuessMime(string fileName)

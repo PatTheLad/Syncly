@@ -90,16 +90,16 @@
         {
             PanelMenuKind.Outline when Outline.Count > 0 =>
             [
-                new("Jump to first heading", () => OnHeading.InvokeAsync(Outline[0].Id), "↑"),
+                new("Jump to first heading", () => OnHeading.InvokeAsync(Outline[0].Id), "arrow_upward"),
             ],
             PanelMenuKind.Backlinks when Backlinks.Count > 0 =>
             [
-                new("Open first backlink", () => OnBacklink.InvokeAsync(Backlinks[0]), "↗"),
+                new("Open first backlink", () => OnBacklink.InvokeAsync(Backlinks[0]), "open_in_new"),
             ],
             _ =>
             [
                 new(kind == PanelMenuKind.Outline ? "No headings yet" : "No backlinks yet",
-                    () => Task.CompletedTask, "·"),
+                    () => Task.CompletedTask),
             ],
         });
     }
@@ -108,7 +108,7 @@
     {
         _menu = new(e.ClientX, e.ClientY,
         [
-            new("Jump to heading", () => OnHeading.InvokeAsync(heading.Id), "↗"),
+            new("Jump to heading", () => OnHeading.InvokeAsync(heading.Id), "north_east"),
         ]);
     }
 
@@ -116,7 +116,7 @@
     {
         _menu = new(e.ClientX, e.ClientY,
         [
-            new("Open page", () => OnBacklink.InvokeAsync(link), "↗"),
+            new("Open page", () => OnBacklink.InvokeAsync(link), "open_in_new"),
         ]);
     }
 

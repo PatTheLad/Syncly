@@ -5,7 +5,20 @@
         <div class="graph-inspector-title">
             @if (Node is { } node)
             {
-                <span class="graph-note-icon @(node.Missing ? "missing" : null)">@(node.Missing ? "?" : string.IsNullOrWhiteSpace(node.Icon) ? Initial(node.Title) : node.Icon)</span>
+                <span class="graph-note-icon @(node.Missing ? "missing" : null)">
+                    @if (node.Missing)
+                    {
+                        @("?")
+                    }
+                    else if (string.IsNullOrWhiteSpace(node.Icon))
+                    {
+                        @Initial(node.Title)
+                    }
+                    else
+                    {
+                        <PageIcon Icon="@node.Icon" Fallback="" />
+                    }
+                </span>
                 <div><span class="graph-eyebrow">@(node.Missing ? "Unresolved link" : "Selected note")</span><h2>@node.Title</h2></div>
             }
             else

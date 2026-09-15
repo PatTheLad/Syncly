@@ -10,6 +10,7 @@
     "serve": "node server.mjs"
   },
   "devDependencies": {
+    "@material-symbols/svg-400": "0.47.3",
     "@playwright/test": "1.55.1",
     "d3-force": "3.0.0",
     "esbuild": "0.25.10",

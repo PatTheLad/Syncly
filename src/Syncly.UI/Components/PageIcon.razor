@@ -1,0 +1,36 @@
+@namespace Syncly.UI.Components
+
+@*
+    Draws whatever a page (or a menu row) stores as its mark: a Material Symbols name becomes a
+    monochrome icon, while anything else — emoji picked in an older version, or a short label such
+    as "H1" — is drawn as text. The slot keeps its width when there is nothing to draw, so titles
+    line up whether or not a page has an icon.
+*@
+@if (MaterialIcons.IsName(Icon))
+{
+    <Icon Name="@(Icon!)" Class="@Class" />
+}
+else if (!string.IsNullOrWhiteSpace(Icon))
+{
+    <span class="mi-text @Class" aria-hidden="true">@Icon</span>
+}
+else if (MaterialIcons.IsName(Fallback))
+{
+    <Icon Name="@(Fallback!)" Class="@($"faint {Class}")" />
+}
+else
+{
+    <span class="mi-text @Class" aria-hidden="true"></span>
+}
+
+@code {
+    [Parameter]
+    public string? Icon { get; set; }
+
+    /// <summary>Drawn faintly when the page has no icon of its own. Empty leaves the slot blank.</summary>
+    [Parameter]
+    public string? Fallback { get; set; } = "description";
+
+    [Parameter]
+    public string? Class { get; set; }
+}

@@ -1,4 +1,5 @@
 @namespace Syncly.UI.Components
+@inject IJSRuntime Js
 
 <div class="slash-menu" style="left:@Left.ToString("0")px; top:@Top.ToString("0")px">
     @for (var i = 0; i < Options.Count; i++)
@@ -9,7 +10,7 @@
                 @key="option.Title + option.Create"
                 @onmousedown:preventDefault="true"
                 @onmousedown="() => OnPick.InvokeAsync(option)">
-            <span class="glyph">@(option.Create ? "+" : "◻")</span>
+            <span class="glyph"><Icon Name="@(option.Create ? "add" : "description")" /></span>
             <span class="label">@option.Title</span>
             @if (option.Create)
             {
@@ -37,4 +38,16 @@
 
     [Parameter]
     public EventCallback<Option> OnPick { get; set; }
+
+    // The list changes height as the query narrows, so it is refitted on every render.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("syncly.clampFloating", ".slash-menu");
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
 }

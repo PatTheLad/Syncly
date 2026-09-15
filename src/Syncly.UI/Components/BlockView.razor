@@ -18,10 +18,13 @@
     {
         <button class="block-handle"
                 title="Drag to reorder, click for actions"
+                aria-label="Block actions"
                 draggable="true"
                 @onclick="OpenMenuAsync"
                 @ondragstart="OnDragStart"
-                @ondragend="OnDragEnd">⋮</button>
+                @ondragend="OnDragEnd">
+            <Icon Name="drag_indicator" />
+        </button>
     }
 
     @if (Block.Kind == BlockKind.Todo)
@@ -29,7 +32,10 @@
         <button class="checkbox @(Block.Checked ? "checked" : null)"
                 title="Toggle"
                 @onclick="() => Host.ToggleTodoAsync(Block.Id)">
-            @(Block.Checked ? "✓" : "")
+            @if (Block.Checked)
+            {
+                <Icon Name="check" />
+            }
         </button>
     }
     else if (Block.Kind == BlockKind.Bullet)
@@ -51,7 +57,7 @@
                 class="page-link-card"
                 title="Open page"
                 @onclick="OpenTargetAsync">
-            <span class="page-link-icon" aria-hidden="true">@LinkIcon</span>
+            <PageIcon Icon="@TargetPage?.Icon" Fallback="link" Class="page-link-icon" />
             <span class="page-link-title">@LinkTitle</span>
             <span class="page-link-hint">Open</span>
         </button>
@@ -60,7 +66,10 @@
             <button type="button"
                     class="block-handle page-link-menu"
                     title="Block actions"
-                    @onclick="OpenMenuAsync">⋮</button>
+                    aria-label="Block actions"
+                    @onclick="OpenMenuAsync">
+                <Icon Name="drag_indicator" />
+            </button>
         }
     }
     else if (Block.Kind == BlockKind.File)
@@ -69,7 +78,7 @@
             @if (_missing)
             {
                 <div class="file-card">
-                    <span class="file-card-icon">@FileIcon</span>
+                    <Icon Name="@FileIcon" Class="file-card-icon" />
                     <div class="file-card-body">
                         <strong>@(Block.FileName ?? "Attachment")</strong>
                         <span>Waiting for file to sync…</span>
@@ -97,7 +106,7 @@
             else
             {
                 <button type="button" class="file-card" @onclick="() => Host.OpenAttachedFileAsync(Block.Id)">
-                    <span class="file-card-icon">@FileIcon</span>
+                    <Icon Name="@FileIcon" Class="file-card-icon" />
                     <div class="file-card-body">
                         <strong>@(Block.FileName ?? "Attachment")</strong>
                         <span>@SizeLabel · @(Block.Mime ?? "file")</span>
@@ -126,7 +135,10 @@
             <button type="button"
                     class="block-handle page-link-menu"
                     title="Block actions"
-                    @onclick="OpenMenuAsync">⋮</button>
+                    aria-label="Block actions"
+                    @onclick="OpenMenuAsync">
+                <Icon Name="drag_indicator" />
+            </button>
         }
     }
     else if (Block.Kind == BlockKind.Code)
@@ -255,9 +267,6 @@
     private string LinkTitle =>
         TargetPage?.DisplayTitle
         ?? (string.IsNullOrWhiteSpace(Block.Text) ? "Untitled" : Block.Text);
-
-    private string LinkIcon =>
-        TargetPage?.Icon is { Length: > 0 } icon ? icon : "↗";
 
     private FilePreviewKind Preview => FilePreview.ForMime(Block.Mime);
 

@@ -18,7 +18,9 @@
         <div class="crumbs">
             @if (State.CanGoBack)
             {
-                <button title="Back" @onclick="State.Back">←</button>
+                <button title="Back" aria-label="Back" @onclick="State.Back">
+                    <Icon Name="arrow_back" />
+                </button>
             }
 
             @foreach (var crumb in Breadcrumbs())
@@ -46,9 +48,12 @@
 
                 <button class="chip panel-toggle" title="Outline and backlinks" @onclick="() => _panelOpen = true">Outline</button>
                 <button type="button"
-                        class="chip topbar-more"
+                        class="chip icon-only topbar-more"
                         title="More page actions"
-                        @onclick="e => OpenPageMenu(e)">⋯</button>
+                        aria-label="More page actions"
+                        @onclick="e => OpenPageMenu(e)">
+                    <Icon Name="more_horiz" />
+                </button>
             </div>
         }
     </div>
@@ -77,7 +82,7 @@
                                 class="page-icon-btn @(_page.Icon is { Length: > 0 } ? null : "empty")"
                                 title="Page icon"
                                 @onclick="() => _iconPickerOpen = true">
-                            @(_page.Icon is { Length: > 0 } ? _page.Icon : "◻")
+                            <PageIcon Icon="@_page.Icon" />
                         </button>
 
                         @if (State.ReadingMode)
@@ -107,8 +112,12 @@
                     @if (!State.ReadingMode)
                     {
                         <div class="row">
-                            <button class="chip muted" @onclick="AppendBlockAsync">+ Add block</button>
-                            <button class="chip muted" @onclick="TriggerAttachButtonAsync">Attach file</button>
+                            <button class="chip muted" @onclick="AppendBlockAsync">
+                                <Icon Name="add" />Add block
+                            </button>
+                            <button class="chip muted" @onclick="TriggerAttachButtonAsync">
+                                <Icon Name="attach_file" />Attach file
+                            </button>
                             <InputFile id="syncly-attach"
                                        class="visually-hidden"
                                        OnChange="OnAttachInputAsync"
@@ -175,6 +184,9 @@
              Placeholder="Block actions"
              InputId="slash-menu"
              EmptyText="No block type matches"
+             Anchored="true"
+             Left="_anchorLeft"
+             Top="_anchorTop"
              OnClose="CloseSlashAsync" />
 }
 
@@ -184,6 +196,9 @@
              Placeholder="Code language"
              InputId="code-lang-menu"
              EmptyText="No language matches"
+             Anchored="true"
+             Left="_anchorLeft"
+             Top="_anchorTop"
              OnClose="CloseLanguageAsync" />
 }
 
@@ -222,6 +237,8 @@
     private string? _pendingTitle;
     private string? _slashBlockId;
     private string? _langBlockId;
+    private double _anchorLeft;
+    private double _anchorTop;
     private bool _iconPickerOpen;
     private bool _panelOpen;
     private bool _pageMenuOpen;
@@ -478,8 +495,25 @@
     public async Task SlashAsync(string blockId)
     {
         await FlushAsync();
+        await CaptureAnchorAsync(blockId);
         _slashBlockId = blockId;
         StateHasChanged();
+    }
+
+    /// <summary>Per-block menus hang off the block, so the page stays visible behind them.</summary>
+    private async Task CaptureAnchorAsync(string blockId)
+    {
+        try
+        {
+            var anchor = await Js.InvokeAsync<Anchor?>("syncly.anchorOf", $"blk-{blockId}");
+            _anchorLeft = anchor?.Left ?? 40;
+            _anchorTop = anchor?.Top ?? 120;
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException)
+        {
+            _anchorLeft = 40;
+            _anchorTop = 120;
+        }
     }
 
     public async Task MenuKeyAsync(string key)
@@ -804,14 +838,14 @@
         if (current?.Kind == BlockKind.File)
         {
             items.Insert(0, new Palette.PaletteItem(
-                "↺",
+                "upgrade",
                 "Replace file",
                 null,
                 () => ReplaceFromMenuAsync(blockId)));
         }
 
         items.Add(new Palette.PaletteItem(
-            "✕",
+            "delete",
             "Delete",
             null,
             () => DeleteFromMenuAsync(blockId)));
@@ -821,18 +855,18 @@
 
     private static string Glyph(BlockKind kind) => kind switch
     {
-        BlockKind.Heading1 => "H1",
-        BlockKind.Heading2 => "H2",
-        BlockKind.Heading3 => "H3",
-        BlockKind.Bullet => "•",
-        BlockKind.Numbered => "1.",
-        BlockKind.Todo => "☐",
-        BlockKind.Quote => "❝",
-        BlockKind.Code => "{}",
-        BlockKind.Divider => "—",
-        BlockKind.PageLink => "↗",
-        BlockKind.File => "📎",
-        _ => "¶",
+        BlockKind.Heading1 => "format_h1",
+        BlockKind.Heading2 => "format_h2",
+        BlockKind.Heading3 => "format_h3",
+        BlockKind.Bullet => "format_list_bulleted",
+        BlockKind.Numbered => "format_list_numbered",
+        BlockKind.Todo => "check_box",
+        BlockKind.Quote => "format_quote",
+        BlockKind.Code => "code",
+        BlockKind.Divider => "horizontal_rule",
+        BlockKind.PageLink => "link",
+        BlockKind.File => "attach_file",
+        _ => "format_paragraph",
     };
 
     private static string? Hint(BlockKind kind) => kind switch
@@ -903,12 +937,12 @@
         return Task.CompletedTask;
     }
 
-    public Task PickCodeLanguageAsync(string blockId)
+    public async Task PickCodeLanguageAsync(string blockId)
     {
         _slashBlockId = null;
+        await CaptureAnchorAsync(blockId);
         _langBlockId = blockId;
         StateHasChanged();
-        return Task.CompletedTask;
     }
 
     private IReadOnlyList<Palette.PaletteItem> LanguageItems()
@@ -919,12 +953,12 @@
 
         var items = CodeHighlight.Languages
             .Select(lang => new Palette.PaletteItem(
-                "{}",
+                "code",
                 lang.Label,
                 lang.Id,
                 () => SetLanguageAsync(blockId, lang.Id)))
             .ToList();
-        items.Add(new Palette.PaletteItem("¶", "Plain", null, () => SetLanguageAsync(blockId, null)));
+        items.Add(new Palette.PaletteItem("format_paragraph", "Plain", null, () => SetLanguageAsync(blockId, null)));
         return items;
     }
 
@@ -1096,8 +1130,8 @@
         {
             return
             [
-                new("New page", CreateFirstPageAsync, "+"),
-                new("Switch space", () => { State.ToggleSpaceSwitcher(true); return Task.CompletedTask; }, "▣"),
+                new("New page", CreateFirstPageAsync, "add"),
+                new("Switch space", () => { State.ToggleSpaceSwitcher(true); return Task.CompletedTask; }, "workspaces"),
             ];
         }
 
@@ -1107,13 +1141,13 @@
             {
                 State.ToggleReadingMode();
                 return Task.CompletedTask;
-            }, "👁"),
-            new("New sub-page", NewSubPageAsync, "+"),
-            new("Change icon", () => { _iconPickerOpen = true; return Task.CompletedTask; }, "◻"),
-            new("Show in galaxy", () => { ShowInGalaxy(); return Task.CompletedTask; }, "◎"),
-            new("Export .md", ExportMarkdownAsync, "↓"),
-            new("Print / PDF", PrintAsync, "⎙"),
-            new("Delete page", DeletePageAsync, "✕", Danger: true),
+            }, "visibility"),
+            new("New sub-page", NewSubPageAsync, "add"),
+            new("Change icon", () => { _iconPickerOpen = true; return Task.CompletedTask; }, "palette"),
+            new("Show in galaxy", () => { ShowInGalaxy(); return Task.CompletedTask; }, "hub"),
+            new("Export .md", ExportMarkdownAsync, "download"),
+            new("Print / PDF", PrintAsync, "print"),
+            new("Delete page", DeletePageAsync, "delete", Danger: true),
         ];
     }
 
@@ -1125,17 +1159,17 @@
 
         return
         [
-            new("Turn into…", () => SlashAsync(blockId), "/"),
-            new("Indent", () => IndentAsync(blockId, true), "→"),
-            new("Outdent", () => IndentAsync(blockId, false), "←"),
-            new("Move up", () => MoveAsync(blockId, true), "↑"),
-            new("Move down", () => MoveAsync(blockId, false), "↓"),
+            new("Turn into…", () => SlashAsync(blockId), "format_paragraph"),
+            new("Indent", () => IndentAsync(blockId, true), "format_indent_increase"),
+            new("Outdent", () => IndentAsync(blockId, false), "format_indent_decrease"),
+            new("Move up", () => MoveAsync(blockId, true), "arrow_upward"),
+            new("Move down", () => MoveAsync(blockId, false), "arrow_downward"),
             new("Attach file after", async () =>
             {
                 await PrepareAttachAfterAsync(blockId);
                 await TriggerAttachAsync();
-            }, "📎"),
-            new("Delete block", () => DeleteFromMenuAsync(blockId), "✕", Danger: true),
+            }, "attach_file"),
+            new("Delete block", () => DeleteFromMenuAsync(blockId), "delete", Danger: true),
         ];
     }
 

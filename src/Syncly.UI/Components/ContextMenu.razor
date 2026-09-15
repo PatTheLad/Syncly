@@ -17,7 +17,7 @@
                 @onclick="() => RunAsync(item)">
             @if (!string.IsNullOrEmpty(item.Glyph))
             {
-                <span class="glyph" aria-hidden="true">@item.Glyph</span>
+                <span class="glyph"><PageIcon Icon="@item.Glyph" Fallback="" /></span>
             }
             <span class="label">@item.Label</span>
         </button>
@@ -48,7 +48,7 @@
 
         try
         {
-            await Js.InvokeVoidAsync("syncly.clampContextMenu");
+            await Js.InvokeVoidAsync("syncly.clampFloating", ".context-menu", true);
         }
         catch (JSDisconnectedException)
         {

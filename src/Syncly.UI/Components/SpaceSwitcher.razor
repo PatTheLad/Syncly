@@ -1,114 +1,122 @@
 @namespace Syncly.UI.Components
 @inject EditorState State
+@inject IJSRuntime Js
 
-<div class="overlay space-overlay" @onclick="Close">
-    <div class="space-switcher" @onclick:stopPropagation="true">
-        <div class="space-switcher-head">
+<div class="overlay" @onclick="Close">
+    <div class="dialog space-switcher"
+         id="space-switcher"
+         tabindex="-1"
+         @onclick:stopPropagation="true"
+         @onkeydown="OnKeyDown">
+        <div class="dialog-head">
             <div>
-                <div class="space-switcher-kicker">Spaces</div>
-                <div class="space-switcher-title">Where you work</div>
+                <div class="dialog-kicker">Spaces</div>
+                <div class="dialog-title">Where you work</div>
             </div>
             <button class="chip muted" @onclick="Close">Close</button>
         </div>
 
-        <div class="space-grid">
-            @foreach (var space in State.Workspace.Spaces)
-            {
-                <div class="space-card-wrap" @key="space.Id"
-                     @oncontextmenu="e => OpenSpaceMenu(e, space)"
-                     @oncontextmenu:preventDefault="true">
-                    <button type="button"
-                            class="space-card @(space.Id == State.CurrentSpaceId ? "active" : null)"
-                            @onclick="() => SwitchAsync(space.Id)">
-                        <span class="space-avatar lg" style="background: @space.Accent">@space.Initial</span>
-                        <span class="space-card-name">@(space.DisplayTitle)</span>
-                        <span class="space-card-meta">@CountLabel(space.Id)</span>
-                    </button>
-                    <button type="button"
-                            class="space-card-edit"
-                            title="Edit space"
-                            @onclick="() => BeginEdit(space)">
-                        Edit
-                    </button>
-                </div>
-            }
-
-            <button type="button" class="space-card create" @onclick="BeginCreate">
-                <span class="space-avatar lg ghost">+</span>
-                <span class="space-card-name">New space</span>
-                <span class="space-card-meta">A separate set of pages</span>
-            </button>
-        </div>
-
-        @if (_creating)
-        {
-            <div class="space-create">
-                <div class="space-create-kicker">New space</div>
-                <input placeholder="Space name"
-                       value="@_name"
-                       @oninput="e => _name = e.Value?.ToString() ?? string.Empty"
-                       @onkeydown="OnCreateKeyDown" />
-                <div class="space-colors">
-                    @foreach (var color in SpaceColors.All)
-                    {
-                        <button type="button"
-                                class="space-swatch @(_color == color ? "picked" : null)"
-                                style="background: @color"
-                                title="@color"
-                                @onclick="() => _color = color"></button>
-                    }
-                </div>
-                <div class="row">
-                    <button class="chip" @onclick="CancelPanels">Cancel</button>
-                    <button class="chip primary" @onclick="CreateAsync">Create</button>
-                </div>
-            </div>
-        }
-        else if (_editing is { } editing)
-        {
-            <div class="space-create">
-                <div class="space-create-kicker">Edit space</div>
-                <input placeholder="Space name"
-                       value="@_name"
-                       @oninput="e => _name = e.Value?.ToString() ?? string.Empty"
-                       @onkeydown="OnEditKeyDown" />
-                <div class="space-colors">
-                    @foreach (var color in SpaceColors.All)
-                    {
-                        <button type="button"
-                                class="space-swatch @(_color == color ? "picked" : null)"
-                                style="background: @color"
-                                title="@color"
-                                @onclick="() => _color = color"></button>
-                    }
-                </div>
-                <div class="row wrap">
-                    <button class="chip" @onclick="CancelPanels">Cancel</button>
-                    <button class="chip primary" @onclick="SaveEditAsync">Save</button>
-                    @if (editing.Id != DefaultSpaceId)
-                    {
-                        @if (_confirmDelete)
-                        {
-                            <button class="chip danger" @onclick="DeleteAsync">Delete forever</button>
-                        }
-                        else
-                        {
-                            <button class="chip danger" @onclick="() => _confirmDelete = true">Delete…</button>
-                        }
-                    }
-                </div>
-                @if (_confirmDelete && editing.Id != DefaultSpaceId)
+        <div class="dialog-body">
+            <div class="space-grid">
+                @foreach (var space in State.Workspace.Spaces)
                 {
-                    <div class="space-create-hint">
-                        Pages move to @(State.Workspace.Space(DefaultSpaceId)?.DisplayTitle ?? "Private").
+                    <div class="space-card-wrap" @key="space.Id"
+                         @oncontextmenu="e => OpenSpaceMenu(e, space)"
+                         @oncontextmenu:preventDefault="true">
+                        <button type="button"
+                                class="space-card @(space.Id == State.CurrentSpaceId ? "active" : null)"
+                                @onclick="() => SwitchAsync(space.Id)">
+                            <span class="space-avatar lg" style="background: @space.Accent">@space.Initial</span>
+                            <span class="space-card-name">@(space.DisplayTitle)</span>
+                            <span class="space-card-meta">@CountLabel(space.Id)</span>
+                        </button>
+                        <button type="button"
+                                class="space-card-edit"
+                                title="Edit space"
+                                aria-label="Edit space"
+                                @onclick="() => BeginEdit(space)">
+                            <Icon Name="edit" />
+                        </button>
                     </div>
                 }
-                @if (!string.IsNullOrEmpty(_error))
-                {
-                    <div class="space-create-hint danger">@_error</div>
-                }
+
+                <button type="button" class="space-card create" @onclick="BeginCreate">
+                    <span class="space-avatar lg ghost"><Icon Name="add" /></span>
+                    <span class="space-card-name">New space</span>
+                    <span class="space-card-meta">A separate set of pages</span>
+                </button>
             </div>
-        }
+
+            @if (_creating)
+            {
+                <div class="space-create">
+                    <div class="space-create-kicker">New space</div>
+                    <input placeholder="Space name"
+                           value="@_name"
+                           @oninput="e => _name = e.Value?.ToString() ?? string.Empty"
+                           @onkeydown="OnCreateKeyDown" />
+                    <div class="space-colors">
+                        @foreach (var color in SpaceColors.All)
+                        {
+                            <button type="button"
+                                    class="space-swatch @(_color == color ? "picked" : null)"
+                                    style="background: @color"
+                                    title="@color"
+                                    @onclick="() => _color = color"></button>
+                        }
+                    </div>
+                    <div class="row">
+                        <button class="chip" @onclick="CancelPanels">Cancel</button>
+                        <button class="chip primary" @onclick="CreateAsync">Create</button>
+                    </div>
+                </div>
+            }
+            else if (_editing is { } editing)
+            {
+                <div class="space-create">
+                    <div class="space-create-kicker">Edit space</div>
+                    <input placeholder="Space name"
+                           value="@_name"
+                           @oninput="e => _name = e.Value?.ToString() ?? string.Empty"
+                           @onkeydown="OnEditKeyDown" />
+                    <div class="space-colors">
+                        @foreach (var color in SpaceColors.All)
+                        {
+                            <button type="button"
+                                    class="space-swatch @(_color == color ? "picked" : null)"
+                                    style="background: @color"
+                                    title="@color"
+                                    @onclick="() => _color = color"></button>
+                        }
+                    </div>
+                    <div class="row wrap">
+                        <button class="chip" @onclick="CancelPanels">Cancel</button>
+                        <button class="chip primary" @onclick="SaveEditAsync">Save</button>
+                        @if (editing.Id != DefaultSpaceId)
+                        {
+                            @if (_confirmDelete)
+                            {
+                                <button class="chip danger" @onclick="DeleteAsync">Delete forever</button>
+                            }
+                            else
+                            {
+                                <button class="chip danger" @onclick="() => _confirmDelete = true">Delete…</button>
+                            }
+                        }
+                    </div>
+                    @if (_confirmDelete && editing.Id != DefaultSpaceId)
+                    {
+                        <div class="space-create-hint">
+                            Pages move to @(State.Workspace.Space(DefaultSpaceId)?.DisplayTitle ?? "Private").
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(_error))
+                    {
+                        <div class="space-create-hint danger">@_error</div>
+                    }
+                </div>
+            }
+        </div>
     </div>
 </div>
 
@@ -138,6 +146,27 @@
 
     private Task Close() => OnClose.InvokeAsync();
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+            await Js.InvokeVoidAsync("syncly.focusElement", "space-switcher", false);
+    }
+
+    /// <summary>Escape backs out of an open form first, then out of the dialog.</summary>
+    private Task OnKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key != "Escape")
+            return Task.CompletedTask;
+
+        if (_creating || _editing is not null)
+        {
+            CancelPanels();
+            return Task.CompletedTask;
+        }
+
+        return Close();
+    }
+
     private void OpenSpaceMenu(MouseEventArgs e, PageRef space)
     {
         _menuSpace = space;
@@ -159,8 +188,8 @@
 
         var items = new List<ContextMenu.MenuItem>
         {
-            new("Open", () => SwitchAsync(space.Id), "↗"),
-            new("Edit", () => { BeginEdit(space); return Task.CompletedTask; }, "✎"),
+            new("Open", () => SwitchAsync(space.Id), "open_in_new"),
+            new("Edit", () => { BeginEdit(space); return Task.CompletedTask; }, "edit"),
         };
 
         if (space.Id != DefaultSpaceId)
@@ -170,7 +199,7 @@
                 BeginEdit(space);
                 _confirmDelete = true;
                 return Task.CompletedTask;
-            }, "✕", Danger: true));
+            }, "delete", Danger: true));
         }
 
         return items;

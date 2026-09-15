@@ -1,0 +1,12 @@
+@namespace Syncly.UI.Components
+
+@* One vendored Material Symbol, tinted with the surrounding text colour. *@
+<span class="mi @Class" style="--mi: url('icons/material/@(Name).svg')" aria-hidden="true"></span>
+
+@code {
+    [Parameter, EditorRequired]
+    public required string Name { get; set; }
+
+    [Parameter]
+    public string? Class { get; set; }
+}

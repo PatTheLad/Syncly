@@ -397,22 +397,22 @@
     {
         var items = new List<ContextMenu.MenuItem>
         {
-            new("New page", () => NewPageAsync(null), "+"),
-            new("Fit graph", () => CanvasAsync("fit"), "⛶"),
-            new("Reset layout", () => CanvasAsync("reset"), "↺"),
-            new(_showPages ? "Hide pages" : "Show pages", () => { TogglePages(); return Task.CompletedTask; }, "☰"),
+            new("New page", () => NewPageAsync(null), "add"),
+            new("Fit graph", () => CanvasAsync("fit"), "fit_screen"),
+            new("Reset layout", () => CanvasAsync("reset"), "restart_alt"),
+            new(_showPages ? "Hide pages" : "Show pages", () => { TogglePages(); return Task.CompletedTask; }, "menu"),
         };
 
         if (SelectedNode is { Missing: false } node)
         {
             items.InsertRange(0,
             [
-                new("Open page", () => OpenAsync(node.Id), "↗"),
-                new("Rename", () => PageActionAsync("rename"), "✎"),
-                new("Duplicate", () => PageActionAsync("duplicate"), "⧉"),
-                new("New sub-page", () => PageActionAsync("child"), "+"),
-                new("Copy [[link]]", () => PageActionAsync("copy"), "⧉"),
-                new("Delete", () => PageActionAsync("delete"), "✕", Danger: true),
+                new("Open page", () => OpenAsync(node.Id), "open_in_new"),
+                new("Rename", () => PageActionAsync("rename"), "edit"),
+                new("Duplicate", () => PageActionAsync("duplicate"), "content_copy"),
+                new("New sub-page", () => PageActionAsync("child"), "add"),
+                new("Copy [[link]]", () => PageActionAsync("copy"), "link"),
+                new("Delete", () => PageActionAsync("delete"), "delete", Danger: true),
             ]);
         }
 
