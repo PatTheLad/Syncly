@@ -903,6 +903,52 @@ public sealed class Workspace(
         return GraphLayout.Arrange(nodes, [.. edges.Select(e => new GraphEdge(e.From, e.To))]);
     }
 
+    /// <summary>Hover card for the galaxy: breadcrumb, first lines of text, and how connected it is.</summary>
+    public async Task<GraphPreview?> PreviewAsync(string pageId, int maxLines = 4, CancellationToken ct = default)
+    {
+        var page = Page(pageId);
+        if (page is null)
+            return null;
+
+        var snapshot = Open(pageId);
+        var path = new List<string>();
+        var cursor = page.ParentId;
+        var depth = 0;
+        var guard = 0;
+        while (cursor is { Length: > 0 } && guard++ < 64)
+        {
+            var parent = Page(cursor);
+            if (parent is null)
+                break;
+            path.Insert(0, parent.DisplayTitle);
+            cursor = parent.ParentId;
+            depth++;
+        }
+
+        var lines = snapshot.Flatten()
+            .Where(b => b.Kind.IsText())
+            .Select(b => SearchBody.From(b.Text).Trim())
+            .Where(t => t.Length > 0)
+            .Take(maxLines)
+            .ToList();
+
+        var backlinks = await BacklinksAsync(pageId, ct);
+        var outgoing = snapshot.Flatten()
+            .Where(b => b.Kind.IsText())
+            .Sum(b => Wikilinks.Extract(b.Text).Count);
+
+        return new GraphPreview(
+            pageId,
+            page.DisplayTitle,
+            page.Icon,
+            path,
+            lines,
+            ChildrenOf(pageId, page.SpaceId ?? DefaultSpaceId).Count,
+            backlinks.Count + outgoing,
+            snapshot.UpdatedAt,
+            GraphLayout.BodyFor(depth));
+    }
+
     /// <summary>
     /// Writes FracIndex keys for a sibling group that still sorts by title, so the first reorder
     /// (or a new page in that group) does not shuffle existing pages.

@@ -102,6 +102,36 @@ public class WorkspaceWritingTests
         Assert.NotEmpty(graph.Orbits);
     }
 
+    [Fact]
+    public async Task Preview_describes_a_page_for_the_galaxy_hover_card()
+    {
+        await using var app = await StartAsync();
+        var workspace = app.Workspace;
+        var root = await workspace.CreatePageAsync(null, "Projects");
+        var page = await workspace.CreatePageAsync(root, "Syncly");
+        var child = await workspace.CreatePageAsync(page, "Roadmap");
+        _ = child;
+
+        var first = workspace.Tree(page).Order[0].Id;
+        await workspace.SetBlockTextAsync(page, first, "**Local-first** notes, see [[Roadmap]]");
+        await workspace.AppendBlockAsync(page);
+        var third = await workspace.AppendBlockAsync(page);
+        await workspace.SetBlockTextAsync(page, third, "Second line");
+
+        var preview = await workspace.PreviewAsync(page);
+
+        Assert.NotNull(preview);
+        Assert.Equal("Syncly", preview.Title);
+        Assert.Equal(["Projects"], preview.Path);
+        Assert.Equal("Local-first notes, see Roadmap", preview.Lines[0]);
+        Assert.Equal("Second line", preview.Lines[1]);
+        Assert.Equal(2, preview.Lines.Count);
+        Assert.Equal(1, preview.ChildCount);
+        Assert.True(preview.LinkCount >= 1);
+        Assert.Equal(GraphBodyKind.Planet, preview.Body);
+        Assert.Null(await workspace.PreviewAsync("missing:nope"));
+    }
+
     private static double Dist(GraphNode a, GraphNode b)
     {
         var dx = a.X - b.X;

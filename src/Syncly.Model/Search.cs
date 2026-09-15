@@ -43,3 +43,15 @@ public sealed record PageGraph(
     IReadOnlyList<GraphNode> Nodes,
     IReadOnlyList<GraphEdge> Edges,
     IReadOnlyList<GraphOrbit> Orbits);
+
+/// <summary>What the galaxy shows when you hover a world: enough to decide whether to open it.</summary>
+public sealed record GraphPreview(
+    string Id,
+    string Title,
+    string? Icon,
+    IReadOnlyList<string> Path,
+    IReadOnlyList<string> Lines,
+    int ChildCount,
+    int LinkCount,
+    DateTimeOffset UpdatedAt,
+    GraphBodyKind Body);
