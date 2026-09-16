@@ -1,7 +1,8 @@
 @namespace Syncly.UI.Components
+@inject NavigationManager Navigation
 
 @* One vendored Material Symbol, tinted with the surrounding text colour. *@
-<span class="mi @Class" style="--mi: url('icons/material/@(Name).svg')" aria-hidden="true"></span>
+<span class="mi @Class" style="@Style" aria-hidden="true"></span>
 
 @code {
     [Parameter, EditorRequired]
@@ -9,4 +10,7 @@
 
     [Parameter]
     public string? Class { get; set; }
+
+    // Root-relative from BaseUri so masks still load on /page/{id}, not only on /.
+    private string Style => $"--mi: url('{Navigation.BaseUri}icons/material/{Name}.svg')";
 }
