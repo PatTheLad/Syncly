@@ -289,15 +289,22 @@
 
     private async Task SyncFromStateAsync()
     {
-        var pageId = State.CurrentPageId ?? State.Workspace.Pages.FirstOrDefault()?.Id;
+        // Stay inside the current space. Falling back to Workspace.Pages (every space) used to
+        // reopen a foreign page after a switch and yank CurrentSpaceId back via State.Open.
+        var pageId = State.CurrentPageId;
         if (pageId is null)
         {
-            _page = null;
-            return;
-        }
+            pageId = State.Workspace.ChildrenOf(null, State.CurrentSpaceId).FirstOrDefault()?.Id
+                     ?? State.Workspace.PagesIn(State.CurrentSpaceId).FirstOrDefault()?.Id;
+            if (pageId is null)
+            {
+                _page = null;
+                _loadedPageId = null;
+                return;
+            }
 
-        if (State.CurrentPageId != pageId)
             State.Open(pageId);
+        }
 
         _page = State.Workspace.Page(pageId);
         _snapshot = State.Workspace.Open(pageId);

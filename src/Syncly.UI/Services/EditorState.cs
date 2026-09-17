@@ -147,19 +147,13 @@ public sealed class EditorState(SynclyApp app)
 
     public async Task SwitchSpaceAsync(string spaceId)
     {
-        await Workspace.SelectSpaceAsync(spaceId);
+        // Pick the page before changing space so Workspace.Changed listeners never see the new
+        // space paired with a page that still belongs to the old one (which used to reopen that
+        // page and switch us right back).
+        CurrentPageId = PageForSpace(spaceId);
+        ReadingMode = true;
         SpaceSwitcherOpen = false;
-
-        if (CurrentPageId is { } pageId)
-        {
-            var page = Workspace.Page(pageId);
-            if (page is null || (page.SpaceId is { } space && space != spaceId))
-            {
-                CurrentPageId = Workspace.ChildrenOf(null, spaceId).FirstOrDefault()?.Id;
-                ReadingMode = true;
-            }
-        }
-
+        await Workspace.SelectSpaceAsync(spaceId);
         Changed?.Invoke();
     }
 
@@ -172,6 +166,22 @@ public sealed class EditorState(SynclyApp app)
         Changed?.Invoke();
         _ = spaceId;
     }
+
+    private string? PageForSpace(string spaceId)
+    {
+        if (CurrentPageId is { } pageId)
+        {
+            var page = Workspace.Page(pageId);
+            if (page is not null && SpaceOf(page) == spaceId)
+                return pageId;
+        }
+
+        return Workspace.ChildrenOf(null, spaceId).FirstOrDefault()?.Id
+               ?? Workspace.PagesIn(spaceId).FirstOrDefault()?.Id;
+    }
+
+    private static string SpaceOf(PageRef page) =>
+        page.SpaceId is { Length: > 0 } space ? space : Workspace.DefaultSpaceId;
 
     public async Task RenameSpaceAsync(string spaceId, string title)
     {

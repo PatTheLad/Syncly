@@ -6,6 +6,24 @@ namespace Syncly.Sync.Tests;
 public class WorkspaceSpaceTests
 {
     [Fact]
+    public async Task SelectSpace_persists_and_survives_refresh()
+    {
+        await using var app = await StartAsync();
+        var workspace = app.Workspace;
+
+        var work = await workspace.CreateSpaceAsync("Work");
+        await workspace.CreatePageAsync(null, "Work note", work);
+        await workspace.SelectSpaceAsync(Workspace.DefaultSpaceId);
+        Assert.Equal(Workspace.DefaultSpaceId, workspace.CurrentSpaceId);
+
+        await workspace.SelectSpaceAsync(work);
+        Assert.Equal(work, workspace.CurrentSpaceId);
+
+        await workspace.EnsureSpacesAsync();
+        Assert.Equal(work, workspace.CurrentSpaceId);
+    }
+
+    [Fact]
     public async Task Rename_and_recolor_a_space()
     {
         await using var app = await StartAsync();
