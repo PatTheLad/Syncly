@@ -19,6 +19,8 @@ public interface IBlockHost
 
     Task SplitAsync(string blockId, string text, int caret);
 
+    Task PasteBlocksAsync(string blockId, string json, string clipboard, string text, int caret);
+
     Task MergeBackwardAsync(string blockId);
 
     Task MergeForwardAsync(string blockId);

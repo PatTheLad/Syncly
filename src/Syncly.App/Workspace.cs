@@ -497,6 +497,105 @@ public sealed class Workspace(
         return blockId;
     }
 
+    /// <summary>Paste: insert typed blocks after the caret, keeping any tail on its own block.</summary>
+    public async Task<(string BlockId, int Caret)> InsertPastedBlocksAsync(
+        string pageId,
+        string blockId,
+        int caret,
+        IReadOnlyList<PastedBlock> paste,
+        CancellationToken ct = default)
+    {
+        if (paste.Count == 0)
+            return (blockId, caret);
+
+        var tree = Tree(pageId);
+        var block = tree.Find(blockId);
+        if (block is null)
+        {
+            var last = blockId;
+            var lastText = "";
+            foreach (var item in paste)
+            {
+                last = await AppendBlockAsync(pageId, item.Kind, item.Text, ct);
+                if (item.Kind == BlockKind.Code && !string.IsNullOrWhiteSpace(item.Language))
+                    await SetBlockLanguageAsync(pageId, last, item.Language, ct);
+                if (item.Kind == BlockKind.Todo && item.Checked)
+                    await CommitAsync(a => a.SetProp(pageId, last, PropKeys.Checked, "true"), pageId, ct);
+                lastText = item.Text;
+            }
+
+            return (last, lastText.Length);
+        }
+
+        caret = Math.Clamp(caret, 0, block.Text.Length);
+        var prefix = block.Text[..caret];
+        var tail = block.Text[caret..];
+
+        if (paste.Count == 1 && paste[0].Kind == BlockKind.Paragraph && block.Kind.IsText())
+        {
+            var next = prefix + paste[0].Text + tail;
+            await SetBlockTextAsync(pageId, blockId, next, ct);
+            return (blockId, prefix.Length + paste[0].Text.Length);
+        }
+
+        var merge = prefix.Length == 0 && block.Kind.IsText() && paste[0].Kind != BlockKind.Divider;
+        var parentId = block.ParentId;
+        var lastId = blockId;
+        var lastCaret = prefix.Length;
+        var tailId = (string?)null;
+
+        await CommitAsync(a =>
+        {
+            if (tail.Length > 0)
+                a.DeleteText(pageId, blockId, caret, tail.Length);
+
+            var index = 0;
+            if (merge)
+            {
+                var first = paste[0];
+                a.UpsertBlock(pageId, blockId, null, null, first.Kind);
+                a.ReplaceText(pageId, blockId, first.Text);
+                ApplyExtras(a, pageId, blockId, first);
+                lastCaret = first.Text.Length;
+                index = 1;
+            }
+
+            var low = block.Position;
+            var high = tree.NextSibling(block)?.Position;
+
+            void Insert(PastedBlock item, bool isTail)
+            {
+                var id = NewId("bl");
+                var pos = FracIndex.Between(low, high);
+                a.UpsertBlock(pageId, id, parentId, pos, item.Kind);
+                if (item.Text.Length > 0)
+                    a.InsertText(pageId, id, 0, item.Text);
+                ApplyExtras(a, pageId, id, item);
+                low = pos;
+                lastId = id;
+                lastCaret = isTail ? 0 : item.Text.Length;
+                if (isTail)
+                    tailId = id;
+            }
+
+            for (; index < paste.Count; index++)
+                Insert(paste[index], false);
+
+            if (tail.Length > 0)
+                Insert(new PastedBlock(block.Kind, tail, block.Language, block.Checked), true);
+        }, pageId, ct);
+
+        return tailId is not null ? (tailId, 0) : (lastId, lastCaret);
+    }
+
+    private static void ApplyExtras(Replica.Authoring a, string pageId, string blockId, PastedBlock item)
+    {
+        if (item.Kind == BlockKind.Code && !string.IsNullOrWhiteSpace(item.Language))
+            a.SetProp(pageId, blockId, PropKeys.Language, CodeHighlight.Canonical(item.Language) ?? item.Language.Trim());
+        if (item.Kind == BlockKind.Todo)
+            a.SetProp(pageId, blockId, PropKeys.Checked, item.Checked ? "true" : "false");
+    }
+
     /// <summary>Enter: everything after the caret becomes a new block below.</summary>
     public async Task<string> SplitBlockAsync(
         string pageId,

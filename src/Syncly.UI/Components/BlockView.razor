@@ -433,6 +433,10 @@
     public Task OnSplit(string text, int caret) => Host.SplitAsync(Block.Id, text, caret);
 
     [JSInvokable]
+    public Task OnPasteBlocks(string json, string clipboard, string text, int caret) =>
+        Host.PasteBlocksAsync(Block.Id, json, clipboard, text, caret);
+
+    [JSInvokable]
     public Task OnMergeBackward() => Host.MergeBackwardAsync(Block.Id);
 
     [JSInvokable]

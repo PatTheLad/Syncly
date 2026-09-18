@@ -250,6 +250,7 @@
     private string? _pendingTitle;
     private string? _slashBlockId;
     private string? _pageLinkBlockId;
+    private string? _ignoreUnmountBlur;
     private string _pageLinkQuery = "";
     private string? _langBlockId;
     private double _anchorLeft;
@@ -397,6 +398,12 @@
 
     public async Task BlurAsync(string blockId, string text)
     {
+        if (blockId == _ignoreUnmountBlur)
+        {
+            _ignoreUnmountBlur = null;
+            return;
+        }
+
         _pendingText[blockId] = text;
         await CloseLinkPickerAsync();
         await FlushAsync();
@@ -404,6 +411,9 @@
 
     public async Task FocusAsync(string blockId)
     {
+        if (_ignoreUnmountBlur == blockId)
+            _ignoreUnmountBlur = null;
+
         if (_focusedBlockId == blockId && !State.ReadingMode)
             return;
 
@@ -417,11 +427,49 @@
 
     public async Task SplitAsync(string blockId, string text, int caret)
     {
+        caret = Math.Clamp(caret, 0, text.Length);
+        var prefix = text[..caret];
+        _ignoreUnmountBlur = blockId;
         _pendingText[blockId] = text;
         await FlushAsync();
+        try
+        {
+            await Js.InvokeVoidAsync("syncly.setText", $"blk-{blockId}", prefix, prefix.Length);
+        }
+        catch (JSException)
+        {
+        }
 
+        _pendingText.Remove(blockId);
         var newId = await State.Workspace.SplitBlockAsync(PageIdOrThrow, blockId, caret);
         await FocusBlockAsync(newId, 0);
+    }
+
+    public async Task PasteBlocksAsync(string blockId, string json, string clipboard, string text, int caret)
+    {
+        var paste = MarkdownImport.ParseJson(json);
+        if (paste.Count == 0)
+            paste = MarkdownImport.Parse(clipboard);
+        if (paste.Count == 0)
+            return;
+
+        caret = Math.Clamp(caret, 0, text.Length);
+        var prefix = text[..caret];
+        _ignoreUnmountBlur = blockId;
+        _pendingText[blockId] = text;
+        await FlushAsync();
+        try
+        {
+            await Js.InvokeVoidAsync("syncly.setText", $"blk-{blockId}", prefix, prefix.Length);
+        }
+        catch (JSException)
+        {
+        }
+
+        _pendingText.Remove(blockId);
+        var (focusId, focusCaret) = await State.Workspace.InsertPastedBlocksAsync(
+            PageIdOrThrow, blockId, caret, paste);
+        await FocusBlockAsync(focusId, focusCaret);
     }
 
     public async Task MergeBackwardAsync(string blockId)

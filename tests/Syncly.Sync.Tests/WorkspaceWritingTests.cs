@@ -190,6 +190,86 @@ public class WorkspaceWritingTests
     }
 
     [Fact]
+    public async Task Split_mid_word_moves_the_suffix_once()
+    {
+        await using var app = await StartAsync();
+        var workspace = app.Workspace;
+        var pageId = await workspace.CreatePageAsync(null, "Split");
+        var blockId = workspace.Tree(pageId).Order[0].Id;
+        await workspace.SetBlockTextAsync(pageId, blockId, "hello world");
+
+        var nextId = await workspace.SplitBlockAsync(pageId, blockId, 6);
+        var tree = workspace.Tree(pageId);
+        Assert.Equal("hello ", tree.Find(blockId)!.Text);
+        Assert.Equal("world", tree.Find(nextId)!.Text);
+        Assert.Equal([blockId, nextId], tree.Order.Select(n => n.Id));
+    }
+
+    [Fact]
+    public async Task Paste_inserts_a_formatted_paragraph_at_the_caret()
+    {
+        await using var app = await StartAsync();
+        var workspace = app.Workspace;
+        var pageId = await workspace.CreatePageAsync(null, "Paste");
+        var blockId = workspace.Tree(pageId).Order[0].Id;
+        await workspace.SetBlockTextAsync(pageId, blockId, "ab");
+
+        var (focus, caret) = await workspace.InsertPastedBlocksAsync(
+            pageId, blockId, 1, [new PastedBlock(BlockKind.Paragraph, "hello **x**")]);
+
+        Assert.Equal(blockId, focus);
+        Assert.Equal("ahello **x**b", workspace.Tree(pageId).Find(blockId)!.Text);
+        Assert.Equal("ahello **x**".Length, caret);
+    }
+
+    [Fact]
+    public async Task Paste_github_blocks_keep_prefix_and_tail()
+    {
+        await using var app = await StartAsync();
+        var workspace = app.Workspace;
+        var pageId = await workspace.CreatePageAsync(null, "Readme");
+        var blockId = workspace.Tree(pageId).Order[0].Id;
+        await workspace.SetBlockTextAsync(pageId, blockId, "ab");
+
+        await workspace.InsertPastedBlocksAsync(pageId, blockId, 1,
+        [
+            new PastedBlock(BlockKind.Heading2, "Features"),
+            new PastedBlock(BlockKind.Bullet, "**fast** sync"),
+            new PastedBlock(BlockKind.Code, "print(1)", "python"),
+            new PastedBlock(BlockKind.Todo, "ship it", Checked: true),
+        ]);
+
+        var tree = workspace.Tree(pageId);
+        Assert.Equal(["a", "Features", "**fast** sync", "print(1)", "ship it", "b"],
+            tree.Order.Select(n => n.Text));
+        Assert.Equal(
+            [
+                BlockKind.Paragraph, BlockKind.Heading2, BlockKind.Bullet,
+                BlockKind.Code, BlockKind.Todo, BlockKind.Paragraph,
+            ],
+            tree.Order.Select(n => n.Kind));
+        Assert.Equal("python", tree.Order[3].Language);
+        Assert.True(tree.Order[4].Checked);
+    }
+
+    [Fact]
+    public async Task Paste_into_an_empty_block_takes_the_first_kind()
+    {
+        await using var app = await StartAsync();
+        var workspace = app.Workspace;
+        var pageId = await workspace.CreatePageAsync(null, "Empty");
+        var blockId = workspace.Tree(pageId).Order[0].Id;
+
+        await workspace.InsertPastedBlocksAsync(
+            pageId, blockId, 0, [new PastedBlock(BlockKind.Heading1, "Title")]);
+
+        var block = workspace.Tree(pageId).Find(blockId)!;
+        Assert.Equal(BlockKind.Heading1, block.Kind);
+        Assert.Equal("Title", block.Text);
+        Assert.Single(workspace.Tree(pageId).Order);
+    }
+
+    [Fact]
     public async Task Reorder_block_inserts_before_a_sibling()
     {
         await using var app = await StartAsync();

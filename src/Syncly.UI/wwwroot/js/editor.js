@@ -81,6 +81,227 @@
     };
   }
 
+  // ---------------------------------------------------------- clipboard HTML
+  // GitHub (and most browsers) put a rendered fragment on text/html. We turn that
+  // into the same block kinds the editor already knows, with markdown marks for
+  // bold/italic/code so the preview matches what was copied.
+
+  function tidyInline(text) {
+    return (text || '').replace(/\u00a0/g, ' ').replace(/[ \t\r\n]+/g, ' ').trim();
+  }
+
+  function wrapMark(text, mark) {
+    if (!text) return '';
+    if (text.startsWith(mark) && text.endsWith(mark) && text.length > mark.length * 2)
+      return text;
+    return mark + text + mark;
+  }
+
+  function inlineText(node) {
+    if (!node) return '';
+    if (node.nodeType === Node.TEXT_NODE)
+      return node.textContent || '';
+    if (node.nodeType !== Node.ELEMENT_NODE)
+      return '';
+
+    const tag = node.tagName.toLowerCase();
+    if (tag === 'br') return ' ';
+    if (tag === 'script' || tag === 'style' || tag === 'meta') return '';
+    if (node.classList?.contains('anchor') || node.classList?.contains('octicon'))
+      return '';
+
+    const inner = [...node.childNodes].map(inlineText).join('');
+    if (tag === 'strong' || tag === 'b') return wrapMark(inner, '**');
+    if (tag === 'em' || tag === 'i') return wrapMark(inner, '*');
+    if (tag === 'u') return wrapMark(inner, '__');
+    if (tag === 's' || tag === 'del' || tag === 'strike') return wrapMark(inner, '~~');
+    if (tag === 'code' || tag === 'kbd' || tag === 'tt') return wrapMark(inner, '`');
+    if (tag === 'a') return inner;
+    if (tag === 'img') return node.getAttribute('alt') || '';
+    return inner;
+  }
+
+  function codeLanguage(el) {
+    if (!el) return '';
+    const lang = el.getAttribute?.('lang') || el.getAttribute?.('data-language') || '';
+    if (lang) return lang.trim();
+    const cls = `${el.className || ''} ${el.getAttribute?.('class') || ''}`;
+    const match = cls.match(/highlight-source-([a-z0-9+#_-]+)/i)
+      || cls.match(/language-([a-z0-9+#_-]+)/i);
+    return match ? match[1] : '';
+  }
+
+  function pushBlock(out, kind, text, extra) {
+    const row = { kind, text: text || '' };
+    if (extra?.language) row.language = extra.language;
+    if (extra?.checked) row.checked = true;
+    if (row.text || kind === 'Divider' || kind === 'Code')
+      out.push(row);
+  }
+
+  function emitCode(el, out) {
+    let text = '';
+    const cells = el.querySelectorAll?.('td.blob-code');
+    if (cells && cells.length) {
+      text = [...cells].map((td) => td.textContent.replace(/\n$/, '')).join('\n');
+    } else {
+      const pre = el.tagName === 'PRE' ? el : (el.querySelector?.('pre') || el);
+      text = (pre.textContent || '').replace(/\n$/, '');
+    }
+    const language = codeLanguage(el) || codeLanguage(el.querySelector?.('pre, code'));
+    pushBlock(out, 'Code', text, { language });
+  }
+
+  function isCodeHost(el) {
+    if (!el.classList) return false;
+    return el.classList.contains('highlight')
+      || el.classList.contains('snippet-clipboard-content')
+      || [...el.classList].some((name) => name.startsWith('highlight-source'));
+  }
+
+  function liKind(li) {
+    const box = li.querySelector?.(':scope > input[type=checkbox], :scope > p > input[type=checkbox]');
+    if (box || li.classList?.contains('task-list-item'))
+      return { kind: 'Todo', checked: !!(box && box.checked) };
+    if (li.parentElement && li.parentElement.tagName === 'OL')
+      return { kind: 'Numbered' };
+    return { kind: 'Bullet' };
+  }
+
+  function liText(li) {
+    let text = '';
+    for (const child of li.childNodes) {
+      if (child.nodeType === Node.ELEMENT_NODE && /^(UL|OL)$/i.test(child.tagName))
+        continue;
+      if (child.nodeType === Node.ELEMENT_NODE && child.tagName === 'INPUT')
+        continue;
+      text += inlineText(child);
+    }
+    return tidyInline(text);
+  }
+
+  function hasBlockChild(el) {
+    for (const child of el.children || []) {
+      if (/^(P|H[1-6]|UL|OL|LI|PRE|BLOCKQUOTE|TABLE|HR|DIV|SECTION|ARTICLE|TR)$/i.test(child.tagName))
+        return true;
+    }
+    return false;
+  }
+
+  function walkBlocks(node, out) {
+    if (!node) return;
+    let inline = '';
+    const flushInline = () => {
+      const text = tidyInline(inline);
+      if (text) pushBlock(out, 'Paragraph', text);
+      inline = '';
+    };
+
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        inline += child.textContent || '';
+        continue;
+      }
+      if (child.nodeType !== Node.ELEMENT_NODE) continue;
+
+      const tag = child.tagName.toLowerCase();
+      if (tag === 'script' || tag === 'style' || tag === 'meta' || tag === 'button')
+        continue;
+      if (child.classList?.contains('anchor')) continue;
+
+      if (tag === 'br') {
+        inline += ' ';
+        continue;
+      }
+
+      if (tag === 'h1') { flushInline(); pushBlock(out, 'Heading1', tidyInline(inlineText(child))); continue; }
+      if (tag === 'h2') { flushInline(); pushBlock(out, 'Heading2', tidyInline(inlineText(child))); continue; }
+      if (tag === 'h3') { flushInline(); pushBlock(out, 'Heading3', tidyInline(inlineText(child))); continue; }
+      if (tag === 'h4' || tag === 'h5' || tag === 'h6') {
+        flushInline();
+        pushBlock(out, 'Heading3', tidyInline(inlineText(child)));
+        continue;
+      }
+      if (tag === 'p') { flushInline(); pushBlock(out, 'Paragraph', tidyInline(inlineText(child))); continue; }
+      if (tag === 'hr') { flushInline(); pushBlock(out, 'Divider', ''); continue; }
+      if (tag === 'pre' || (tag === 'div' && isCodeHost(child))
+          || (tag === 'table' && child.classList?.contains('highlight'))) {
+        flushInline();
+        emitCode(child, out);
+        continue;
+      }
+      if (tag === 'blockquote') {
+        flushInline();
+        const before = out.length;
+        walkBlocks(child, out);
+        if (out.length === before) {
+          pushBlock(out, 'Quote', tidyInline(inlineText(child)));
+        } else {
+          for (let i = before; i < out.length; i++) {
+            if (out[i].kind === 'Paragraph') out[i].kind = 'Quote';
+          }
+        }
+        continue;
+      }
+      if (tag === 'ul' || tag === 'ol') {
+        flushInline();
+        for (const li of child.children) {
+          if (li.tagName !== 'LI') continue;
+          const item = liKind(li);
+          pushBlock(out, item.kind, liText(li), { checked: item.checked });
+          for (const nested of li.children) {
+            if (/^(UL|OL)$/i.test(nested.tagName)) walkBlocks(nested, out);
+          }
+        }
+        continue;
+      }
+      if (tag === 'table') {
+        flushInline();
+        const rows = [...child.querySelectorAll('tr')].map((tr) =>
+          [...tr.children].map((cell) => tidyInline(inlineText(cell))).join(' | '));
+        pushBlock(out, 'Code', rows.join('\n'));
+        continue;
+      }
+      if (tag === 'li') {
+        flushInline();
+        const item = liKind(child);
+        pushBlock(out, item.kind, liText(child), { checked: item.checked });
+        continue;
+      }
+
+      if (hasBlockChild(child)) {
+        flushInline();
+        walkBlocks(child, out);
+        continue;
+      }
+
+      inline += inlineText(child);
+    }
+
+    flushInline();
+  }
+
+  function htmlToBlocks(html) {
+    if (!html || !html.trim()) return [];
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll('a.anchor, .octicon, button, script, style, meta').forEach((n) => n.remove());
+    const out = [];
+    walkBlocks(doc.body, out);
+    return out;
+  }
+
+  function hasInlineMarks(text) {
+    return /(?:\*\*|__|~~|`|\*[^*\s])/.test(text || '');
+  }
+
+  function shouldPasteAsBlocks(blocks, plain) {
+    if ((plain || '').includes('\n')) return true;
+    if (!blocks || blocks.length === 0) return false;
+    if (blocks.length > 1) return true;
+    const first = blocks[0];
+    return first.kind !== 'Paragraph' || hasInlineMarks(first.text);
+  }
+
   // ------------------------------------------------------------------- blocks
 
   const attached = new WeakMap();
@@ -93,8 +314,9 @@
       dotnet.invokeMethodAsync('OnInput', el.textContent ?? '', caretOffset(el));
     };
 
+    let suppressInput = false;
     el.addEventListener('input', (event) => {
-      if (event.isComposing) return;
+      if (event.isComposing || suppressInput) return;
       report();
     });
 
@@ -117,10 +339,26 @@
         return;
       }
 
-      // Paste as plain text; the block model has no place for foreign markup.
+      const data = event.clipboardData || window.clipboardData;
+      const html = data?.getData('text/html') || '';
+      const plain = (data?.getData('text') || '').replace(/\r\n/g, '\n');
+      const blocks = htmlToBlocks(html);
+
+      if (!shouldPasteAsBlocks(blocks, plain)) {
+        event.preventDefault();
+        document.execCommand('insertText', false, plain);
+        return;
+      }
+
       event.preventDefault();
-      const text = (event.clipboardData || window.clipboardData).getData('text');
-      document.execCommand('insertText', false, text.replace(/\r\n/g, '\n'));
+      const text = el.textContent ?? '';
+      const caret = caretOffset(el);
+      await dotnet.invokeMethodAsync(
+        'OnPasteBlocks',
+        JSON.stringify(blocks),
+        plain,
+        text,
+        caret);
     });
 
     el.addEventListener('keydown', (event) => {
@@ -142,6 +380,12 @@
         case 'Enter':
           if (event.shiftKey) { handled = false; break; }
           event.preventDefault();
+          // Truncate before the round-trip so an unmount blur cannot write the
+          // suffix back onto this block after SplitBlockAsync has already moved it.
+          suppressInput = true;
+          el.textContent = text.slice(0, caret);
+          suppressInput = false;
+          if (document.activeElement === el) placeCaret(el, caret);
           dotnet.invokeMethodAsync('OnSplit', text, caret);
           break;
 
