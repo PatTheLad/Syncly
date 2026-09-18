@@ -282,6 +282,8 @@
 
     public string? FocusedBlockId => _focusedBlockId;
 
+    public string? LanguagePickerBlockId => _langBlockId;
+
     protected override void OnInitialized()
     {
         State.Changed += Refresh;
@@ -1076,10 +1078,18 @@
 
     public async Task PickCodeLanguageAsync(string blockId)
     {
+        await FlushAsync();
         _slashBlockId = null;
         await CaptureAnchorAsync(blockId);
         _langBlockId = blockId;
         StateHasChanged();
+    }
+
+    public async Task SetCodeLanguageAsync(string blockId, string? language)
+    {
+        await FlushAsync();
+        _langBlockId = null;
+        await State.Workspace.SetBlockLanguageAsync(PageIdOrThrow, blockId, language);
     }
 
     private IReadOnlyList<Palette.PaletteItem> LanguageItems()

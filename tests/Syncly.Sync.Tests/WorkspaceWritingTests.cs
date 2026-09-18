@@ -206,6 +206,49 @@ public class WorkspaceWritingTests
     }
 
     [Fact]
+    public async Task Split_code_block_drops_the_tail_to_a_paragraph()
+    {
+        await using var app = await StartAsync();
+        var workspace = app.Workspace;
+        var pageId = await workspace.CreatePageAsync(null, "Code split");
+        var blockId = workspace.Tree(pageId).Order[0].Id;
+        await workspace.SetBlockKindAsync(pageId, blockId, BlockKind.Code);
+        await workspace.SetBlockLanguageAsync(pageId, blockId, "python");
+        await workspace.SetBlockTextAsync(pageId, blockId, "print(1)\n");
+
+        var nextId = await workspace.SplitBlockAsync(pageId, blockId, "print(1)\n".Length);
+        var tree = workspace.Tree(pageId);
+        var code = tree.Find(blockId)!;
+        var next = tree.Find(nextId)!;
+
+        Assert.Equal("print(1)\n", code.Text);
+        Assert.Equal(BlockKind.Code, code.Kind);
+        Assert.Equal("python", code.Language);
+        Assert.Equal("", next.Text);
+        Assert.Equal(BlockKind.Paragraph, next.Kind);
+        Assert.Equal([blockId, nextId], tree.Order.Select(n => n.Id));
+    }
+
+    [Fact]
+    public async Task Code_language_persists()
+    {
+        await using var app = await StartAsync();
+        var workspace = app.Workspace;
+        var pageId = await workspace.CreatePageAsync(null, "Lang");
+        var blockId = workspace.Tree(pageId).Order[0].Id;
+        await workspace.SetBlockKindAsync(pageId, blockId, BlockKind.Code);
+
+        await workspace.SetBlockLanguageAsync(pageId, blockId, "js");
+        Assert.Equal("javascript", workspace.Tree(pageId).Find(blockId)!.Language);
+
+        await workspace.SetBlockLanguageAsync(pageId, blockId, "Zig");
+        Assert.Equal("zig", workspace.Tree(pageId).Find(blockId)!.Language);
+
+        await workspace.SetBlockLanguageAsync(pageId, blockId, null);
+        Assert.Null(workspace.Tree(pageId).Find(blockId)!.Language);
+    }
+
+    [Fact]
     public async Task Paste_inserts_a_formatted_paragraph_at_the_caret()
     {
         await using var app = await StartAsync();

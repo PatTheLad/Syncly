@@ -72,6 +72,24 @@
     selection.addRange(range);
   }
 
+  // Keep the code editor focused while opening the language <select>.
+  document.addEventListener('mousedown', (event) => {
+    const select = event.target instanceof Element
+      ? event.target.closest('select.code-lang')
+      : null;
+    if (!select) return;
+    event.preventDefault();
+    if (typeof select.showPicker === 'function') {
+      try {
+        select.showPicker();
+      } catch {
+        select.focus();
+      }
+    } else {
+      select.focus();
+    }
+  }, true);
+
   function lineInfo(node, offset) {
     const text = node.textContent;
     return {
@@ -79,6 +97,29 @@
       atEnd: offset >= text.length,
       empty: text.length === 0,
     };
+  }
+
+  function isCodeBlock(el) {
+    return el.dataset.kind === 'code';
+  }
+
+  // Empty fence, caret after a trailing newline, or Ctrl/Cmd+Enter leaves the code block.
+  function shouldExitCode(text, caret, event) {
+    if (event.ctrlKey || event.metaKey) return true;
+    if (text.length === 0) return true;
+    return caret === text.length && text.endsWith('\n');
+  }
+
+  function insertPlain(el, insertion, report) {
+    const current = el.textContent ?? '';
+    const caret = caretOffset(el);
+    const end = selectionEnd(el);
+    const from = Math.min(caret, end);
+    const to = Math.max(caret, end);
+    const next = current.slice(0, from) + insertion + current.slice(to);
+    el.textContent = next;
+    placeCaret(el, from + insertion.length);
+    report();
   }
 
   // ---------------------------------------------------------- clipboard HTML
@@ -378,6 +419,21 @@
 
       switch (event.key) {
         case 'Enter':
+          if (isCodeBlock(el)) {
+            event.preventDefault();
+            if (shouldExitCode(text, caret, event)) {
+              suppressInput = true;
+              el.textContent = text.slice(0, caret);
+              suppressInput = false;
+              if (document.activeElement === el) placeCaret(el, caret);
+              dotnet.invokeMethodAsync('OnSplit', text, caret);
+            } else {
+              suppressInput = true;
+              insertPlain(el, '\n', report);
+              suppressInput = false;
+            }
+            break;
+          }
           if (event.shiftKey) { handled = false; break; }
           event.preventDefault();
           // Truncate before the round-trip so an unmount blur cannot write the
@@ -403,6 +459,12 @@
 
         case 'Tab':
           event.preventDefault();
+          if (isCodeBlock(el) && !event.shiftKey) {
+            suppressInput = true;
+            insertPlain(el, '  ', report);
+            suppressInput = false;
+            break;
+          }
           dotnet.invokeMethodAsync('OnIndent', !event.shiftKey);
           break;
 
@@ -880,6 +942,18 @@
     scanQr,
     downloadText,
     printPage,
+    showPicker(el) {
+      if (!el) return;
+      if (typeof el.showPicker === 'function') {
+        try {
+          el.showPicker();
+          return;
+        } catch {
+          // Not a user gesture, or the control is disabled.
+        }
+      }
+      el.focus();
+    },
     click(id) {
       const el = element(id);
       if (el) el.click();

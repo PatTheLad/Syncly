@@ -13,6 +13,9 @@ public interface IBlockHost
     /// <summary>The text block currently showing source markers. Null means every block is preview.</summary>
     string? FocusedBlockId { get; }
 
+    /// <summary>Code block whose language picker is open, so source stays mounted.</summary>
+    string? LanguagePickerBlockId { get; }
+
     Task TextChangedAsync(string blockId, string text, int caret);
 
     Task CommitTextAsync(string blockId, string text);
@@ -67,6 +70,8 @@ public interface IBlockHost
     Task BlurAsync(string blockId, string text);
 
     Task PickCodeLanguageAsync(string blockId);
+
+    Task SetCodeLanguageAsync(string blockId, string? language);
 
     void BeginBlockDrag(string blockId);
 

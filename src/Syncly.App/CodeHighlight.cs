@@ -13,11 +13,23 @@ public static class CodeHighlight
 
     public static readonly Language[] Languages =
     [
-        new("csharp", "C#", ["cs", "c#", "csharp"]),
-        new("blazor", "Blazor", ["razor", "blazor"]),
-        new("mssql", "T-SQL", ["mssql", "tsql", "t-sql", "sqlserver", "sql"]),
-        new("sqlite", "SQLite", ["sqlite", "sqlite3"]),
         new("access", "Access", ["access", "msaccess", "jet"]),
+        new("bash", "Bash", ["bash", "sh", "shell", "zsh"]),
+        new("blazor", "Blazor", ["razor", "blazor"]),
+        new("csharp", "C#", ["cs", "c#", "csharp"]),
+        new("css", "CSS", ["css"]),
+        new("go", "Go", ["go", "golang"]),
+        new("html", "HTML", ["html", "htm"]),
+        new("java", "Java", ["java"]),
+        new("javascript", "JavaScript", ["js", "javascript", "node"]),
+        new("json", "JSON", ["json"]),
+        new("python", "Python", ["py", "python"]),
+        new("rust", "Rust", ["rust", "rs"]),
+        new("sqlite", "SQLite", ["sqlite", "sqlite3"]),
+        new("mssql", "T-SQL", ["mssql", "tsql", "t-sql", "sqlserver", "sql"]),
+        new("typescript", "TypeScript", ["ts", "typescript"]),
+        new("xml", "XML", ["xml"]),
+        new("yaml", "YAML", ["yaml", "yml"]),
     ];
 
     public static string? Canonical(string? language)
@@ -36,7 +48,7 @@ public static class CodeHighlight
                     return lang.Id;
         }
 
-        return null;
+        return key;
     }
 
     public static string Label(string? language)
@@ -49,7 +61,7 @@ public static class CodeHighlight
             if (lang.Id == id)
                 return lang.Label;
 
-        return "Plain";
+        return id;
     }
 
     public static string ToHtml(string? text, string? language)

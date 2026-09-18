@@ -14,8 +14,21 @@ public class CodeHighlightTests
         Assert.Equal("mssql", CodeHighlight.Canonical("sql"));
         Assert.Equal("sqlite", CodeHighlight.Canonical("SQLite3"));
         Assert.Equal("access", CodeHighlight.Canonical("msaccess"));
-        Assert.Null(CodeHighlight.Canonical("python"));
+        Assert.Equal("python", CodeHighlight.Canonical("PY"));
+        Assert.Equal("javascript", CodeHighlight.Canonical("js"));
+        Assert.Equal("typescript", CodeHighlight.Canonical("TS"));
+        Assert.Equal("zig", CodeHighlight.Canonical("Zig"));
         Assert.Null(CodeHighlight.Canonical(" "));
+    }
+
+    [Fact]
+    public void Label_keeps_unknown_ids()
+    {
+        Assert.Equal("Plain", CodeHighlight.Label(null));
+        Assert.Equal("Plain", CodeHighlight.Label(" "));
+        Assert.Equal("Python", CodeHighlight.Label("py"));
+        Assert.Equal("JavaScript", CodeHighlight.Label("js"));
+        Assert.Equal("zig", CodeHighlight.Label("Zig"));
     }
 
     [Fact]
@@ -84,6 +97,12 @@ public class CodeHighlightTests
         Assert.Equal(BlockKind.Code, csharp.Value.Kind);
         Assert.Equal("csharp", csharp.Value.Language);
         Assert.Equal("leftover", "```csharp leftover"[csharp.Value.Consumed..]);
+
+        var python = InlineMarkup.MatchShortcut("```python leftover");
+        Assert.NotNull(python);
+        Assert.Equal(BlockKind.Code, python.Value.Kind);
+        Assert.Equal("python", python.Value.Language);
+        Assert.Equal("leftover", "```python leftover"[python.Value.Consumed..]);
 
         var plain = InlineMarkup.MatchShortcut("``` next");
         Assert.NotNull(plain);

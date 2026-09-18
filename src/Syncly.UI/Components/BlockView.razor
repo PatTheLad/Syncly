@@ -5,7 +5,7 @@
 @inject EditorState State
 
 <div id="@ElementId"
-     class="block @KindClass @BlockDropClass"
+     class="block @KindClass @BlockDropClass @(IsFocused ? "focused" : null)"
      @key="Block.Id"
      @ondragover="OnDragOverAsync"
      @ondragover:preventDefault
@@ -150,13 +150,24 @@
             }
             else
             {
-                <button type="button"
-                        class="code-lang"
+                <select class="code-lang"
                         title="Code language"
+                        aria-label="Code language"
+                        value="@LanguageSelectValue"
+                        @onmousedown:preventDefault="true"
                         @onclick:stopPropagation="true"
-                        @onclick="() => Host.PickCodeLanguageAsync(Block.Id)">
-                    @CodeHighlight.Label(Block.Language)
-                </button>
+                        @onchange="OnLanguageChanged">
+                    <option value="">Plain</option>
+                    @foreach (var lang in CodeHighlight.Languages)
+                    {
+                        <option value="@lang.Id">@lang.Label</option>
+                    }
+                    @if (LanguageSelectExtra is { } extra)
+                    {
+                        <option value="@extra">@CodeHighlight.Label(extra)</option>
+                    }
+                    <option value="__other__">Other…</option>
+                </select>
             }
             @if (Host.Reading)
             {
@@ -180,6 +191,7 @@
                      class="block-text"
                      contenteditable="true"
                      spellcheck="false"
+                     data-kind="code"
                      data-placeholder="@Placeholder"></div>
             }
         </div>
@@ -206,6 +218,7 @@
              class="block-text @(Block.Checked ? "done" : null)"
              contenteditable="true"
              spellcheck="true"
+             data-kind="@KindClass"
              data-placeholder="@Placeholder"></div>
     }
 </div>
@@ -253,13 +266,35 @@
     private string? BlockDropClass => Host.BlockDropClass(Block.Id);
 
     /// <summary>
-    /// Source (markers visible) only for the focused text block, or a file caption while editing.
-    /// Everyone else renders formatted HTML.
+    /// Source (markers visible) only for the focused text block, a file caption while editing,
+    /// or a code block whose language picker is open so the editor is not torn down mid-click.
     /// </summary>
     private bool ShowsSource =>
         Block.Kind == BlockKind.File
             ? !Host.Reading
-            : !Host.Reading && Host.FocusedBlockId == Block.Id;
+            : !Host.Reading && (Host.FocusedBlockId == Block.Id || Host.LanguagePickerBlockId == Block.Id);
+
+    private bool IsFocused =>
+        !Host.Reading && Host.FocusedBlockId == Block.Id;
+
+    private string LanguageSelectValue =>
+        CodeHighlight.Canonical(Block.Language) ?? "";
+
+    private string? LanguageSelectExtra
+    {
+        get
+        {
+            var id = LanguageSelectValue;
+            if (id.Length == 0)
+                return null;
+
+            foreach (var lang in CodeHighlight.Languages)
+                if (lang.Id == id)
+                    return null;
+
+            return id;
+        }
+    }
 
     private PageRef? TargetPage =>
         Block.Target is { Length: > 0 } target ? State.Workspace.Page(target) : null;
@@ -468,6 +503,15 @@
     public Task OnEscape() => Host.EscapeAsync();
 
     private Task OpenMenuAsync() => Host.SlashAsync(Block.Id);
+
+    private Task OnLanguageChanged(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString();
+        if (value == "__other__")
+            return Host.PickCodeLanguageAsync(Block.Id);
+
+        return Host.SetCodeLanguageAsync(Block.Id, string.IsNullOrEmpty(value) ? null : value);
+    }
 
     private Task OnContextMenuAsync(MouseEventArgs e) =>
         Host.OpenBlockContextMenuAsync(Block.Id, e.ClientX, e.ClientY);

@@ -792,7 +792,7 @@ textarea {
   display: flex;
   gap: 8px;
   align-items: flex-start;
-  padding: 1px 0;
+  padding: 5px 0;
   margin-left: -28px;
   padding-left: 28px;
   border-radius: var(--radius-sm);
@@ -800,8 +800,15 @@ textarea {
 
 /* Keyboard users reach the handle by tabbing into the block. */
 .block:hover > .block-handle,
-.block:focus-within > .block-handle {
+.block:focus-within > .block-handle,
+.block.focused > .block-handle {
   opacity: 1;
+}
+
+.block:focus-within,
+.block.focused {
+  background: var(--selected);
+  box-shadow: inset 0 0 0 1px var(--line);
 }
 
 .block.search-flash {
@@ -916,6 +923,8 @@ textarea {
   background: var(--bg-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
+  white-space: pre;
+  overflow-x: auto;
 }
 
 .code-shell {
@@ -932,13 +941,30 @@ textarea {
   font-family: var(--mono);
   font-size: 11px;
   line-height: 1.6;
-  color: var(--ink-3);
+  color: var(--ink-2);
+  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
+  background: var(--bg-1);
 }
 
-button.code-lang:hover {
+span.code-lang {
+  border-color: transparent;
+  background: transparent;
+}
+
+select.code-lang {
+  cursor: pointer;
+  appearance: auto;
+  max-width: 11rem;
+}
+
+button.code-lang:hover,
+select.code-lang:hover,
+select.code-lang:focus {
   color: var(--ink-1);
   background: var(--bg-3);
+  border-color: var(--line-strong);
+  outline: none;
 }
 
 .tok-kw { color: #c4b5fd; }
