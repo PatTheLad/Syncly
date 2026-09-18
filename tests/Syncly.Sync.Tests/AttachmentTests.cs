@@ -154,6 +154,13 @@ public class AttachmentTests
         await using (var stream = new MemoryStream([1, 2, 3]))
             await a.Blobs.PutAsync(fileId, stream, chain);
 
+        await a.AuthorAsync(x =>
+        {
+            x.CreateObject("page-1", "Shared");
+            x.UpsertBlock("page-1", "b-file", null, Crdt.FracIndex.Middle, BlockKind.File);
+            x.SetProp("page-1", "b-file", PropKeys.FileId, fileId);
+        });
+
         await a.Engine.SyncNowAsync();
 
         Assert.Equal(SyncPhase.Failed, a.Engine.Status.Phase);

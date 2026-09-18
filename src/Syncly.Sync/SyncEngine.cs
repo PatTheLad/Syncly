@@ -335,23 +335,31 @@ public sealed class SyncEngine : IAsyncDisposable
     /// <summary>Snapshots the workspace. Tombstones wait until at least one other device has synced.</summary>
     public async Task CollectAsync(CancellationToken ct = default)
     {
-        var stable = await _context.Peers.StableVersionAsync(ct);
-        if (stable is not null)
+        await _gate.WaitAsync(ct);
+        try
         {
-            var removed = _context.Replica.CollectTombstones(stable);
-            if (removed > 0)
-                _logger.LogInformation("Collected {Count} tombstones.", removed);
-        }
+            var stable = await _context.Peers.StableVersionAsync(ct);
+            if (stable is not null)
+            {
+                var removed = _context.Replica.CollectTombstones(stable);
+                if (removed > 0)
+                    _logger.LogInformation("Collected {Count} tombstones.", removed);
+            }
 
-        var mailbox = stable is not null;
-        if (!mailbox)
+            var mailbox = stable is not null;
+            if (!mailbox)
+            {
+                var peers = await _context.Peers.ListAsync(ct);
+                mailbox = peers.Count == 0;
+            }
+
+            await SweepOrphanBlobsAsync(mailbox ? _backend : null, ct);
+            await _snapshots.WriteAsync(_context.Replica.Documents.ToList(), _context.Replica.Version, ct);
+        }
+        finally
         {
-            var peers = await _context.Peers.ListAsync(ct);
-            mailbox = peers.Count == 0;
+            _gate.Release();
         }
-
-        await SweepOrphanBlobsAsync(mailbox ? _backend : null, ct);
-        await _snapshots.WriteAsync(_context.Replica.Documents.ToList(), _context.Replica.Version, ct);
     }
 
     public async ValueTask DisposeAsync()
@@ -557,19 +565,10 @@ public sealed class SyncEngine : IAsyncDisposable
             return 0;
 
         var localIds = _context.ListLocalBlobIds().ToHashSet(StringComparer.Ordinal);
-        var remoteIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var name in await backend.ListAsync(ct))
-        {
-            var id = MailboxFiles.BlobIdOf(name);
-            if (id is not null)
-                remoteIds.Add(id);
-        }
-
-        foreach (var id in ReferencedBlobIds())
-            remoteIds.Add(id);
-
+        // Only referenced ids. Listing the mailbox would re-hydrate blobs that CollectAsync
+        // just dropped, which is how a replaced attachment comes back from the dead.
         var pulled = false;
-        foreach (var id in remoteIds)
+        foreach (var id in ReferencedBlobIds().Distinct(StringComparer.Ordinal))
         {
             if (localIds.Contains(id))
                 continue;
@@ -618,9 +617,10 @@ public sealed class SyncEngine : IAsyncDisposable
 
         var failed = 0;
         var localIds = _context.ListLocalBlobIds().ToHashSet(StringComparer.Ordinal);
+        var keep = ReferencedBlobIds().ToHashSet(StringComparer.Ordinal);
         foreach (var id in localIds)
         {
-            if (_uploadedBlobs.Contains(id))
+            if (!keep.Contains(id) || _uploadedBlobs.Contains(id))
                 continue;
 
             byte[]? sealedBytes;

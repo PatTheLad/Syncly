@@ -53,19 +53,38 @@ export function sunHighlightFor(radius) {
   ], sunHeat(radius));
 }
 
-export function kindFor(depth, descendants = 0) {
-  if (descendants >= 32) return 'blackhole';
-  if (depth <= 0 || descendants >= 8) return 'sun';
-  if (depth === 1 || descendants >= 3) return 'planet';
-  if (depth === 2) return 'moon';
+const KIND_RANK = { asteroid: 0, moon: 1, planet: 2, sun: 3, blackhole: 4 };
+
+function childKindOf(parentKind) {
+  if (parentKind === 'blackhole') return 'sun';
+  if (parentKind === 'sun') return 'planet';
+  if (parentKind === 'planet') return 'moon';
   return 'asteroid';
+}
+
+function preferKind(left, right) {
+  return (KIND_RANK[left] ?? 0) >= (KIND_RANK[right] ?? 0) ? left : right;
+}
+
+export function kindFor(depth, descendants = 0, parentKind = null) {
+  const mass = descendants >= 32 ? 'blackhole'
+    : descendants >= 8 ? 'sun'
+    : descendants >= 3 ? 'planet'
+    : 'asteroid';
+  const role = parentKind
+    ? childKindOf(parentKind)
+    : depth <= 0 ? 'sun'
+      : depth === 1 ? 'planet'
+        : depth === 2 ? 'moon'
+          : 'asteroid';
+  return preferKind(mass, role);
 }
 
 const massive = kind => kind === 'blackhole' || kind === 'sun' || kind === 'planet';
 
-export function radiusFor(depth, degree = 0, missing = false, descendants = 0) {
+export function radiusFor(depth, degree = 0, missing = false, descendants = 0, kind = null) {
   if (missing) return 6;
-  const kind = kindFor(depth, descendants);
+  kind ??= kindFor(depth, descendants);
   const family = Math.log2(1 + descendants);
   const links = Math.min(2, Math.log2(1 + degree) * 0.35);
   if (kind === 'blackhole') return 22 + family * 4.6 + links;
@@ -192,10 +211,12 @@ export function createLayout(data = {}, saved = [], savedTopology = null) {
     const links = idLinks.map(pair => ({ source: byId.get(pair.source), target: byId.get(pair.target) }));
     const nodes = [...byId.values()];
     countFamily(nodes, byId);
-    for (const node of nodes) {
+    const family = [...nodes].sort((left, right) => left.depth - right.depth || compare(left.id, right.id));
+    for (const node of family) {
       node.degree = neighbors.get(node.id).size;
-      node.kind = kindFor(node.depth, node.descendants);
-      node.radius = radiusFor(node.depth, node.degree, node.missing, node.descendants);
+      const parent = node.parentId ? byId.get(node.parentId) : null;
+      node.kind = kindFor(node.depth, node.descendants, parent?.kind);
+      node.radius = radiusFor(node.depth, node.degree, node.missing, node.descendants, node.kind);
       if (!previous.has(node.id) && !restored.has(node.id)) {
         const anchors = [...neighbors.get(node.id)].map(id => previous.get(id)).filter(Boolean);
         if (anchors.length) {

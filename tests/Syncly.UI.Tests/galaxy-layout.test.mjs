@@ -109,6 +109,8 @@ test('nested notes promote from moon to planet to sun to black hole; empty roots
   assert.equal(kindFor(0, 31), 'sun');
   assert.equal(kindFor(0, 32), 'blackhole');
   assert.equal(kindFor(1, 32), 'blackhole');
+  assert.equal(kindFor(2, 0, 'sun'), 'planet');
+  assert.equal(kindFor(3, 0, 'planet'), 'moon');
   const moon = createLayout({
     nodes: [{ id: 'sun', depth: 0 }, { id: 'planet', depth: 1, parentId: 'sun' },
       { id: 'moon', depth: 2, parentId: 'planet' },
@@ -116,17 +118,23 @@ test('nested notes promote from moon to planet to sun to black hole; empty roots
   });
   assert.equal(moon.byId.get('moon').kind, 'planet');
   assert.equal(moon.byId.get('moon').descendants, 3);
+  assert.equal(moon.byId.get('nested-0').kind, 'moon');
   const heavy = createLayout({
     nodes: [{ id: 'sun', depth: 0 }, { id: 'planet', depth: 1, parentId: 'sun' },
-      ...Array.from({ length: 8 }, (_, index) => ({ id: `moon-${index}`, depth: 2, parentId: 'planet' }))],
+      ...Array.from({ length: 8 }, (_, index) => ({ id: `moon-${index}`, depth: 2, parentId: 'planet' })),
+      { id: 'dust', depth: 3, parentId: 'moon-0' }],
   });
   assert.equal(heavy.byId.get('planet').kind, 'sun');
   assert.equal(heavy.byId.get('sun').kind, 'sun');
+  assert.equal(heavy.byId.get('moon-0').kind, 'planet');
+  assert.equal(heavy.byId.get('moon-7').kind, 'planet');
+  assert.equal(heavy.byId.get('dust').kind, 'moon');
   const collapsed = createLayout({
     nodes: [{ id: 'core', depth: 0 },
       ...Array.from({ length: 32 }, (_, index) => ({ id: `sat-${index}`, depth: 1, parentId: 'core' }))],
   });
   assert.equal(collapsed.byId.get('core').kind, 'blackhole');
+  assert.equal(collapsed.byId.get('sat-0').kind, 'sun');
   assert.ok(collapsed.byId.get('core').radius > radiusFor(0, 0, false, 8));
 });
 
