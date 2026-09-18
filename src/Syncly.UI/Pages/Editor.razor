@@ -190,6 +190,19 @@
              OnClose="CloseSlashAsync" />
 }
 
+@if (_pageLinkBlockId is not null)
+{
+    <Palette Items="PageLinkItems()"
+             Placeholder="Link to a page"
+             InputId="page-link-menu"
+             EmptyText="No pages match"
+             Anchored="true"
+             Left="_anchorLeft"
+             Top="_anchorTop"
+             OnQuery="OnPageLinkQuery"
+             OnClose="ClosePageLinkPicker" />
+}
+
 @if (_langBlockId is not null)
 {
     <Palette Items="LanguageItems()"
@@ -236,6 +249,8 @@
     private string? _titleDraft;
     private string? _pendingTitle;
     private string? _slashBlockId;
+    private string? _pageLinkBlockId;
+    private string _pageLinkQuery = "";
     private string? _langBlockId;
     private double _anchorLeft;
     private double _anchorTop;
@@ -503,6 +518,8 @@
     {
         await FlushAsync();
         await CaptureAnchorAsync(blockId);
+        _pageLinkBlockId = null;
+        _pageLinkQuery = "";
         _slashBlockId = blockId;
         StateHasChanged();
     }
@@ -554,6 +571,7 @@
     {
         await CloseLinkPickerAsync();
         await CloseSlashAsync();
+        await ClosePageLinkPicker();
         await CloseLanguageAsync();
     }
 
@@ -887,6 +905,8 @@
         BlockKind.Quote => "> ",
         BlockKind.Code => "```csharp",
         BlockKind.Divider => "---",
+        BlockKind.PageLink => "Link to a page",
+        BlockKind.File => "Attach a file",
         _ => null,
     };
 
@@ -912,12 +932,9 @@
 
         if (kind == BlockKind.PageLink)
         {
-            var title = string.IsNullOrWhiteSpace(cleaned) ? "Untitled" : cleaned.Trim();
-            var targetId = await State.Workspace.EnsurePageByTitleAsync(title);
-            await State.Workspace.SetBlockKindAsync(pageId, blockId, BlockKind.PageLink);
-            await State.Workspace.SetBlockTargetAsync(pageId, blockId, targetId);
-            await State.Workspace.SetBlockTextAsync(pageId, blockId, title);
             _slashBlockId = null;
+            _pageLinkQuery = "";
+            _pageLinkBlockId = blockId;
             return;
         }
 
@@ -942,6 +959,71 @@
         _slashBlockId = null;
         StateHasChanged();
         return Task.CompletedTask;
+    }
+
+    private Task ClosePageLinkPicker()
+    {
+        _pageLinkBlockId = null;
+        _pageLinkQuery = "";
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task OnPageLinkQuery(string query)
+    {
+        _pageLinkQuery = query;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private IReadOnlyList<Palette.PaletteItem> PageLinkItems()
+    {
+        var blockId = _pageLinkBlockId;
+        if (blockId is null)
+            return [];
+
+        var pages = State.Workspace.Pages
+            .Where(p => p.Id != _page?.Id)
+            .OrderBy(p => p.DisplayTitle, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var items = pages
+            .Select(page => new Palette.PaletteItem(
+                page.Icon ?? "description",
+                page.DisplayTitle,
+                null,
+                () => ApplyPageLinkAsync(blockId, page.Id, page.DisplayTitle)))
+            .ToList();
+
+        var typed = _pageLinkQuery.Trim();
+        if (typed.Length > 0
+            && !pages.Any(page => string.Equals(page.DisplayTitle, typed, StringComparison.OrdinalIgnoreCase)))
+        {
+            items.Add(new Palette.PaletteItem(
+                "add",
+                typed,
+                "New page",
+                () => ApplyPageLinkCreateAsync(blockId, typed),
+                Pin: true));
+        }
+
+        return items;
+    }
+
+    private async Task ApplyPageLinkCreateAsync(string blockId, string title)
+    {
+        var targetId = await State.Workspace.EnsurePageByTitleAsync(title);
+        await ApplyPageLinkAsync(blockId, targetId, title);
+    }
+
+    private async Task ApplyPageLinkAsync(string blockId, string targetId, string title)
+    {
+        var pageId = PageIdOrThrow;
+        await State.Workspace.SetBlockKindAsync(pageId, blockId, BlockKind.PageLink);
+        await State.Workspace.SetBlockTargetAsync(pageId, blockId, targetId);
+        await State.Workspace.SetBlockTextAsync(pageId, blockId, title);
+        _pageLinkBlockId = null;
+        _pageLinkQuery = "";
     }
 
     public async Task PickCodeLanguageAsync(string blockId)

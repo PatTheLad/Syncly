@@ -308,12 +308,42 @@ internal sealed class ProtonMailbox
 
     private async Task UploadRevisionAsync(string linkId, ReadOnlyMemory<byte> data, CancellationToken ct)
     {
-        var http = RequireHttp();
         var node = await FetchLinkBundleAsync(linkId, ct);
         if (!TryUnlockFile(node, out var fileKeys, out var sessionKey))
             throw new ProtonDriveException("Could not unlock the existing Proton Drive file.");
 
         var currentRevision = ReadActiveRevisionId(node);
+        var revisionId = await CreateOrResumeRevisionAsync(linkId, currentRevision, ct);
+        try
+        {
+            await UploadBlocksAndCommitAsync(linkId, revisionId, fileKeys, sessionKey, data, ct);
+        }
+        catch (Exception ex) when (ex is ProtonDriveException && !ct.IsCancellationRequested)
+        {
+            await TryDeleteRevisionAsync(linkId, revisionId, ct);
+            revisionId = await CreateOrResumeRevisionAsync(linkId, currentRevision, ct);
+            await UploadBlocksAndCommitAsync(linkId, revisionId, fileKeys, sessionKey, data, ct);
+        }
+    }
+
+    private async Task<string> CreateOrResumeRevisionAsync(
+        string linkId,
+        string? currentRevision,
+        CancellationToken ct)
+    {
+        var (revisionId, error) = await PostRevisionAsync(linkId, currentRevision, ct);
+        if (!string.IsNullOrWhiteSpace(revisionId))
+            return revisionId;
+
+        throw new ProtonDriveException("Could not update the file on Proton Drive. " + error);
+    }
+
+    private async Task<(string? RevisionId, string Error)> PostRevisionAsync(
+        string linkId,
+        string? currentRevision,
+        CancellationToken ct)
+    {
+        var http = RequireHttp();
         var body = new Dictionary<string, object?>();
         if (!string.IsNullOrWhiteSpace(currentRevision))
             body["CurrentRevisionID"] = currentRevision;
@@ -325,12 +355,29 @@ internal sealed class ProtonMailbox
             ct);
         var text = await response.Content.ReadAsStringAsync(ct);
         using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(text) ? "{}" : text);
-        if (!TryReadCreatedRevision(doc.RootElement, out var revisionId))
-        {
-            throw new ProtonDriveException("Could not update the file on Proton Drive. " + text);
-        }
+        var root = doc.RootElement;
+        if (TryReadCreatedRevision(root, out var revisionId))
+            return (revisionId, "");
 
-        await UploadBlocksAndCommitAsync(linkId, revisionId, fileKeys, sessionKey, data, ct);
+        if (TryReadDraftRevisionId(root, out var draftId))
+            return (draftId, "");
+
+        return (null, text);
+    }
+
+    private async Task TryDeleteRevisionAsync(string linkId, string revisionId, CancellationToken ct)
+    {
+        try
+        {
+            var http = RequireHttp();
+            await http.DeleteAsync(
+                ProtonDriveBackend.DataPath($"v2/volumes/{_volumeId}/files/{linkId}/revisions/{revisionId}"),
+                ct);
+        }
+        catch
+        {
+            // Best-effort cleanup of a leftover draft so the next create can succeed.
+        }
     }
 
     private async Task UploadBlocksAndCommitAsync(
@@ -984,9 +1031,12 @@ internal sealed class ProtonMailbox
         return true;
     }
 
-    private static bool TryReadCreatedRevision(JsonElement root, out string revisionId)
+    internal static bool TryReadCreatedRevision(JsonElement root, out string revisionId)
     {
         revisionId = "";
+        if (ReadCode(root) is 2500)
+            return false;
+
         if (root.TryGetProperty("Revision", out var revision))
         {
             revisionId = ReadString(revision, "ID") ?? ReadString(revision, "RevisionID") ?? "";
@@ -994,6 +1044,21 @@ internal sealed class ProtonMailbox
         }
 
         revisionId = ReadString(root, "ID") ?? ReadString(root, "RevisionID") ?? "";
+        return !string.IsNullOrWhiteSpace(revisionId);
+    }
+
+    internal static bool TryReadDraftRevisionId(JsonElement root, out string revisionId)
+    {
+        revisionId = "";
+        if (ReadCode(root) is not 2500)
+            return false;
+
+        if (!root.TryGetProperty("Details", out var details) || details.ValueKind != JsonValueKind.Object)
+            return false;
+
+        revisionId = ReadString(details, "ConflictDraftRevisionID")
+                     ?? ReadString(details, "RevisionID")
+                     ?? "";
         return !string.IsNullOrWhiteSpace(revisionId);
     }
 
