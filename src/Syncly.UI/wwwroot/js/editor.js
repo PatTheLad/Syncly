@@ -8,16 +8,22 @@
     shell: null,
   };
 
+  function isField(el) {
+    return el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement;
+  }
+
   function element(id) {
     const root = document.getElementById(id);
     if (!root) return null;
-    if (root.isContentEditable) return root;
-    return root.querySelector('[contenteditable="true"]') ?? root;
+    if (root.isContentEditable || isField(root)) return root;
+    return root.querySelector('textarea, input, [contenteditable="true"]') ?? root;
   }
 
   // ---------------------------------------------------------------- selection
 
   function caretOffset(node) {
+    if (isField(node)) return node.selectionStart ?? 0;
+
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return 0;
 
@@ -31,6 +37,8 @@
   }
 
   function selectionEnd(node) {
+    if (isField(node)) return node.selectionEnd ?? 0;
+
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) return 0;
 
@@ -45,6 +53,12 @@
 
   // Walks the text nodes to turn a plain character offset back into a DOM position.
   function placeCaret(node, offset) {
+    if (isField(node)) {
+      const n = Math.max(0, Math.min(offset, (node.value ?? '').length));
+      node.setSelectionRange(n, n);
+      return;
+    }
+
     const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
     let remaining = offset;
     let target = null;
@@ -91,7 +105,7 @@
   }, true);
 
   function lineInfo(node, offset) {
-    const text = node.textContent;
+    const text = plainText(node);
     return {
       atStart: offset === 0,
       atEnd: offset >= text.length,
@@ -103,6 +117,55 @@
     return el.dataset.kind === 'code';
   }
 
+  function plainText(el) {
+    if (!el) return '';
+    if (isField(el)) return el.value ?? '';
+    return serializeContent(el);
+  }
+
+  // contenteditable's textContent concatenates sibling <div>s without newlines.
+  function serializeContent(root) {
+    let out = '';
+
+    const walk = (node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        out += node.nodeValue || '';
+        return;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+      const tag = node.tagName.toLowerCase();
+      if (tag === 'br') {
+        out += '\n';
+        return;
+      }
+      if (tag === 'script' || tag === 'style') return;
+
+      const block = /^(div|p|li|h[1-6]|blockquote|pre|tr)$/.test(tag);
+      const start = out.length;
+      for (const child of node.childNodes) walk(child);
+      if (block && node !== root && out.length > start && !out.endsWith('\n'))
+        out += '\n';
+    };
+
+    walk(root);
+    return out.replace(/\u00a0/g, ' ');
+  }
+
+  function writePlain(el, text, caret) {
+    if (isField(el)) {
+      el.value = text;
+      if (typeof caret === 'number') {
+        const n = Math.max(0, Math.min(caret, text.length));
+        el.setSelectionRange(n, n);
+      }
+      return;
+    }
+
+    el.textContent = text;
+    if (typeof caret === 'number') placeCaret(el, caret);
+  }
+
   // Empty fence, caret after a trailing newline, or Ctrl/Cmd+Enter leaves the code block.
   function shouldExitCode(text, caret, event) {
     if (event.ctrlKey || event.metaKey) return true;
@@ -111,14 +174,13 @@
   }
 
   function insertPlain(el, insertion, report) {
-    const current = el.textContent ?? '';
+    const current = plainText(el);
     const caret = caretOffset(el);
     const end = selectionEnd(el);
     const from = Math.min(caret, end);
     const to = Math.max(caret, end);
     const next = current.slice(0, from) + insertion + current.slice(to);
-    el.textContent = next;
-    placeCaret(el, from + insertion.length);
+    writePlain(el, next, from + insertion.length);
     report();
   }
 
@@ -352,7 +414,7 @@
     attached.set(el, blockId);
 
     const report = () => {
-      dotnet.invokeMethodAsync('OnInput', el.textContent ?? '', caretOffset(el));
+      dotnet.invokeMethodAsync('OnInput', plainText(el), caretOffset(el));
     };
 
     let suppressInput = false;
@@ -368,7 +430,7 @@
     });
 
     el.addEventListener('blur', () => {
-      dotnet.invokeMethodAsync('OnBlur', el.textContent ?? '');
+      dotnet.invokeMethodAsync('OnBlur', plainText(el));
     });
 
     el.addEventListener('paste', async (event) => {
@@ -383,6 +445,15 @@
       const data = event.clipboardData || window.clipboardData;
       const html = data?.getData('text/html') || '';
       const plain = (data?.getData('text') || '').replace(/\r\n/g, '\n');
+
+      if (isCodeBlock(el)) {
+        event.preventDefault();
+        suppressInput = true;
+        insertPlain(el, plain, report);
+        suppressInput = false;
+        return;
+      }
+
       const blocks = htmlToBlocks(html);
 
       if (!shouldPasteAsBlocks(blocks, plain)) {
@@ -392,7 +463,7 @@
       }
 
       event.preventDefault();
-      const text = el.textContent ?? '';
+      const text = plainText(el);
       const caret = caretOffset(el);
       await dotnet.invokeMethodAsync(
         'OnPasteBlocks',
@@ -406,7 +477,7 @@
       const caret = caretOffset(el);
       const end = selectionEnd(el);
       const info = lineInfo(el, caret);
-      const text = el.textContent ?? '';
+      const text = plainText(el);
 
       // While a menu is open it owns the navigation keys.
       if (state.menuOpen && ['ArrowUp', 'ArrowDown', 'Enter', 'Escape', 'Tab'].includes(event.key)) {
@@ -420,17 +491,19 @@
       switch (event.key) {
         case 'Enter':
           if (isCodeBlock(el)) {
-            event.preventDefault();
             if (shouldExitCode(text, caret, event)) {
+              event.preventDefault();
               suppressInput = true;
-              el.textContent = text.slice(0, caret);
+              writePlain(el, text.slice(0, caret), caret);
               suppressInput = false;
-              if (document.activeElement === el) placeCaret(el, caret);
               dotnet.invokeMethodAsync('OnSplit', text, caret);
-            } else {
+            } else if (!isField(el)) {
+              event.preventDefault();
               suppressInput = true;
               insertPlain(el, '\n', report);
               suppressInput = false;
+            } else {
+              handled = false;
             }
             break;
           }
@@ -439,9 +512,8 @@
           // Truncate before the round-trip so an unmount blur cannot write the
           // suffix back onto this block after SplitBlockAsync has already moved it.
           suppressInput = true;
-          el.textContent = text.slice(0, caret);
+          writePlain(el, text.slice(0, caret), caret);
           suppressInput = false;
-          if (document.activeElement === el) placeCaret(el, caret);
           dotnet.invokeMethodAsync('OnSplit', text, caret);
           break;
 
@@ -500,14 +572,14 @@
         case 'b':
         case 'i':
         case 'u':
-          if (!event.ctrlKey && !event.metaKey) { handled = false; break; }
+          if (isCodeBlock(el) || (!event.ctrlKey && !event.metaKey)) { handled = false; break; }
           event.preventDefault();
           dotnet.invokeMethodAsync('OnMark', event.key, text, caret, end);
           break;
 
         case 's':
         case 'S':
-          if ((!event.ctrlKey && !event.metaKey) || !event.shiftKey) { handled = false; break; }
+          if (isCodeBlock(el) || (!event.ctrlKey && !event.metaKey) || !event.shiftKey) { handled = false; break; }
           event.preventDefault();
           event.stopPropagation();
           dotnet.invokeMethodAsync('OnMark', 's', text, caret, end);
@@ -528,16 +600,11 @@
   function setText(id, text, caret) {
     const el = element(id);
     if (!el) return;
-    if ((el.textContent ?? '') === text) return;
+    if (plainText(el) === text) return;
 
     const focused = document.activeElement === el;
     const previous = focused ? caretOffset(el) : 0;
-
-    el.textContent = text;
-
-    if (focused) {
-      placeCaret(el, caret >= 0 ? caret : Math.min(previous, text.length));
-    }
+    writePlain(el, text, focused ? (caret >= 0 ? caret : Math.min(previous, text.length)) : undefined);
   }
 
   function focusBlock(id, caret) {
@@ -545,7 +612,7 @@
     if (!el) return false;
 
     el.focus({ preventScroll: false });
-    placeCaret(el, caret < 0 ? (el.textContent ?? '').length : caret);
+    placeCaret(el, caret < 0 ? plainText(el).length : caret);
     return true;
   }
 
@@ -563,14 +630,14 @@
 
   function getText(id) {
     const el = element(id);
-    return el ? el.textContent ?? '' : '';
+    return el ? plainText(el) : '';
   }
 
   // Current text + selection for a block, so a toolbar button can toggle a mark without a keyboard.
   function selection(id) {
     const el = element(id);
     if (!el) return { text: '', start: 0, end: 0 };
-    return { text: el.textContent ?? '', start: caretOffset(el), end: selectionEnd(el) };
+    return { text: plainText(el), start: caretOffset(el), end: selectionEnd(el) };
   }
 
   function getCaret(id) {

@@ -406,7 +406,7 @@
             return;
         }
 
-        _pendingText[blockId] = text;
+        _pendingText[blockId] = MergeIncomingText(blockId, text);
         await CloseLinkPickerAsync();
         await FlushAsync();
     }
@@ -418,6 +418,9 @@
 
         if (_focusedBlockId == blockId && !State.ReadingMode)
             return;
+
+        if (_focusedBlockId is { } previous && previous != blockId)
+            await CaptureDomTextAsync(previous);
 
         if (_pendingText.Count > 0)
             await FlushAsync();
@@ -1534,6 +1537,8 @@
 
     private async Task StopEditingAsync()
     {
+        if (_focusedBlockId is { } focused)
+            await CaptureDomTextAsync(focused);
         await FlushAsync();
         _focusedBlockId = null;
         State.SetReadingMode(true);
@@ -1541,11 +1546,48 @@
 
     private async Task FocusBlockAsync(string blockId, int caret)
     {
+        if (_focusedBlockId is { } previous && previous != blockId)
+            await CaptureDomTextAsync(previous);
+        if (_pendingText.Count > 0)
+            await FlushAsync();
+
         _focusedBlockId = blockId;
         State.SetReadingMode(false);
         _focusRequest = (blockId, caret);
         StateHasChanged();
         await Task.Yield();
+    }
+
+    /// <summary>
+    /// Read the live DOM before unmount/focus change. Empty unmount blurs must not wipe typed text.
+    /// </summary>
+    private async Task CaptureDomTextAsync(string blockId)
+    {
+        try
+        {
+            var text = await Js.InvokeAsync<string>("syncly.getText", $"blk-{blockId}");
+            _pendingText[blockId] = MergeIncomingText(blockId, text);
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException)
+        {
+        }
+    }
+
+    private string MergeIncomingText(string blockId, string? incoming)
+    {
+        incoming ??= "";
+        var hasPending = _pendingText.TryGetValue(blockId, out var pending);
+        var stored = State.Workspace.Tree(PageIdOrThrow).Find(blockId)?.Text ?? "";
+        var known = hasPending ? pending! : stored;
+
+        if (incoming.Length == 0)
+            return known;
+
+        if (known.Length > incoming.Length
+            && known.Replace("\n", "", StringComparison.Ordinal) == incoming)
+            return known;
+
+        return incoming;
     }
 
     private async Task<int> CaretAsync(string blockId)

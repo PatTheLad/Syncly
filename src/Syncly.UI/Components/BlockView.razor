@@ -177,22 +177,14 @@
                     @((MarkupString)CodeHighlight.ToHtml(Block.Text, Block.Language))
                 </div>
             }
-            else if (!ShowsSource)
-            {
-                <div class="block-text block-preview"
-                     title="Click to edit"
-                     @onclick="() => Host.FocusAsync(Block.Id)">
-                    @((MarkupString)CodeHighlight.ToHtml(Block.Text, Block.Language))
-                </div>
-            }
             else
             {
-                <div @ref="_element"
-                     class="block-text"
-                     contenteditable="true"
-                     spellcheck="false"
-                     data-kind="code"
-                     data-placeholder="@Placeholder"></div>
+                <textarea @ref="_element"
+                          class="block-text"
+                          spellcheck="false"
+                          data-kind="code"
+                          rows="@CodeRows"
+                          placeholder="@Placeholder"></textarea>
             }
         </div>
     }
@@ -266,13 +258,16 @@
     private string? BlockDropClass => Host.BlockDropClass(Block.Id);
 
     /// <summary>
-    /// Source (markers visible) only for the focused text block, a file caption while editing,
-    /// or a code block whose language picker is open so the editor is not torn down mid-click.
+    /// Source (markers visible) for file captions, every code fence in edit mode (never unmount),
+    /// and the focused text block. Everyone else renders formatted HTML.
     /// </summary>
     private bool ShowsSource =>
-        Block.Kind == BlockKind.File
+        Block.Kind == BlockKind.File || Block.Kind == BlockKind.Code
             ? !Host.Reading
             : !Host.Reading && (Host.FocusedBlockId == Block.Id || Host.LanguagePickerBlockId == Block.Id);
+
+    private int CodeRows =>
+        Math.Max(3, (Block.Text.AsSpan().Count('\n') + 1));
 
     private bool IsFocused =>
         !Host.Reading && Host.FocusedBlockId == Block.Id;
@@ -422,10 +417,11 @@
             return;
         }
 
+        _self ??= DotNetObjectReference.Create(this);
+        await Js.InvokeVoidAsync("syncly.attachBlock", _element, _self, Block.Id);
+
         if (!_attached || !_wasSource)
         {
-            _self ??= DotNetObjectReference.Create(this);
-            await Js.InvokeVoidAsync("syncly.attachBlock", _element, _self, Block.Id);
             await Js.InvokeVoidAsync("syncly.setText", ElementId, Block.Text, -1);
             _pushed = Block.Text;
             _echo = null;

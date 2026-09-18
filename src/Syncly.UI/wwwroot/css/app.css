@@ -927,6 +927,18 @@ textarea {
   overflow-x: auto;
 }
 
+.block.code textarea.block-text {
+  display: block;
+  width: 100%;
+  margin: 0;
+  resize: none;
+  field-sizing: content;
+  min-height: 4.5em;
+  line-height: 1.45;
+  outline: none;
+  tab-size: 2;
+}
+
 .code-shell {
   display: flex;
   flex: 1;
