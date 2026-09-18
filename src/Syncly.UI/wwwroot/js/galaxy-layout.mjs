@@ -126,22 +126,20 @@ export function divePath(byId, diveId) {
 }
 
 export function openAmount(node, scale) {
-  if (node.kind === 'galaxy') return clamp01(((node.radius || 0) * scale - 10) / 48);
+  const body = (node.radius || 0) * scale;
+  if (node.kind === 'galaxy') return clamp01((body - 4) / 24);
   const nested = (node.childCount || 0) > 0 || (node.descendants || 0) > 0;
-  if ((node.kind === 'blackhole' || node.kind === 'sun') && nested) {
-    const body = Math.min(node.radius || 0, 24) * scale;
-    return clamp01((body - 40) / 40);
-  }
+  if ((node.kind === 'blackhole' || node.kind === 'sun') && nested) return clamp01((body - 8) / 20);
   return 1;
 }
 
 export function collapsed(node, scale, options = {}) {
   const size = (node.systemRadius || node.radius || 0) * scale;
-  if (node.kind === 'planet') return size < 22;
-  if (node.kind === 'galaxy') return openAmount(node, scale) < 0.12;
+  if (node.kind === 'planet') return size < 8;
+  if (node.kind === 'galaxy') return openAmount(node, scale) < 0.1;
   const nested = (node.childCount || 0) > 0 || (node.descendants || 0) > 0;
-  if ((node.kind === 'blackhole' || node.kind === 'sun') && nested) return openAmount(node, scale) < 0.12;
-  if (node.kind === 'blackhole' || node.kind === 'sun') return size < 40;
+  if ((node.kind === 'blackhole' || node.kind === 'sun') && nested) return openAmount(node, scale) < 0.1;
+  if (node.kind === 'blackhole' || node.kind === 'sun') return size < 14;
   return false;
 }
 

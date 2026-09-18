@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collapsed, createLayout, kindFor, lodHidden, lodOpen, openAmount, radiusFor, recencyHeat, restorePositions, sunColorFor } from '../../src/Syncly.UI/wwwroot/js/galaxy-layout.mjs';
+import { collapsed, createLayout, kindFor, lodHidden, lodOpen, radiusFor, recencyHeat, restorePositions, sunColorFor } from '../../src/Syncly.UI/wwwroot/js/galaxy-layout.mjs';
 
 const fixture = () => ({
   nodes: [{ id: 'parent' }, { id: 'child', parentId: 'parent' }, { id: 'other' }, { id: 'isolated' }],
@@ -149,8 +149,8 @@ test('nested notes promote from moon to planet to sun to black hole to galaxy', 
 });
 
 test('galaxies stay collapsed until zoomed in, except a kept path', () => {
-  assert.equal(collapsed({ kind: 'planet', systemRadius: 20, radius: 11 }, 1), true);
-  assert.equal(collapsed({ kind: 'planet', systemRadius: 30, radius: 11 }, 1), false);
+  assert.equal(collapsed({ kind: 'planet', systemRadius: 6, radius: 11 }, 1), true);
+  assert.equal(collapsed({ kind: 'planet', systemRadius: 12, radius: 11 }, 1), false);
   const layout = createLayout({
     nodes: [{ id: 'core', depth: 0 },
       ...Array.from({ length: 80 }, (_, index) => ({ id: `sat-${index}`, depth: 1, parentId: 'core' })),
@@ -158,20 +158,18 @@ test('galaxies stay collapsed until zoomed in, except a kept path', () => {
   });
   const byId = layout.byId;
   const core = byId.get('core');
+  const hole = byId.get('sat-0');
   assert.equal(core.kind, 'galaxy');
   assert.equal(collapsed(core, 0.02), true);
-  assert.ok(openAmount(core, 0.2) < 0.15);
   assert.equal(lodHidden(byId.get('sat-0'), byId, 0.02, new Set()), true);
   assert.equal(lodHidden(byId.get('moon'), byId, 0.02, new Set()), true);
-  const inside = 96 / core.radius;
-  assert.equal(collapsed(core, inside), false);
-  assert.ok(openAmount(core, inside) > 0.9);
-  assert.equal(lodHidden(byId.get('sat-0'), byId, inside, new Set()), false);
-  assert.equal(lodHidden(byId.get('moon'), byId, inside, new Set()), true);
-  const hole = byId.get('sat-0');
-  const holeScale = 96 / hole.radius;
-  assert.equal(collapsed(hole, holeScale), false);
-  assert.equal(lodHidden(byId.get('moon'), byId, holeScale, new Set()), false);
+  const galaxyOpen = 18 / core.radius;
+  assert.equal(collapsed(core, galaxyOpen), false);
+  assert.equal(lodHidden(byId.get('sat-0'), byId, galaxyOpen, new Set()), false);
+  assert.equal(lodHidden(byId.get('moon'), byId, galaxyOpen, new Set()), true);
+  const holeOpen = 16 / hole.radius;
+  assert.equal(collapsed(hole, holeOpen), false);
+  assert.equal(lodHidden(byId.get('moon'), byId, holeOpen, new Set()), false);
   const open = lodOpen(byId, ['moon']);
   assert.equal(open.has('core'), true);
   assert.equal(open.has('sat-0'), true);

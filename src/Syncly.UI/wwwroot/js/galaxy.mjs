@@ -692,9 +692,9 @@ function sprite(view, color, kind, radius = 18) {
 
 function drawGalaxy(view, item, time, alpha) {
   const open = openAmount(item.node, view.camera.scale);
-  if (open < 1) drawGalaxyGlyph(view, item, time, alpha * (1 - Math.max(0, open - 0.2) / 0.8));
-  if (open > 0.2) {
-    const core = (open - 0.2) / 0.8;
+  if (open < 1) drawGalaxyGlyph(view, item, time, alpha * (1 - Math.max(0, open - 0.12) / 0.88));
+  if (open > 0.12) {
+    const core = (open - 0.12) / 0.88;
     drawGalacticHalo(view, item, time, alpha * core);
     drawSupermassiveCore(view, item, time, alpha * core);
   }
