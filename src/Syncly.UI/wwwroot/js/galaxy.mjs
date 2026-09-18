@@ -1,8 +1,7 @@
-import { createLayout, hash } from './galaxy-layout.mjs';
+import { createLayout, hash, sunColorFor, sunHighlightFor, sunRimFor } from './galaxy-layout.mjs';
 
 const instances = new Map();
 const palettes = {
-  sun: ['#ffd27a', '#ffb14e', '#ff9d5c', '#ffe29a', '#ff8f6b'],
   planet: ['#7fd8ff', '#9adfb0', '#c792ea', '#7ea8ff', '#5fd9c9', '#e3a8f2'],
   moon: ['#cfd6e4', '#b9c2d4', '#a8b3c9', '#dfe4ee'],
   asteroid: ['#8d97a8', '#767f8f', '#9aa2b0'],
@@ -304,8 +303,9 @@ function fitCamera(view) {
   if (!nodes.length) return { x: 0, y: 0, scale: 1 };
   let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
   for (const node of nodes) {
-    left = Math.min(left, node.x - node.radius); right = Math.max(right, node.x + node.radius);
-    top = Math.min(top, node.y - node.radius); bottom = Math.max(bottom, node.y + node.radius);
+    const extent = node.depth <= 0 ? (node.systemRadius || node.radius) : node.radius;
+    left = Math.min(left, node.x - extent); right = Math.max(right, node.x + extent);
+    top = Math.min(top, node.y - extent); bottom = Math.max(bottom, node.y + extent);
   }
   return { x: (left + right) / 2, y: (top + bottom) / 2,
     scale: clamp(Math.min(Math.max(80, view.width - 140) / Math.max(120, right - left),
@@ -514,23 +514,31 @@ function frame(view, time) {
 
 
 function colorFor(node) {
+  if (node.kind === 'sun') return sunColorFor(node.radius);
   const set = palettes[node.kind] || palettes.planet;
   return set[hash(node.id) % set.length];
 }
 
-function sprite(view, color, kind) {
+function screenRadius(node, scale) {
+  const maximum = node.kind === 'sun' ? 52 : node.kind === 'planet' ? 28 : node.kind === 'moon' ? 16 : 10;
+  const minimum = node.kind === 'sun' ? 8 : 3;
+  return clamp(node.radius * Math.sqrt(scale), minimum, maximum);
+}
+
+function sprite(view, color, kind, radius = 18) {
   const key = kind + ':' + color;
   if (view.sprites.has(key)) return view.sprites.get(key);
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 96;
   const context = canvas.getContext('2d');
   context.beginPath(); context.arc(48, 48, 44, 0, Math.PI * 2); context.clip();
-  const highlight = kind === 'sun' ? '#fff6df' : kind === 'planet' ? '#f5f1e8' : '#eceff4';
+  const highlight = kind === 'sun' ? sunHighlightFor(radius) : kind === 'planet' ? '#f5f1e8' : '#eceff4';
+  const rim = kind === 'sun' ? sunRimFor(radius) : '#1d222c';
   const surface = context.createRadialGradient(30, 26, 1, 53, 53, 57);
   surface.addColorStop(0, highlight);
   surface.addColorStop(kind === 'sun' ? 0.14 : 0.23, color);
   surface.addColorStop(0.65, color);
-  surface.addColorStop(1, kind === 'sun' ? '#5a2a0f' : '#1d222c');
+  surface.addColorStop(1, rim);
   context.fillStyle = surface; context.fillRect(0, 0, 96, 96);
   if (kind === 'sun') {
     context.strokeStyle = '#ffffff26'; context.lineWidth = 2;
@@ -606,7 +614,7 @@ function draw(view, time = performance.now()) {
   for (const node of view.layout.nodes) {
     if (!visible(view, node)) continue;
     const point = screen(view, node);
-    const radius = clamp(node.radius * Math.sqrt(view.camera.scale), 3, 34);
+    const radius = screenRadius(node, view.camera.scale);
     const relevant = !focusId || node.id === focusId || neighborhood?.has(node.id);
     const matches = !view.query || node.title.toLocaleLowerCase().includes(view.query);
     const item = { node, ...point, radius, alpha: relevant && matches ? 1 : 0.22, matches };
@@ -625,7 +633,8 @@ function draw(view, time = performance.now()) {
     const radius = node.orbitRadius * view.camera.scale;
     if (radius < 8 || radius > Math.max(view.width, view.height) * 1.6) continue;
     context.globalAlpha = node.id === focusId ? 0.4 : 0.14;
-    context.strokeStyle = node.depth === 1 ? '#ffcf8a' : node.depth === 2 ? '#9fd6ff' : '#c3c8d4';
+    context.strokeStyle = node.kind === 'planet' || node.kind === 'sun' ? '#ffcf8a'
+      : node.kind === 'moon' ? '#9fd6ff' : '#c3c8d4';
     context.lineWidth = 1;
     context.setLineDash([1.5, 5]);
     context.beginPath(); context.arc(center.x, center.y, radius, 0, Math.PI * 2); context.stroke();
@@ -674,7 +683,7 @@ function draw(view, time = performance.now()) {
       context.strokeStyle = '#a6a3b3'; context.lineWidth = 1.4; context.setLineDash([3, 3]);
       context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.stroke(); context.setLineDash([]);
     } else {
-      context.drawImage(sprite(view, color, node.kind), x - radius, y - radius, radius * 2, radius * 2);
+      context.drawImage(sprite(view, color, node.kind, node.radius), x - radius, y - radius, radius * 2, radius * 2);
     }
     if (node.id === view.currentId) {
       context.fillStyle = '#ffffff'; context.beginPath(); context.arc(x + radius, y - radius, 3, 0, Math.PI * 2); context.fill();
