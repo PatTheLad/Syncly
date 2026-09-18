@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createLayout, kindFor, radiusFor, restorePositions, sunColorFor } from '../../src/Syncly.UI/wwwroot/js/galaxy-layout.mjs';
+import { collapsed, createLayout, kindFor, lodHidden, lodOpen, radiusFor, restorePositions, sunColorFor } from '../../src/Syncly.UI/wwwroot/js/galaxy-layout.mjs';
 
 const fixture = () => ({
   nodes: [{ id: 'parent' }, { id: 'child', parentId: 'parent' }, { id: 'other' }, { id: 'isolated' }],
@@ -97,7 +97,7 @@ test('node size grows with descendants and missing nodes stay small', () => {
   assert.ok(radiusFor(10, 0) < radiusFor(2, 0));
 });
 
-test('nested notes promote from moon to planet to sun to black hole; empty roots stay suns', () => {
+test('nested notes promote from moon to planet to sun to black hole to galaxy', () => {
   assert.equal(kindFor(0, 0), 'sun');
   assert.equal(kindFor(1, 0), 'planet');
   assert.equal(kindFor(2, 0), 'moon');
@@ -109,6 +109,9 @@ test('nested notes promote from moon to planet to sun to black hole; empty roots
   assert.equal(kindFor(0, 31), 'sun');
   assert.equal(kindFor(0, 32), 'blackhole');
   assert.equal(kindFor(1, 32), 'blackhole');
+  assert.equal(kindFor(0, 79), 'blackhole');
+  assert.equal(kindFor(0, 80), 'galaxy');
+  assert.equal(kindFor(1, 0, 'galaxy'), 'blackhole');
   assert.equal(kindFor(2, 0, 'sun'), 'planet');
   assert.equal(kindFor(3, 0, 'planet'), 'moon');
   const moon = createLayout({
@@ -129,13 +132,47 @@ test('nested notes promote from moon to planet to sun to black hole; empty roots
   assert.equal(heavy.byId.get('moon-0').kind, 'planet');
   assert.equal(heavy.byId.get('moon-7').kind, 'planet');
   assert.equal(heavy.byId.get('dust').kind, 'moon');
-  const collapsed = createLayout({
+  const collapsedHole = createLayout({
     nodes: [{ id: 'core', depth: 0 },
       ...Array.from({ length: 32 }, (_, index) => ({ id: `sat-${index}`, depth: 1, parentId: 'core' }))],
   });
-  assert.equal(collapsed.byId.get('core').kind, 'blackhole');
-  assert.equal(collapsed.byId.get('sat-0').kind, 'sun');
-  assert.ok(collapsed.byId.get('core').radius > radiusFor(0, 0, false, 8));
+  assert.equal(collapsedHole.byId.get('core').kind, 'blackhole');
+  assert.equal(collapsedHole.byId.get('sat-0').kind, 'sun');
+  assert.ok(collapsedHole.byId.get('core').radius > radiusFor(0, 0, false, 8));
+  const disc = createLayout({
+    nodes: [{ id: 'core', depth: 0 },
+      ...Array.from({ length: 80 }, (_, index) => ({ id: `sat-${index}`, depth: 1, parentId: 'core' }))],
+  });
+  assert.equal(disc.byId.get('core').kind, 'galaxy');
+  assert.equal(disc.byId.get('sat-0').kind, 'blackhole');
+  assert.ok(disc.byId.get('core').radius > collapsedHole.byId.get('core').radius);
+});
+
+test('collapsed systems hide descendants until zoomed in, except a kept path', () => {
+  assert.equal(collapsed({ kind: 'galaxy', systemRadius: 400, radius: 40 }, 0.2), true);
+  assert.equal(collapsed({ kind: 'galaxy', systemRadius: 400, radius: 40 }, 0.4), false);
+  assert.equal(collapsed({ kind: 'sun', systemRadius: 80, radius: 18 }, 0.4), true);
+  assert.equal(collapsed({ kind: 'sun', systemRadius: 80, radius: 18 }, 0.6), false);
+  assert.equal(collapsed({ kind: 'planet', systemRadius: 20, radius: 11 }, 1), true);
+  assert.equal(collapsed({ kind: 'planet', systemRadius: 30, radius: 11 }, 1), false);
+  const layout = createLayout({
+    nodes: [{ id: 'core', depth: 0 },
+      ...Array.from({ length: 80 }, (_, index) => ({ id: `sat-${index}`, depth: 1, parentId: 'core' })),
+      { id: 'moon', depth: 2, parentId: 'sat-0' }],
+  });
+  const byId = layout.byId;
+  const core = byId.get('core');
+  const hide = 80 / core.systemRadius;
+  const show = 160 / core.systemRadius;
+  assert.equal(collapsed(core, hide), true);
+  assert.equal(collapsed(core, show), false);
+  assert.equal(lodHidden(byId.get('sat-0'), byId, hide, new Set()), true);
+  assert.equal(lodHidden(byId.get('moon'), byId, hide, new Set()), true);
+  const open = lodOpen(byId, ['moon']);
+  assert.equal(open.has('core'), true);
+  assert.equal(open.has('sat-0'), true);
+  assert.equal(lodHidden(byId.get('moon'), byId, hide, open), false);
+  assert.equal(lodHidden(byId.get('sat-1'), byId, hide, open), true);
 });
 
 test('satellites sit on packed rings that do not overlap sibling subsystems', () => {

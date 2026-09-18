@@ -53,9 +53,10 @@ export function sunHighlightFor(radius) {
   ], sunHeat(radius));
 }
 
-const KIND_RANK = { asteroid: 0, moon: 1, planet: 2, sun: 3, blackhole: 4 };
+const KIND_RANK = { asteroid: 0, moon: 1, planet: 2, sun: 3, blackhole: 4, galaxy: 5 };
 
 function childKindOf(parentKind) {
+  if (parentKind === 'galaxy') return 'blackhole';
   if (parentKind === 'blackhole') return 'sun';
   if (parentKind === 'sun') return 'planet';
   if (parentKind === 'planet') return 'moon';
@@ -67,10 +68,11 @@ function preferKind(left, right) {
 }
 
 export function kindFor(depth, descendants = 0, parentKind = null) {
-  const mass = descendants >= 32 ? 'blackhole'
-    : descendants >= 8 ? 'sun'
-    : descendants >= 3 ? 'planet'
-    : 'asteroid';
+  const mass = descendants >= 80 ? 'galaxy'
+    : descendants >= 32 ? 'blackhole'
+      : descendants >= 8 ? 'sun'
+        : descendants >= 3 ? 'planet'
+          : 'asteroid';
   const role = parentKind
     ? childKindOf(parentKind)
     : depth <= 0 ? 'sun'
@@ -80,18 +82,49 @@ export function kindFor(depth, descendants = 0, parentKind = null) {
   return preferKind(mass, role);
 }
 
-const massive = kind => kind === 'blackhole' || kind === 'sun' || kind === 'planet';
+const massive = kind => kind === 'galaxy' || kind === 'blackhole' || kind === 'sun' || kind === 'planet';
 
 export function radiusFor(depth, degree = 0, missing = false, descendants = 0, kind = null) {
   if (missing) return 6;
   kind ??= kindFor(depth, descendants);
   const family = Math.log2(1 + descendants);
   const links = Math.min(2, Math.log2(1 + degree) * 0.35);
+  if (kind === 'galaxy') return 28 + family * 5.2 + links;
   if (kind === 'blackhole') return 22 + family * 4.6 + links;
   if (kind === 'sun') return 18 + family * 4.2 + links;
   if (kind === 'planet') return 11 + family * 2.1 + links * 0.5;
   if (kind === 'moon') return 7 + family * 1.2 + links * 0.3;
   return Math.max(3.5, 5.5 - Math.max(0, depth - 3) * 0.5);
+}
+
+export function collapsed(node, scale) {
+  const size = (node.systemRadius || node.radius || 0) * scale;
+  if (node.kind === 'galaxy') return size < 120;
+  if (node.kind === 'blackhole' || node.kind === 'sun') return size < 40;
+  if (node.kind === 'planet') return size < 22;
+  return false;
+}
+
+export function lodOpen(byId, keepIds) {
+  const open = new Set();
+  for (const id of keepIds || []) {
+    let node = byId.get(id);
+    while (node) {
+      open.add(node.id);
+      node = node.parentId ? byId.get(node.parentId) : null;
+    }
+  }
+  return open;
+}
+
+export function lodHidden(node, byId, scale, open) {
+  if (open?.has(node.id)) return false;
+  let parent = node.parentId ? byId.get(node.parentId) : null;
+  while (parent) {
+    if (collapsed(parent, scale)) return true;
+    parent = parent.parentId ? byId.get(parent.parentId) : null;
+  }
+  return false;
 }
 
 const compare = (left, right) => left < right ? -1 : left > right ? 1 : 0;
@@ -165,9 +198,10 @@ export function createLayout(data = {}, saved = [], savedTopology = null) {
     get active() { return remaining > 0 && simulation?.alpha() > 0.001; },
     get topology() { return signature; } };
 
-  function placeSatellites(time = 0) {
+  function placeSatellites(time = 0, scale = Infinity, open = null) {
     for (const node of layout.nodes) {
       if (node.depth <= 0 || node.fx != null) continue;
+      if (scale !== Infinity && lodHidden(node, layout.byId, scale, open)) continue;
       const parent = layout.byId.get(node.parentId);
       if (!parent || !finite(node.orbitRadius)) continue;
       const angle = (node.orbitAngle0 || 0) + time * (node.orbitSpeed || 0);
@@ -255,9 +289,10 @@ export function createLayout(data = {}, saved = [], savedTopology = null) {
     return true;
   }
 
-  function orbit(time) {
+  function orbit(time, scale, keepIds) {
     lastOrbitTime = time;
-    placeSatellites(time);
+    const finiteScale = typeof scale === 'number' && Number.isFinite(scale);
+    placeSatellites(time, finiteScale ? scale : Infinity, finiteScale ? lodOpen(layout.byId, keepIds) : null);
   }
 
   function tick(count = 1) {

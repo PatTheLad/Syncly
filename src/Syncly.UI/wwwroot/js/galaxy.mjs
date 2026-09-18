@@ -1,4 +1,4 @@
-import { createLayout, hash, sunColorFor, sunHighlightFor, sunRimFor } from './galaxy-layout.mjs';
+import { collapsed, createLayout, hash, lodHidden, lodOpen, sunColorFor, sunHighlightFor, sunRimFor } from './galaxy-layout.mjs';
 
 const instances = new Map();
 const palettes = {
@@ -8,6 +8,8 @@ const palettes = {
 };
 const cachePrefix = 'syncly.galaxy.v2.space.';
 const optionsKey = 'syncly.galaxy.v2.options';
+const scaleMin = 0.02;
+const scaleMax = 4;
 const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
 const read = (storage, key) => { try { return JSON.parse(storage.getItem(key)); } catch { return null; } };
 const write = (storage, key, value) => { try { storage.setItem(key, JSON.stringify(value)); } catch { } };
@@ -92,7 +94,7 @@ export function update(id, data) {
     view.layout = createLayout(data, saved?.nodes, saved?.topology);
     const camera = saved?.camera;
     const valid = camera && [camera.x, camera.y, camera.scale].every(Number.isFinite)
-      && Math.abs(camera.x) < 1e6 && Math.abs(camera.y) < 1e6 && camera.scale >= 0.04 && camera.scale <= 4;
+      && Math.abs(camera.x) < 1e6 && Math.abs(camera.y) < 1e6 && camera.scale >= scaleMin && camera.scale <= scaleMax;
     view.camera = valid ? { ...camera } : { x: 0, y: 0, scale: 1 };
     view.initialFit = !valid;
     view.selectedId = view.hoverId = null;
@@ -309,7 +311,7 @@ function fitCamera(view) {
   }
   return { x: (left + right) / 2, y: (top + bottom) / 2,
     scale: clamp(Math.min(Math.max(80, view.width - 140) / Math.max(120, right - left),
-      Math.max(80, view.height - 140) / Math.max(120, bottom - top)), 0.04, 1.35) };
+      Math.max(80, view.height - 140) / Math.max(120, bottom - top)), scaleMin, 1.35) };
 }
 
 function moveCamera(view, camera) {
@@ -321,7 +323,7 @@ function moveCamera(view, camera) {
 function zoomAt(view, x, y, factor) {
   const anchor = world(view, { x, y });
   view.flight = null;
-  view.camera.scale = clamp(view.camera.scale * factor, 0.04, 4);
+  view.camera.scale = clamp(view.camera.scale * factor, scaleMin, scaleMax);
   view.camera.x = anchor.x - (x - view.width / 2) / view.camera.scale;
   view.camera.y = anchor.y - (y - view.height / 2) / view.camera.scale;
   wake(view);
@@ -335,7 +337,8 @@ function hit(view, x, y, touch = false) {
     for (let offsetY = -1; offsetY <= 1; offsetY++) {
       for (const item of view.hitGrid.get(`${cellX + offsetX}:${cellY + offsetY}`) || []) {
         const distance = Math.hypot(item.x - x, item.y - y);
-        const reach = item.node.kind === 'blackhole' ? item.radius * 1.6 + 5 : Math.max(item.radius + 5, touch ? 22 : 12);
+        const reach = item.node.kind === 'galaxy' || item.node.kind === 'blackhole'
+          ? item.radius * 1.6 + 5 : Math.max(item.radius + 5, touch ? 22 : 12);
         if (distance <= Math.max(reach, touch ? 22 : 12) && distance < closest) {
           winner = item.node; closest = distance;
         }
@@ -391,7 +394,7 @@ function pointerMove(view, event) {
     const midpoint = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
     const distance = Math.max(1, Math.hypot(first.x - second.x, first.y - second.y));
     const anchor = world(view, gesture.midpoint);
-    view.camera.scale = clamp(view.camera.scale * distance / Math.max(1, gesture.distance), 0.04, 4);
+    view.camera.scale = clamp(view.camera.scale * distance / Math.max(1, gesture.distance), scaleMin, scaleMax);
     view.camera.x = anchor.x - (midpoint.x - view.width / 2) / view.camera.scale;
     view.camera.y = anchor.y - (midpoint.y - view.height / 2) / view.camera.scale;
     gesture.midpoint = midpoint;
@@ -491,7 +494,7 @@ function frame(view, time) {
     view.maxTickMs = Math.max(view.maxTickMs, performance.now() - tickStarted);
   }
   const ambient = !reduced;
-  if (ambient) view.layout.orbit(time);
+  if (ambient) view.layout.orbit(time, view.camera.scale, lodKeepIds(view));
   if (view.initialFit) view.camera = fitCamera(view);
   if (view.flight) {
     const progress = clamp((time - view.flight.started) / 260, 0, 1);
@@ -514,17 +517,30 @@ function frame(view, time) {
 }
 
 
+function lodKeepIds(view) {
+  const keep = [];
+  if (view.selectedId) keep.push(view.selectedId);
+  if (view.currentId) keep.push(view.currentId);
+  if (view.query) {
+    for (const node of view.layout.nodes) {
+      if (node.title.toLocaleLowerCase().includes(view.query)) keep.push(node.id);
+    }
+  }
+  return keep;
+}
+
 function colorFor(node) {
   if (node.kind === 'sun') return sunColorFor(node.radius);
+  if (node.kind === 'galaxy') return '#c9d4ff';
   if (node.kind === 'blackhole') return '#ffb14e';
   const set = palettes[node.kind] || palettes.planet;
   return set[hash(node.id) % set.length];
 }
 
 function screenRadius(node, scale) {
-  const maximum = node.kind === 'blackhole' ? 58 : node.kind === 'sun' ? 52
+  const maximum = node.kind === 'galaxy' ? 72 : node.kind === 'blackhole' ? 58 : node.kind === 'sun' ? 52
     : node.kind === 'planet' ? 28 : node.kind === 'moon' ? 16 : 10;
-  const minimum = node.kind === 'blackhole' || node.kind === 'sun' ? 8 : 3;
+  const minimum = node.kind === 'galaxy' ? 12 : node.kind === 'blackhole' || node.kind === 'sun' ? 8 : 3;
   return clamp(node.radius * Math.sqrt(scale), minimum, maximum);
 }
 
@@ -560,6 +576,80 @@ function sprite(view, color, kind, radius = 18) {
   shadow.addColorStop(0.55, kind === 'sun' ? '#00000006' : '#00000012');
   shadow.addColorStop(1, kind === 'sun' ? '#00000030' : '#000000a0');
   context.fillStyle = shadow; context.fillRect(0, 0, 96, 96);
+  view.sprites.set(key, canvas);
+  return canvas;
+}
+
+function drawGalaxy(view, item, time, alpha) {
+  const { x, y, radius, node } = item;
+  const context = view.context;
+  const reduced = view.media.matches;
+  const spin = reduced ? (hash(node.id) % 628) / 100 : time * 0.00018 + hash(node.id);
+  context.save();
+  context.globalAlpha = alpha;
+  const haze = context.createRadialGradient(x, y, radius * 0.15, x, y, radius * 2.6);
+  haze.addColorStop(0, '#e8f0ff66');
+  haze.addColorStop(0.35, '#8aa4ff33');
+  haze.addColorStop(0.7, '#6a4dff18');
+  haze.addColorStop(1, '#00000000');
+  context.fillStyle = haze;
+  context.beginPath(); context.arc(x, y, radius * 2.6, 0, Math.PI * 2); context.fill();
+  context.translate(x, y);
+  context.rotate(spin);
+  context.scale(1, 0.58);
+  context.drawImage(galaxySprite(view), -radius * 1.4, -radius * 1.4, radius * 2.8, radius * 2.8);
+  context.restore();
+}
+
+function galaxySprite(view) {
+  const key = 'galaxy:body';
+  if (view.sprites.has(key)) return view.sprites.get(key);
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 160;
+  const context = canvas.getContext('2d');
+  const cx = 80, cy = 80;
+  const haze = context.createRadialGradient(cx, cy, 6, cx, cy, 76);
+  haze.addColorStop(0, '#fff6e8cc');
+  haze.addColorStop(0.16, '#c9a0ff88');
+  haze.addColorStop(0.42, '#7f9bff66');
+  haze.addColorStop(0.72, '#24306a44');
+  haze.addColorStop(1, '#00000000');
+  context.fillStyle = haze;
+  context.beginPath(); context.arc(cx, cy, 76, 0, Math.PI * 2); context.fill();
+  context.lineCap = 'round';
+  for (let arm = 0; arm < 3; arm++) {
+    context.beginPath();
+    for (let step = 0; step <= 48; step++) {
+      const t = step / 48;
+      const angle = arm * 2.094 + t * 5.4;
+      const r = 10 + t * 64;
+      const x = cx + Math.cos(angle) * r;
+      const y = cy + Math.sin(angle) * r;
+      if (step === 0) context.moveTo(x, y); else context.lineTo(x, y);
+    }
+    context.strokeStyle = `rgba(232,240,255,${0.22 + arm * 0.08})`;
+    context.lineWidth = 7 - arm;
+    context.stroke();
+  }
+  context.fillStyle = '#ffffffa8';
+  for (let index = 0; index < 28; index++) {
+    const seed = hash('arm:' + index);
+    const t = (seed % 900) / 900;
+    const arm = seed % 3;
+    const angle = arm * 2.094 + t * 5.4;
+    const r = 12 + t * 60;
+    context.globalAlpha = 0.35 + (seed % 50) / 120;
+    context.beginPath();
+    context.arc(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r, 0.8 + (seed % 3) * 0.4, 0, Math.PI * 2);
+    context.fill();
+  }
+  context.globalAlpha = 1;
+  const core = context.createRadialGradient(cx, cy, 1, cx, cy, 18);
+  core.addColorStop(0, '#fffaf0');
+  core.addColorStop(0.45, '#ffd7a0');
+  core.addColorStop(1, '#ffb14e00');
+  context.fillStyle = core;
+  context.beginPath(); context.arc(cx, cy, 18, 0, Math.PI * 2); context.fill();
   view.sprites.set(key, canvas);
   return canvas;
 }
@@ -673,11 +763,12 @@ function draw(view, time = performance.now()) {
   context.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
   const focusId = view.hoverId || view.selectedId;
   const neighborhood = view.layout.neighbors.get(focusId);
+  const open = lodOpen(view.layout.byId, lodKeepIds(view));
   const projected = new Map();
   view.screenNodes = [];
   view.hitGrid.clear();
   for (const node of view.layout.nodes) {
-    if (!visible(view, node)) continue;
+    if (!visible(view, node) || lodHidden(node, view.layout.byId, view.camera.scale, open)) continue;
     const point = screen(view, node);
     const radius = screenRadius(node, view.camera.scale);
     const relevant = !focusId || node.id === focusId || neighborhood?.has(node.id);
@@ -692,14 +783,16 @@ function draw(view, time = performance.now()) {
   }
   for (const node of view.layout.nodes) {
     if (node.depth <= 0 || !visible(view, node)) continue;
+    if (lodHidden(node, view.layout.byId, view.camera.scale, open)) continue;
     const parent = view.layout.byId.get(node.parentId);
-    if (!parent) continue;
+    if (!parent || collapsed(parent, view.camera.scale)) continue;
     const center = screen(view, parent);
     const radius = node.orbitRadius * view.camera.scale;
     if (radius < 8 || radius > Math.max(view.width, view.height) * 1.6) continue;
     context.globalAlpha = node.id === focusId ? 0.4 : 0.14;
-    context.strokeStyle = parent.kind === 'blackhole' ? '#c9a0ff'
-      : node.kind === 'planet' || node.kind === 'sun' || node.kind === 'blackhole' ? '#ffcf8a'
+    context.strokeStyle = parent.kind === 'galaxy' ? '#9ecbff'
+      : parent.kind === 'blackhole' ? '#c9a0ff'
+      : node.kind === 'planet' || node.kind === 'sun' || node.kind === 'blackhole' || node.kind === 'galaxy' ? '#ffcf8a'
       : node.kind === 'moon' ? '#9fd6ff' : '#c3c8d4';
     context.lineWidth = 1;
     context.setLineDash([1.5, 5]);
@@ -728,7 +821,9 @@ function draw(view, time = performance.now()) {
     const { node, x, y, radius, alpha } = item;
     const color = colorFor(node);
     context.globalAlpha = alpha;
-    if (node.kind === 'blackhole') {
+    if (node.kind === 'galaxy') {
+      drawGalaxy(view, item, time, alpha);
+    } else if (node.kind === 'blackhole') {
       drawBlackHole(view, item, time, alpha);
     } else if (node.kind === 'sun') {
       const pulse = 1 + Math.sin(time * 0.0012 + hash(node.id) % 1000) * 0.16;
@@ -745,12 +840,13 @@ function draw(view, time = performance.now()) {
     if (node.id === view.selectedId || node.id === view.hoverId) {
       context.strokeStyle = node.id === view.selectedId ? '#ffffff' : '#9ba6b3';
       context.lineWidth = node.id === view.selectedId ? 1.7 : 1;
-      context.beginPath(); context.arc(x, y, radius + (node.kind === 'blackhole' ? 8 : 5), 0, Math.PI * 2); context.stroke();
+      const halo = node.kind === 'galaxy' ? 10 : node.kind === 'blackhole' ? 8 : 5;
+      context.beginPath(); context.arc(x, y, radius + halo, 0, Math.PI * 2); context.stroke();
     }
     if (node.missing) {
       context.strokeStyle = '#a6a3b3'; context.lineWidth = 1.4; context.setLineDash([3, 3]);
       context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.stroke(); context.setLineDash([]);
-    } else if (node.kind !== 'blackhole') {
+    } else if (node.kind !== 'blackhole' && node.kind !== 'galaxy') {
       context.drawImage(sprite(view, color, node.kind, node.radius), x - radius, y - radius, radius * 2, radius * 2);
     }
     if (node.id === view.currentId) {
@@ -798,7 +894,7 @@ function labels(view) {
     if (width === undefined) { width = context.measureText(text).width + 12; view.labelWidths.set(text, width); }
     let rectangle;
     for (const direction of [1, -1]) {
-      const pad = item.node.kind === 'blackhole' ? 28 : 17;
+      const pad = item.node.kind === 'galaxy' ? 34 : item.node.kind === 'blackhole' ? 28 : 17;
       const candidate = { x: item.x - width / 2, y: item.y + direction * (item.radius + pad) - 10, width, height: 20 };
       const topInset = view.canvas.classList.contains('graph-canvas') ? 40 : 4;
       if (candidate.x < 4 || candidate.x + width > view.width - 4 || candidate.y < topInset || candidate.y + 20 > view.height - 4) continue;
