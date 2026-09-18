@@ -126,19 +126,21 @@ export function divePath(byId, diveId) {
 }
 
 export function openAmount(node, scale) {
-  const body = (node.radius || 0) * scale;
-  if (node.kind === 'galaxy') return clamp01((body - 48) / 52);
+  if (node.kind === 'galaxy') return clamp01(((node.radius || 0) * scale - 10) / 48);
   const nested = (node.childCount || 0) > 0 || (node.descendants || 0) > 0;
-  if ((node.kind === 'blackhole' || node.kind === 'sun') && nested) return clamp01((body - 52) / 40);
+  if ((node.kind === 'blackhole' || node.kind === 'sun') && nested) {
+    const body = Math.min(node.radius || 0, 24) * scale;
+    return clamp01((body - 40) / 40);
+  }
   return 1;
 }
 
 export function collapsed(node, scale, options = {}) {
   const size = (node.systemRadius || node.radius || 0) * scale;
   if (node.kind === 'planet') return size < 22;
-  if (node.kind === 'galaxy') return openAmount(node, scale) < 0.55;
+  if (node.kind === 'galaxy') return openAmount(node, scale) < 0.12;
   const nested = (node.childCount || 0) > 0 || (node.descendants || 0) > 0;
-  if ((node.kind === 'blackhole' || node.kind === 'sun') && nested) return openAmount(node, scale) < 0.55;
+  if ((node.kind === 'blackhole' || node.kind === 'sun') && nested) return openAmount(node, scale) < 0.12;
   if (node.kind === 'blackhole' || node.kind === 'sun') return size < 40;
   return false;
 }
@@ -209,51 +211,21 @@ function assignOrbits(nodes, byId) {
   for (const parent of parents) {
     const children = groups.get(parent.id);
     children.sort((left, right) => compare(left.id, right.id));
-    if (parent.kind === 'galaxy' || parent.kind === 'blackhole') assignDiscOrbits(parent, children);
-    else assignPackedOrbits(parent, children);
-  }
-}
-
-function assignPackedOrbits(parent, children) {
-  let outer = parent.radius;
-  children.forEach((child, index) => {
-    const gap = massive(child.kind) ? 36 : child.kind === 'moon' ? 18 : 12;
-    child.orbitRadius = outer + gap + child.systemRadius;
-    outer = child.orbitRadius + child.systemRadius;
-    const direction = hash(child.id) % 2 === 0 ? 1 : -1;
-    const base = massive(child.kind) ? 0.000062 : child.kind === 'moon' ? 0.00016 : 0.00028;
-    child.orbitSpeed = direction * base / (1 + index * 0.12);
-    child.orbitAngle0 = (hash(child.id + ':a') % 6283) / 1000;
-  });
-  parent.systemRadius = Math.max(parent.radius, outer);
-}
-
-function assignDiscOrbits(parent, children) {
-  const gap = parent.kind === 'galaxy' ? 22 : 28;
-  let ringRadius = parent.radius * (parent.kind === 'galaxy' ? 2.2 : 1.7);
-  let index = 0;
-  let ring = 0;
-  while (index < children.length) {
-    const remaining = children.length - index;
-    const guess = children[index].systemRadius || children[index].radius || 12;
-    const slot = Math.max(guess * 2 + gap * 0.4, 26);
-    const perRing = Math.max(6, Math.min(remaining, Math.floor((2 * Math.PI * ringRadius) / slot)));
-    const count = Math.min(perRing, remaining);
-    const ringThick = Math.max(...children.slice(index, index + count).map(child => child.systemRadius || child.radius || 12));
-    const twist = (hash(parent.id + ':ring:' + ring) % 6283) / 1000;
-    for (let step = 0; step < count; step++) {
-      const child = children[index + step];
-      child.orbitRadius = ringRadius;
+    let outer = parent.radius;
+    children.forEach((child, index) => {
+      const glyph = parent.kind === 'galaxy' ? child.radius : child.systemRadius;
+      const gap = parent.kind === 'galaxy' ? 28
+        : massive(child.kind) ? 36
+          : child.kind === 'moon' ? 18 : 12;
+      child.orbitRadius = outer + gap + glyph;
+      outer = child.orbitRadius + glyph;
       const direction = hash(child.id) % 2 === 0 ? 1 : -1;
-      const base = parent.kind === 'galaxy' ? 0.00004 : 0.000055;
-      child.orbitSpeed = direction * base / (1 + ring * 0.18);
-      child.orbitAngle0 = twist + (step / count) * Math.PI * 2 + ring * 0.28;
-    }
-    index += count;
-    ringRadius += ringThick * 2 + gap;
-    ring++;
+      const base = massive(child.kind) ? 0.000062 : child.kind === 'moon' ? 0.00016 : 0.00028;
+      child.orbitSpeed = direction * base / (1 + index * 0.12);
+      child.orbitAngle0 = (hash(child.id + ':a') % 6283) / 1000;
+    });
+    parent.systemRadius = Math.max(parent.radius, outer);
   }
-  parent.systemRadius = Math.max(parent.radius, ringRadius);
 }
 
 export function restorePositions(value) {
@@ -275,10 +247,9 @@ export function createLayout(data = {}, saved = [], savedTopology = null) {
     get active() { return remaining > 0 && simulation?.alpha() > 0.001; },
     get topology() { return signature; } };
 
-  function placeSatellites(time = 0, scale = Infinity, open = null, options = {}) {
+  function placeSatellites(time = 0) {
     for (const node of layout.nodes) {
       if (node.depth <= 0 || node.fx != null) continue;
-      if (scale !== Infinity && lodHidden(node, layout.byId, scale, open, options)) continue;
       const parent = layout.byId.get(node.parentId);
       if (!parent || !finite(node.orbitRadius)) continue;
       const angle = (node.orbitAngle0 || 0) + time * (node.orbitSpeed || 0);
@@ -366,11 +337,9 @@ export function createLayout(data = {}, saved = [], savedTopology = null) {
     return true;
   }
 
-  function orbit(time, scale, keepIds, options) {
+  function orbit(time) {
     lastOrbitTime = time;
-    const finiteScale = typeof scale === 'number' && Number.isFinite(scale);
-    const open = finiteScale ? lodOpen(layout.byId, keepIds) : null;
-    placeSatellites(time, finiteScale ? scale : Infinity, open, options || {});
+    placeSatellites(time);
   }
 
   function tick(count = 1) {

@@ -22,7 +22,7 @@ export function mount(id, dotnet) {
   const stored = read(localStorage, optionsKey);
   const view = { id, canvas, context, dotnet, layout: createLayout(), spaceKey: null,
     width: 1, height: 1, dpr: 1, camera: { x: 0, y: 0, scale: 1 },
-    currentId: null, selectedId: null, hoverId: null, diveId: null, mode: 'all', filter: 'all', query: '',
+    currentId: null, selectedId: null, hoverId: null, diveId: null, zoomTo: null, zoomAnchor: null, zoomScreen: null, mode: 'all', filter: 'all', query: '',
     options: { labels: stored?.labels !== false, recent: stored?.recent === true },
     frame: 0, disposed: false, initialFit: true, flight: null, overview: null,
     pointers: new Map(), gesture: null, longPress: 0, abort: new AbortController(),
@@ -57,7 +57,7 @@ export function mount(id, dotnet) {
     view.initialFit = false;
     const point = local(view, event);
     const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? view.height : 1);
-    zoomAt(view, point.x, point.y, Math.exp(-clamp(delta, -120, 120) * 0.006));
+    zoomAt(view, point.x, point.y, Math.exp(-clamp(delta, -120, 120) * 0.0055));
   }, { passive: false });
   on(canvas, 'pointerdown', event => pointerDown(view, event));
   on(canvas, 'pointermove', event => pointerMove(view, event));
@@ -99,6 +99,7 @@ export function update(id, data) {
     view.initialFit = !valid;
     view.selectedId = view.hoverId = view.diveId = null;
     view.overview = view.flight = null;
+    view.zoomTo = view.zoomAnchor = view.zoomScreen = null;
     view.mode = 'all';
     view.filter = 'all';
     view.query = '';
@@ -312,9 +313,13 @@ function visible(view, node) {
 function fitCamera(view) {
   const nodes = view.layout.nodes.filter(node => visible(view, node));
   if (!nodes.length) return { x: 0, y: 0, scale: 1 };
+  const roots = nodes.filter(node => node.depth <= 0);
+  const glyphFit = roots.length <= 3 && roots.every(node => node.kind === 'galaxy' || node.kind === 'blackhole');
   let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
   for (const node of nodes) {
-    const extent = node.depth <= 0 ? (node.systemRadius || node.radius) : node.radius;
+    const extent = node.depth > 0 ? node.radius
+      : glyphFit && (node.kind === 'galaxy' || node.kind === 'blackhole') ? node.radius * 8
+      : (node.systemRadius || node.radius);
     left = Math.min(left, node.x - extent); right = Math.max(right, node.x + extent);
     top = Math.min(top, node.y - extent); bottom = Math.max(bottom, node.y + extent);
   }
@@ -324,6 +329,7 @@ function fitCamera(view) {
 }
 
 function moveCamera(view, camera) {
+  view.zoomTo = view.zoomAnchor = view.zoomScreen = null;
   if (view.media.matches) { view.camera = { ...camera }; view.flight = null; }
   else view.flight = { from: { ...view.camera }, to: { ...camera }, started: performance.now() };
   wake(view);
@@ -332,11 +338,34 @@ function moveCamera(view, camera) {
 function zoomAt(view, x, y, factor) {
   const anchor = world(view, { x, y });
   view.flight = null;
-  view.camera.scale = clamp(view.camera.scale * factor, scaleMin, scaleMax);
-  view.camera.x = anchor.x - (x - view.width / 2) / view.camera.scale;
-  view.camera.y = anchor.y - (y - view.height / 2) / view.camera.scale;
+  if (view.media.matches) {
+    view.zoomTo = null;
+    view.camera.scale = clamp(view.camera.scale * factor, scaleMin, scaleMax);
+    view.camera.x = anchor.x - (x - view.width / 2) / view.camera.scale;
+    view.camera.y = anchor.y - (y - view.height / 2) / view.camera.scale;
+  } else {
+    view.zoomAnchor = anchor;
+    view.zoomScreen = { x, y };
+    view.zoomTo = clamp((view.zoomTo ?? view.camera.scale) * factor, scaleMin, scaleMax);
+  }
   syncDive(view);
   wake(view);
+}
+
+function applyZoomLerp(view) {
+  if (view.zoomTo == null || view.flight) return;
+  const gap = view.zoomTo - view.camera.scale;
+  if (Math.abs(gap) < 0.0004 * Math.max(1, view.zoomTo)) {
+    view.camera.scale = view.zoomTo;
+    view.zoomTo = null;
+  } else {
+    view.camera.scale += gap * 0.48;
+  }
+  if (view.zoomAnchor && view.zoomScreen) {
+    view.camera.x = view.zoomAnchor.x - (view.zoomScreen.x - view.width / 2) / view.camera.scale;
+    view.camera.y = view.zoomAnchor.y - (view.zoomScreen.y - view.height / 2) / view.camera.scale;
+  }
+  syncDive(view);
 }
 
 function diveNode(node, byId) {
@@ -454,6 +483,7 @@ function pointerMove(view, event) {
     if (!second) return;
     const midpoint = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
     const distance = Math.max(1, Math.hypot(first.x - second.x, first.y - second.y));
+    view.zoomTo = null;
     const anchor = world(view, gesture.midpoint);
     view.camera.scale = clamp(view.camera.scale * distance / Math.max(1, gesture.distance), scaleMin, scaleMax);
     view.camera.x = anchor.x - (midpoint.x - view.width / 2) / view.camera.scale;
@@ -556,8 +586,9 @@ function frame(view, time) {
     view.maxTickMs = Math.max(view.maxTickMs, performance.now() - tickStarted);
   }
   const ambient = !reduced;
-  if (ambient) view.layout.orbit(time, view.camera.scale, lodKeepIds(view), lodState(view));
+  if (ambient) view.layout.orbit(time);
   if (view.initialFit) view.camera = fitCamera(view);
+  applyZoomLerp(view);
   if (view.flight) {
     const progress = clamp((time - view.flight.started) / 260, 0, 1);
     const eased = 1 - (1 - progress) ** 3;
@@ -572,7 +603,7 @@ function frame(view, time) {
   }
   draw(view, time);
   view.frames++;
-  const animating = (ambient && !view.pointers.size) || (view.layout.active && !view.pointers.size) || view.flight;
+  const animating = (ambient && !view.pointers.size) || (view.layout.active && !view.pointers.size) || view.flight || view.zoomTo != null;
   if (animating) invalidate(view);
   else if (!view.pointers.size) { view.initialFit = false; save(view); }
   if (time - view.lastSave > 4000) { view.lastSave = time; save(view); }
@@ -612,17 +643,15 @@ function colorFor(node, heat = 0) {
   return heat > 0 ? mixHex(color, '#ff9a4a', heat * 0.55) : color;
 }
 
-function screenRadius(node, scale, folded = true) {
-  if (node.kind === 'galaxy') {
-    const glyph = clamp(node.radius * Math.sqrt(scale), 12, 72);
-    const core = clamp(node.radius * scale ** 0.35 * 2.2, 40, 148);
-    const open = openAmount(node, scale);
-    return glyph + (core - glyph) * open;
-  }
-  const maximum = node.kind === 'blackhole' ? 58 : node.kind === 'sun' ? 52
-    : node.kind === 'planet' ? 28 : node.kind === 'moon' ? 16 : 10;
-  const minimum = node.kind === 'blackhole' || node.kind === 'sun' ? 8 : 3;
-  return clamp(node.radius * Math.sqrt(scale), minimum, maximum);
+function screenRadius(node, scale) {
+  const minimum = node.kind === 'galaxy' ? 10 : node.kind === 'blackhole' || node.kind === 'sun' ? 6 : 2.5;
+  return Math.max(minimum, (node.radius || 4) * scale);
+}
+
+function parentReveal(node, byId, scale) {
+  const parent = node.parentId ? byId.get(node.parentId) : null;
+  if (!parent) return 1;
+  return openAmount(parent, scale);
 }
 
 function sprite(view, color, kind, radius = 18) {
@@ -663,10 +692,11 @@ function sprite(view, color, kind, radius = 18) {
 
 function drawGalaxy(view, item, time, alpha) {
   const open = openAmount(item.node, view.camera.scale);
-  if (open < 1) drawGalaxyGlyph(view, item, time, alpha * (1 - open * 0.92));
-  if (open > 0) {
-    drawGalacticHalo(view, item, time, alpha * (0.35 + open * 0.65));
-    drawSupermassiveCore(view, item, time, alpha * open);
+  if (open < 1) drawGalaxyGlyph(view, item, time, alpha * (1 - Math.max(0, open - 0.2) / 0.8));
+  if (open > 0.2) {
+    const core = (open - 0.2) / 0.8;
+    drawGalacticHalo(view, item, time, alpha * core);
+    drawSupermassiveCore(view, item, time, alpha * core);
   }
 }
 
@@ -985,10 +1015,12 @@ function draw(view, time = performance.now()) {
     if (!visible(view, node) || lodHidden(node, view.layout.byId, view.camera.scale, open, lod)) continue;
     const folded = collapsed(node, view.camera.scale, lod);
     const point = screen(view, node);
-    const radius = screenRadius(node, view.camera.scale, folded);
+    const radius = screenRadius(node, view.camera.scale);
     const relevant = !focusId || node.id === focusId || neighborhood?.has(node.id);
     const matches = !view.query || node.title.toLocaleLowerCase().includes(view.query);
-    const item = { node, ...point, radius, alpha: relevant && matches ? 1 : 0.22, matches, expanded: node.kind === 'galaxy' && !folded };
+    const reveal = parentReveal(node, view.layout.byId, view.camera.scale);
+    const item = { node, ...point, radius, alpha: (relevant && matches ? 1 : 0.22) * reveal, matches,
+      expanded: node.kind === 'galaxy' && !folded };
     projected.set(node.id, item);
     if (point.x < -100 || point.y < -100 || point.x > view.width + 100 || point.y > view.height + 100) continue;
     view.screenNodes.push(item);
@@ -1004,7 +1036,7 @@ function draw(view, time = performance.now()) {
     const center = screen(view, parent);
     const radius = node.orbitRadius * view.camera.scale;
     if (radius < 8 || radius > Math.max(view.width, view.height) * 1.6) continue;
-    context.globalAlpha = node.id === focusId ? 0.4 : 0.14;
+    context.globalAlpha = (node.id === focusId ? 0.4 : 0.14) * openAmount(parent, view.camera.scale);
     context.strokeStyle = parent.kind === 'galaxy' ? '#9ecbff'
       : parent.kind === 'blackhole' ? '#c9a0ff'
       : node.kind === 'planet' || node.kind === 'sun' || node.kind === 'blackhole' || node.kind === 'galaxy' ? '#ffcf8a'
@@ -1173,7 +1205,7 @@ export function inspect(id) {
     active: view.layout.active, scheduled: !!view.frame, frames: view.frames, maxTickMs: view.maxTickMs,
     // Physically settled: force layout finished and no camera flight running. Ambient orbit/twinkle/comet
     // redraws keep `scheduled` true forever by design, so callers waiting for a stable graph should use this.
-    settled: !view.layout.active && !view.flight,
+    settled: !view.layout.active && !view.flight && view.zoomTo == null,
     nodes: view.screenNodes.map(item => ({ id: item.node.id, x: item.x, y: item.y, radius: item.radius })),
     positions: view.layout.snapshot(), labels: view.labels, edges: view.layout.edges.length };
 }

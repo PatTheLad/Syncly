@@ -160,8 +160,7 @@ test('galaxies stay collapsed until zoomed in, except a kept path', () => {
   const core = byId.get('core');
   assert.equal(core.kind, 'galaxy');
   assert.equal(collapsed(core, 0.02), true);
-  assert.equal(collapsed(core, 0.5), true);
-  assert.ok(openAmount(core, 0.5) < 0.4);
+  assert.ok(openAmount(core, 0.2) < 0.15);
   assert.equal(lodHidden(byId.get('sat-0'), byId, 0.02, new Set()), true);
   assert.equal(lodHidden(byId.get('moon'), byId, 0.02, new Set()), true);
   const inside = 96 / core.radius;
@@ -170,7 +169,7 @@ test('galaxies stay collapsed until zoomed in, except a kept path', () => {
   assert.equal(lodHidden(byId.get('sat-0'), byId, inside, new Set()), false);
   assert.equal(lodHidden(byId.get('moon'), byId, inside, new Set()), true);
   const hole = byId.get('sat-0');
-  const holeScale = 80 / hole.radius;
+  const holeScale = 96 / hole.radius;
   assert.equal(collapsed(hole, holeScale), false);
   assert.equal(lodHidden(byId.get('moon'), byId, holeScale, new Set()), false);
   const open = lodOpen(byId, ['moon']);
@@ -178,7 +177,10 @@ test('galaxies stay collapsed until zoomed in, except a kept path', () => {
   assert.equal(open.has('sat-0'), true);
   assert.equal(lodHidden(byId.get('moon'), byId, 0.02, open), false);
   assert.equal(lodHidden(byId.get('sat-1'), byId, 0.02, open), true);
-  assert.ok(core.systemRadius < core.radius * 18);
+  const radii = [...byId.values()].filter(node => node.parentId === 'core').map(node => node.orbitRadius);
+  assert.equal(new Set(radii).size, radii.length);
+  const speeds = [...byId.values()].filter(node => node.parentId === 'core').map(node => node.orbitSpeed);
+  assert.ok(new Set(speeds.map(speed => speed.toFixed(8))).size > 1);
 });
 
 test('family recency heat uses the newest descendant edit', () => {
