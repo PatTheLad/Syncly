@@ -1,4 +1,4 @@
-import { collapsed, createLayout, hash, lodHidden, lodOpen, recencyHeat, sunColorFor, sunHighlightFor, sunRimFor } from './galaxy-layout.mjs';
+import { collapsed, createLayout, hash, lodHidden, lodOpen, openAmount, recencyHeat, sunColorFor, sunHighlightFor, sunRimFor } from './galaxy-layout.mjs';
 
 const instances = new Map();
 const palettes = {
@@ -9,7 +9,7 @@ const palettes = {
 const cachePrefix = 'syncly.galaxy.v2.space.';
 const optionsKey = 'syncly.galaxy.v2.options';
 const scaleMin = 0.02;
-const scaleMax = 4;
+const scaleMax = 6;
 const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
 const read = (storage, key) => { try { return JSON.parse(storage.getItem(key)); } catch { return null; } };
 const write = (storage, key, value) => { try { storage.setItem(key, JSON.stringify(value)); } catch { } };
@@ -157,8 +157,11 @@ export function focus(id, nodeId) {
   const target = diveNode(node, view.layout.byId);
   setDive(view, target);
   const viewport = Math.min(view.width, view.height);
-  const extent = Math.max(40, target.systemRadius || target.radius || 40);
-  moveCamera(view, { x: target.x, y: target.y, scale: clamp((viewport * 0.7) / extent, scaleMin, scaleMax) });
+  const body = Math.max(24, target.radius || 24);
+  const scale = target.kind === 'galaxy'
+    ? clamp(96 / body, scaleMin, scaleMax)
+    : clamp((viewport * 0.7) / Math.max(40, target.systemRadius || body), scaleMin, scaleMax);
+  moveCamera(view, { x: target.x, y: target.y, scale });
 }
 
 export function fit(id) {
@@ -332,7 +335,7 @@ function zoomAt(view, x, y, factor) {
   view.camera.scale = clamp(view.camera.scale * factor, scaleMin, scaleMax);
   view.camera.x = anchor.x - (x - view.width / 2) / view.camera.scale;
   view.camera.y = anchor.y - (y - view.height / 2) / view.camera.scale;
-  maybePopDive(view);
+  syncDive(view);
   wake(view);
 }
 
@@ -359,12 +362,28 @@ function clearDive(view) {
   notify(view, 'OnDive', null, null);
 }
 
-function maybePopDive(view) {
-  if (!view.diveId) return;
-  const node = view.layout.byId.get(view.diveId);
-  if (!node) { clearDive(view); return; }
-  const size = (node.systemRadius || node.radius || 0) * view.camera.scale;
-  if (size < Math.min(view.width, view.height) * 0.28) clearDive(view);
+function syncDive(view) {
+  if (view.flight) return;
+  const lod = lodState(view);
+  const cx = view.camera.x;
+  const cy = view.camera.y;
+  let best = null;
+  let bestScore = Infinity;
+  for (const node of view.layout.nodes) {
+    if (node.kind !== 'galaxy' && node.kind !== 'blackhole' && node.kind !== 'sun') continue;
+    if ((node.childCount || 0) === 0 && (node.descendants || 0) === 0) continue;
+    if (collapsed(node, view.camera.scale, lod)) continue;
+    const dist = Math.hypot(node.x - cx, node.y - cy);
+    const reach = node.systemRadius || node.radius || 0;
+    if (dist > reach * 1.2) continue;
+    const score = dist / Math.max(8, node.radius);
+    if (score < bestScore - 0.05 || (score <= bestScore + 0.05 && (!best || node.depth > best.depth))) {
+      best = node;
+      bestScore = score;
+    }
+  }
+  if (best) setDive(view, best);
+  else clearDive(view);
 }
 
 function lodState(view) {
@@ -441,6 +460,7 @@ function pointerMove(view, event) {
     view.camera.y = anchor.y - (midpoint.y - view.height / 2) / view.camera.scale;
     gesture.midpoint = midpoint;
     gesture.distance = distance;
+    syncDive(view);
   } else if (gesture.kind !== 'cancelled') {
     if (gesture.kind === 'pending' && Math.hypot(point.x - gesture.start.x, point.y - gesture.start.y) > 6) {
       gesture.kind = gesture.nodeId ? 'node' : 'pan';
@@ -542,7 +562,7 @@ function frame(view, time) {
     const progress = clamp((time - view.flight.started) / 260, 0, 1);
     const eased = 1 - (1 - progress) ** 3;
     for (const key of ['x', 'y', 'scale']) view.camera[key] = view.flight.from[key] + (view.flight.to[key] - view.flight.from[key]) * eased;
-    if (progress === 1) { view.camera = { ...view.flight.to }; view.flight = null; }
+    if (progress === 1) { view.camera = { ...view.flight.to }; view.flight = null; syncDive(view); }
   }
   if (ambient && !view.pointers.size && time >= view.nextComet) {
     view.nextComet = time + 7000 + Math.random() * 11000;
@@ -592,10 +612,16 @@ function colorFor(node, heat = 0) {
   return heat > 0 ? mixHex(color, '#ff9a4a', heat * 0.55) : color;
 }
 
-function screenRadius(node, scale) {
-  const maximum = node.kind === 'galaxy' ? 72 : node.kind === 'blackhole' ? 58 : node.kind === 'sun' ? 52
+function screenRadius(node, scale, folded = true) {
+  if (node.kind === 'galaxy') {
+    const glyph = clamp(node.radius * Math.sqrt(scale), 12, 72);
+    const core = clamp(node.radius * scale ** 0.35 * 2.2, 40, 148);
+    const open = openAmount(node, scale);
+    return glyph + (core - glyph) * open;
+  }
+  const maximum = node.kind === 'blackhole' ? 58 : node.kind === 'sun' ? 52
     : node.kind === 'planet' ? 28 : node.kind === 'moon' ? 16 : 10;
-  const minimum = node.kind === 'galaxy' ? 12 : node.kind === 'blackhole' || node.kind === 'sun' ? 8 : 3;
+  const minimum = node.kind === 'blackhole' || node.kind === 'sun' ? 8 : 3;
   return clamp(node.radius * Math.sqrt(scale), minimum, maximum);
 }
 
@@ -636,6 +662,15 @@ function sprite(view, color, kind, radius = 18) {
 }
 
 function drawGalaxy(view, item, time, alpha) {
+  const open = openAmount(item.node, view.camera.scale);
+  if (open < 1) drawGalaxyGlyph(view, item, time, alpha * (1 - open * 0.92));
+  if (open > 0) {
+    drawGalacticHalo(view, item, time, alpha * (0.35 + open * 0.65));
+    drawSupermassiveCore(view, item, time, alpha * open);
+  }
+}
+
+function drawGalaxyGlyph(view, item, time, alpha) {
   const { x, y, radius, node } = item;
   const context = view.context;
   const reduced = view.media.matches;
@@ -655,7 +690,7 @@ function drawGalaxy(view, item, time, alpha) {
   context.scale(1, 0.58);
   context.drawImage(galaxySprite(view), -radius * 1.4, -radius * 1.4, radius * 2.8, radius * 2.8);
   context.restore();
-  if (heat > 0) {
+  if (heat > 0 && openAmount(node, view.camera.scale) < 0.35) {
     context.save();
     context.globalAlpha = alpha * (0.28 + heat * 0.5);
     const core = context.createRadialGradient(x, y, 0, x, y, radius * 0.72);
@@ -666,6 +701,116 @@ function drawGalaxy(view, item, time, alpha) {
     context.beginPath(); context.arc(x, y, radius * 0.72, 0, Math.PI * 2); context.fill();
     context.restore();
   }
+}
+
+function drawGalacticHalo(view, item, time, alpha) {
+  const { x, y, radius, node } = item;
+  const context = view.context;
+  const reduced = view.media.matches;
+  const spin = reduced ? (hash(node.id) % 628) / 100 : time * 0.00008 + hash(node.id);
+  const heat = heatFor(view, node);
+  const span = radius * 2.3;
+  context.save();
+  context.globalAlpha = alpha * 0.55;
+  const bulge = context.createRadialGradient(x, y, radius * 0.4, x, y, span);
+  bulge.addColorStop(0, (heat > 0 ? mixHex('#ffe3b8', '#ff9a4a', heat) : '#ffe6c4') + '33');
+  bulge.addColorStop(0.35, '#8aa4ff18');
+  bulge.addColorStop(0.7, '#3a2a6a10');
+  bulge.addColorStop(1, '#00000000');
+  context.fillStyle = bulge;
+  context.beginPath(); context.arc(x, y, span, 0, Math.PI * 2); context.fill();
+  context.translate(x, y);
+  context.rotate(spin);
+  context.scale(1, 0.42);
+  context.globalAlpha = alpha * 0.28;
+  context.drawImage(galaxySprite(view), -span, -span, span * 2, span * 2);
+  context.restore();
+}
+
+function drawSupermassiveCore(view, item, time, alpha) {
+  const { x, y, radius, node } = item;
+  const context = view.context;
+  const reduced = view.media.matches;
+  const heat = heatFor(view, node);
+  const spin = reduced ? hash(node.id) % 1000 : time * 0.00055 + hash(node.id);
+  const pulse = reduced ? 1 : 1 + Math.sin(time * 0.0018 + hash(node.id) % 80) * (0.05 + heat * 0.04);
+  const rx = radius * 1.22;
+  const ry = radius * 0.42;
+  context.save();
+  context.globalAlpha = alpha;
+  const corona = context.createRadialGradient(x, y, radius * 0.15, x, y, radius * 2.4);
+  corona.addColorStop(0, '#0a0614f0');
+  corona.addColorStop(0.22, (heat > 0 ? mixHex('#3a1860', '#ff6a24', heat * 0.5) : '#2a1458') + '99');
+  corona.addColorStop(0.5, '#7ecbff22');
+  corona.addColorStop(1, '#00000000');
+  context.fillStyle = corona;
+  context.beginPath(); context.arc(x, y, radius * 2.4 * pulse, 0, Math.PI * 2); context.fill();
+  context.translate(x, y);
+  context.rotate(-0.2);
+  const jetGlow = context.createLinearGradient(0, -radius * 3.2, 0, radius * 3.2);
+  jetGlow.addColorStop(0, '#9ecbff00');
+  jetGlow.addColorStop(0.28, '#c9e7ff55');
+  jetGlow.addColorStop(0.5, '#ffffff00');
+  jetGlow.addColorStop(0.72, '#c9e7ff55');
+  jetGlow.addColorStop(1, '#9ecbff00');
+  context.strokeStyle = jetGlow;
+  context.lineWidth = Math.max(3, radius * 0.12);
+  context.lineCap = 'round';
+  context.beginPath();
+  context.moveTo(0, -radius * 3.1); context.lineTo(0, -radius * 0.72);
+  context.moveTo(0, radius * 0.72); context.lineTo(0, radius * 3.1);
+  context.stroke();
+  context.lineCap = 'butt';
+  context.strokeStyle = '#e8f4ffaa';
+  context.lineWidth = Math.max(1.2, radius * 0.035);
+  context.beginPath();
+  context.moveTo(0, -radius * 2.7); context.lineTo(0, -radius * 0.78);
+  context.moveTo(0, radius * 0.78); context.lineTo(0, radius * 2.7);
+  context.stroke();
+  const paintDisk = (start, sweep, inner) => {
+    const band = context.createLinearGradient(-rx, 0, rx, 0);
+    band.addColorStop(0, '#1c3a6eee');
+    band.addColorStop(0.16, '#4aa3ffcc');
+    band.addColorStop(0.38, '#ffe29a');
+    band.addColorStop(0.5, '#fff6e8');
+    band.addColorStop(0.62, '#ffd27a');
+    band.addColorStop(0.84, '#ff6b3dcc');
+    band.addColorStop(1, '#4a1408ee');
+    context.strokeStyle = band;
+    context.lineWidth = Math.max(3.5, radius * (inner ? 0.16 : 0.32));
+    if (!reduced && !inner) {
+      context.setLineDash([radius * 1.1, radius * 0.45]);
+      context.lineDashOffset = -spin * radius * 0.18;
+    }
+    context.beginPath(); context.ellipse(0, 0, inner ? rx * 0.62 : rx, inner ? ry * 0.62 : ry, 0, start, start + sweep); context.stroke();
+    context.setLineDash([]);
+  };
+  paintDisk(Math.PI, Math.PI, false);
+  paintDisk(Math.PI, Math.PI, true);
+  const shadow = context.createRadialGradient(-radius * 0.1, -radius * 0.08, radius * 0.05, 0, 0, radius * 0.58);
+  shadow.addColorStop(0, '#1a121c');
+  shadow.addColorStop(0.42, '#050208');
+  shadow.addColorStop(1, '#000000');
+  context.fillStyle = shadow;
+  context.beginPath(); context.arc(0, 0, radius * 0.55, 0, Math.PI * 2); context.fill();
+  const crescent = context.createRadialGradient(radius * 0.14, -radius * 0.05, radius * 0.03, 0, 0, radius * 0.55);
+  crescent.addColorStop(0, '#00000000');
+  crescent.addColorStop(0.55, '#00000000');
+  crescent.addColorStop(0.78, '#ffe7b866');
+  crescent.addColorStop(1, '#fff4d400');
+  context.fillStyle = crescent;
+  context.beginPath(); context.arc(0, 0, radius * 0.55, 0, Math.PI * 2); context.fill();
+  context.strokeStyle = '#fff6d8';
+  context.globalAlpha = alpha * (reduced ? 0.9 : 0.78 + Math.sin(time * 0.003) * 0.12);
+  context.lineWidth = Math.max(2, radius * 0.07);
+  context.beginPath(); context.arc(0, 0, radius * 0.62, 0, Math.PI * 2); context.stroke();
+  context.globalAlpha = alpha;
+  context.strokeStyle = '#9ecbff88';
+  context.lineWidth = Math.max(1, radius * 0.03);
+  context.beginPath(); context.arc(0, 0, radius * 0.7, 0, Math.PI * 2); context.stroke();
+  paintDisk(0, Math.PI, false);
+  paintDisk(0, Math.PI, true);
+  context.restore();
 }
 
 function galaxySprite(view) {
@@ -838,11 +983,12 @@ function draw(view, time = performance.now()) {
   view.hitGrid.clear();
   for (const node of view.layout.nodes) {
     if (!visible(view, node) || lodHidden(node, view.layout.byId, view.camera.scale, open, lod)) continue;
+    const folded = collapsed(node, view.camera.scale, lod);
     const point = screen(view, node);
-    const radius = screenRadius(node, view.camera.scale);
+    const radius = screenRadius(node, view.camera.scale, folded);
     const relevant = !focusId || node.id === focusId || neighborhood?.has(node.id);
     const matches = !view.query || node.title.toLocaleLowerCase().includes(view.query);
-    const item = { node, ...point, radius, alpha: relevant && matches ? 1 : 0.22, matches };
+    const item = { node, ...point, radius, alpha: relevant && matches ? 1 : 0.22, matches, expanded: node.kind === 'galaxy' && !folded };
     projected.set(node.id, item);
     if (point.x < -100 || point.y < -100 || point.x > view.width + 100 || point.y > view.height + 100) continue;
     view.screenNodes.push(item);
@@ -907,7 +1053,7 @@ function draw(view, time = performance.now()) {
     if (node.id === view.selectedId || node.id === view.hoverId) {
       context.strokeStyle = node.id === view.selectedId ? '#ffffff' : '#9ba6b3';
       context.lineWidth = node.id === view.selectedId ? 1.7 : 1;
-      const halo = node.kind === 'galaxy' ? 10 : node.kind === 'blackhole' ? 8 : 5;
+      const halo = item.expanded ? 16 : node.kind === 'galaxy' ? 10 : node.kind === 'blackhole' ? 8 : 5;
       context.beginPath(); context.arc(x, y, radius + halo, 0, Math.PI * 2); context.stroke();
     }
     if (node.missing) {
@@ -999,7 +1145,7 @@ function labels(view) {
     if (width === undefined) { width = context.measureText(text).width + 12; view.labelWidths.set(text, width); }
     let rectangle;
     for (const direction of [1, -1]) {
-      const pad = item.node.kind === 'galaxy' ? 34 : item.node.kind === 'blackhole' ? 28 : 17;
+      const pad = item.expanded ? 52 : item.node.kind === 'galaxy' ? 34 : item.node.kind === 'blackhole' ? 28 : 17;
       const candidate = { x: item.x - width / 2, y: item.y + direction * (item.radius + pad) - 10, width, height: 20 };
       const topInset = view.canvas.classList.contains('graph-canvas') ? 40 : 4;
       if (candidate.x < 4 || candidate.x + width > view.width - 4 || candidate.y < topInset || candidate.y + 20 > view.height - 4) continue;

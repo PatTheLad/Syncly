@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collapsed, createLayout, kindFor, lodHidden, lodOpen, radiusFor, recencyHeat, restorePositions, sunColorFor } from '../../src/Syncly.UI/wwwroot/js/galaxy-layout.mjs';
+import { collapsed, createLayout, kindFor, lodHidden, lodOpen, openAmount, radiusFor, recencyHeat, restorePositions, sunColorFor } from '../../src/Syncly.UI/wwwroot/js/galaxy-layout.mjs';
 
 const fixture = () => ({
   nodes: [{ id: 'parent' }, { id: 'child', parentId: 'parent' }, { id: 'other' }, { id: 'isolated' }],
@@ -148,7 +148,7 @@ test('nested notes promote from moon to planet to sun to black hole to galaxy', 
   assert.ok(disc.byId.get('core').radius > collapsedHole.byId.get('core').radius);
 });
 
-test('galaxies stay collapsed until dived, except a kept path', () => {
+test('galaxies stay collapsed until zoomed in, except a kept path', () => {
   assert.equal(collapsed({ kind: 'planet', systemRadius: 20, radius: 11 }, 1), true);
   assert.equal(collapsed({ kind: 'planet', systemRadius: 30, radius: 11 }, 1), false);
   const layout = createLayout({
@@ -158,28 +158,27 @@ test('galaxies stay collapsed until dived, except a kept path', () => {
   });
   const byId = layout.byId;
   const core = byId.get('core');
-  const viewport = 900;
-  const overview = { viewport };
   assert.equal(core.kind, 'galaxy');
-  assert.equal(collapsed(core, 0.02, overview), true);
-  assert.equal(collapsed(core, 4, overview), true);
-  assert.equal(lodHidden(byId.get('sat-0'), byId, 0.02, new Set(), overview), true);
-  assert.equal(lodHidden(byId.get('moon'), byId, 0.02, new Set(), overview), true);
-  const diveScale = (viewport * 0.7) / core.systemRadius;
-  const dive = { diveId: 'core', byId, viewport };
-  assert.equal(collapsed(core, diveScale, dive), false);
-  assert.equal(lodHidden(byId.get('sat-0'), byId, diveScale, new Set(), dive), false);
-  assert.equal(lodHidden(byId.get('moon'), byId, diveScale, new Set(), dive), true);
+  assert.equal(collapsed(core, 0.02), true);
+  assert.equal(collapsed(core, 0.5), true);
+  assert.ok(openAmount(core, 0.5) < 0.4);
+  assert.equal(lodHidden(byId.get('sat-0'), byId, 0.02, new Set()), true);
+  assert.equal(lodHidden(byId.get('moon'), byId, 0.02, new Set()), true);
+  const inside = 96 / core.radius;
+  assert.equal(collapsed(core, inside), false);
+  assert.ok(openAmount(core, inside) > 0.9);
+  assert.equal(lodHidden(byId.get('sat-0'), byId, inside, new Set()), false);
+  assert.equal(lodHidden(byId.get('moon'), byId, inside, new Set()), true);
   const hole = byId.get('sat-0');
-  const holeScale = (viewport * 0.7) / hole.systemRadius;
-  const holeDive = { diveId: 'sat-0', byId, viewport };
-  assert.equal(collapsed(hole, holeScale, holeDive), false);
-  assert.equal(lodHidden(byId.get('moon'), byId, holeScale, new Set(), holeDive), false);
+  const holeScale = 80 / hole.radius;
+  assert.equal(collapsed(hole, holeScale), false);
+  assert.equal(lodHidden(byId.get('moon'), byId, holeScale, new Set()), false);
   const open = lodOpen(byId, ['moon']);
   assert.equal(open.has('core'), true);
   assert.equal(open.has('sat-0'), true);
-  assert.equal(lodHidden(byId.get('moon'), byId, 0.02, open, overview), false);
-  assert.equal(lodHidden(byId.get('sat-1'), byId, 0.02, open, overview), true);
+  assert.equal(lodHidden(byId.get('moon'), byId, 0.02, open), false);
+  assert.equal(lodHidden(byId.get('sat-1'), byId, 0.02, open), true);
+  assert.ok(core.systemRadius < core.radius * 18);
 });
 
 test('family recency heat uses the newest descendant edit', () => {
