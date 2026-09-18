@@ -33,6 +33,7 @@
             @if (_loaded)
             {
                 <span>@_graph.Nodes.Count(node => !node.Missing) notes</span><span class="graph-status-dot"></span><span>@_graph.Edges.Count links</span>
+                @if (!string.IsNullOrEmpty(_diveTitle)) { <span class="graph-status-filter">@_diveTitle</span> }
                 @if (_filter != "all") { <span class="graph-status-filter">@(_filter == "unlinked" ? "Unlinked" : "Unresolved")</span> }
             }
         </div>
@@ -121,7 +122,7 @@
     private DotNetObjectReference<Graph>? _self;
     private bool _mounted, _disposed, _loaded, _busy, _settingsOpen, _showPages, _expanded, _actionsOpen;
     private bool _connections, _labels = true, _recent, _previewLoading;
-    private string? _selectedId, _spaceKey, _pendingFocus, _handledFocus, _dialog, _focusElement;
+    private string? _selectedId, _spaceKey, _pendingFocus, _handledFocus, _dialog, _focusElement, _diveTitle;
     private string? _loadError, _rendererError, _previewError, _notice;
     private string _query = string.Empty, _filter = "all", _renameText = string.Empty;
     private long _loadGeneration;
@@ -212,7 +213,7 @@
                 _connections = _showPages = _expanded = _actionsOpen = false;
                 _query = string.Empty;
                 _filter = "all";
-                _dialog = _notice = null;
+                _dialog = _notice = _diveTitle = null;
                 _previewCts?.Cancel();
                 _preview = null;
             }
@@ -362,6 +363,10 @@
 
     private Task LocateAsync() => State.CurrentPageId is { } id ? SelectResultAsync(id) : Task.CompletedTask;
     [JSInvokable] public Task OnSelect(string? id) => InvokeAsync(() => SelectAsync(id, false));
+    [JSInvokable] public Task OnDive(string? id, string? title) => InvokeAsync(() =>
+    {
+        _diveTitle = string.IsNullOrWhiteSpace(title) ? null : title;
+    });
     [JSInvokable] public Task OnOpen(string id) => InvokeAsync(() => OpenAsync(id));
     [JSInvokable] public Task OnFocusSearch() => CallAsync("focusElement", "graph-search");
     [JSInvokable] public Task OnEscape() => InvokeAsync(EscapeAsync);

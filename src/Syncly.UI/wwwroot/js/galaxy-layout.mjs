@@ -97,11 +97,47 @@ export function radiusFor(depth, degree = 0, missing = false, descendants = 0, k
   return Math.max(3.5, 5.5 - Math.max(0, depth - 3) * 0.5);
 }
 
-export function collapsed(node, scale) {
+function stamp(value) {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+  if (typeof value === 'string' && value) {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+export function recencyHeat(node, now = Date.now()) {
+  const at = stamp(node?.heatAt ?? node?.updatedAt);
+  if (!at) return 0;
+  const window = 7 * 86400000;
+  const age = now - at;
+  if (age < 0 || age > window) return 0;
+  return 1 - age / window;
+}
+
+export function divePath(byId, diveId) {
+  const path = new Set();
+  let node = diveId && byId ? byId.get(diveId) : null;
+  while (node) {
+    path.add(node.id);
+    node = node.parentId ? byId.get(node.parentId) : null;
+  }
+  return path;
+}
+
+export function collapsed(node, scale, options = {}) {
   const size = (node.systemRadius || node.radius || 0) * scale;
-  if (node.kind === 'galaxy') return size < 120;
-  if (node.kind === 'blackhole' || node.kind === 'sun') return size < 40;
   if (node.kind === 'planet') return size < 22;
+
+  const massiveKind = node.kind === 'galaxy' || node.kind === 'blackhole' || node.kind === 'sun';
+  const nested = (node.childCount || 0) > 0 || (node.descendants || 0) > 0;
+  if (massiveKind && (node.kind === 'galaxy' || nested)) {
+    const viewport = options.viewport > 0 ? options.viewport : 900;
+    const onPath = !!(options.diveId && (options.diveId === node.id
+      || divePath(options.byId, options.diveId).has(node.id)));
+    return !onPath || size < viewport * 0.45;
+  }
+  if (node.kind === 'blackhole' || node.kind === 'sun') return size < 40;
   return false;
 }
 
@@ -117,11 +153,12 @@ export function lodOpen(byId, keepIds) {
   return open;
 }
 
-export function lodHidden(node, byId, scale, open) {
+export function lodHidden(node, byId, scale, open, options = {}) {
   if (open?.has(node.id)) return false;
+  const lod = { ...options, byId };
   let parent = node.parentId ? byId.get(node.parentId) : null;
   while (parent) {
-    if (collapsed(parent, scale)) return true;
+    if (collapsed(parent, scale, lod)) return true;
     parent = parent.parentId ? byId.get(parent.parentId) : null;
   }
   return false;
@@ -146,8 +183,13 @@ function countFamily(nodes, byId) {
     if (seen.has(node.id)) return node.descendants;
     seen.add(node.id);
     let total = 0;
-    for (const child of childrenOf.get(node.id) || []) total += 1 + walk(child);
+    let heat = stamp(node.updatedAt);
+    for (const child of childrenOf.get(node.id) || []) {
+      total += 1 + walk(child);
+      heat = Math.max(heat, child.heatAt || 0);
+    }
     node.descendants = total;
+    node.heatAt = heat;
     return total;
   };
   for (const node of nodes) walk(node);
@@ -198,10 +240,10 @@ export function createLayout(data = {}, saved = [], savedTopology = null) {
     get active() { return remaining > 0 && simulation?.alpha() > 0.001; },
     get topology() { return signature; } };
 
-  function placeSatellites(time = 0, scale = Infinity, open = null) {
+  function placeSatellites(time = 0, scale = Infinity, open = null, options = {}) {
     for (const node of layout.nodes) {
       if (node.depth <= 0 || node.fx != null) continue;
-      if (scale !== Infinity && lodHidden(node, layout.byId, scale, open)) continue;
+      if (scale !== Infinity && lodHidden(node, layout.byId, scale, open, options)) continue;
       const parent = layout.byId.get(node.parentId);
       if (!parent || !finite(node.orbitRadius)) continue;
       const angle = (node.orbitAngle0 || 0) + time * (node.orbitSpeed || 0);
@@ -289,10 +331,11 @@ export function createLayout(data = {}, saved = [], savedTopology = null) {
     return true;
   }
 
-  function orbit(time, scale, keepIds) {
+  function orbit(time, scale, keepIds, options) {
     lastOrbitTime = time;
     const finiteScale = typeof scale === 'number' && Number.isFinite(scale);
-    placeSatellites(time, finiteScale ? scale : Infinity, finiteScale ? lodOpen(layout.byId, keepIds) : null);
+    const open = finiteScale ? lodOpen(layout.byId, keepIds) : null;
+    placeSatellites(time, finiteScale ? scale : Infinity, open, options || {});
   }
 
   function tick(count = 1) {

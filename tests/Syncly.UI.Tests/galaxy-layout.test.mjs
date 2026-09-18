@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collapsed, createLayout, kindFor, lodHidden, lodOpen, radiusFor, restorePositions, sunColorFor } from '../../src/Syncly.UI/wwwroot/js/galaxy-layout.mjs';
+import { collapsed, createLayout, kindFor, lodHidden, lodOpen, radiusFor, recencyHeat, restorePositions, sunColorFor } from '../../src/Syncly.UI/wwwroot/js/galaxy-layout.mjs';
 
 const fixture = () => ({
   nodes: [{ id: 'parent' }, { id: 'child', parentId: 'parent' }, { id: 'other' }, { id: 'isolated' }],
@@ -148,11 +148,7 @@ test('nested notes promote from moon to planet to sun to black hole to galaxy', 
   assert.ok(disc.byId.get('core').radius > collapsedHole.byId.get('core').radius);
 });
 
-test('collapsed systems hide descendants until zoomed in, except a kept path', () => {
-  assert.equal(collapsed({ kind: 'galaxy', systemRadius: 400, radius: 40 }, 0.2), true);
-  assert.equal(collapsed({ kind: 'galaxy', systemRadius: 400, radius: 40 }, 0.4), false);
-  assert.equal(collapsed({ kind: 'sun', systemRadius: 80, radius: 18 }, 0.4), true);
-  assert.equal(collapsed({ kind: 'sun', systemRadius: 80, radius: 18 }, 0.6), false);
+test('galaxies stay collapsed until dived, except a kept path', () => {
   assert.equal(collapsed({ kind: 'planet', systemRadius: 20, radius: 11 }, 1), true);
   assert.equal(collapsed({ kind: 'planet', systemRadius: 30, radius: 11 }, 1), false);
   const layout = createLayout({
@@ -162,17 +158,41 @@ test('collapsed systems hide descendants until zoomed in, except a kept path', (
   });
   const byId = layout.byId;
   const core = byId.get('core');
-  const hide = 80 / core.systemRadius;
-  const show = 160 / core.systemRadius;
-  assert.equal(collapsed(core, hide), true);
-  assert.equal(collapsed(core, show), false);
-  assert.equal(lodHidden(byId.get('sat-0'), byId, hide, new Set()), true);
-  assert.equal(lodHidden(byId.get('moon'), byId, hide, new Set()), true);
+  const viewport = 900;
+  const overview = { viewport };
+  assert.equal(core.kind, 'galaxy');
+  assert.equal(collapsed(core, 0.02, overview), true);
+  assert.equal(collapsed(core, 4, overview), true);
+  assert.equal(lodHidden(byId.get('sat-0'), byId, 0.02, new Set(), overview), true);
+  assert.equal(lodHidden(byId.get('moon'), byId, 0.02, new Set(), overview), true);
+  const diveScale = (viewport * 0.7) / core.systemRadius;
+  const dive = { diveId: 'core', byId, viewport };
+  assert.equal(collapsed(core, diveScale, dive), false);
+  assert.equal(lodHidden(byId.get('sat-0'), byId, diveScale, new Set(), dive), false);
+  assert.equal(lodHidden(byId.get('moon'), byId, diveScale, new Set(), dive), true);
+  const hole = byId.get('sat-0');
+  const holeScale = (viewport * 0.7) / hole.systemRadius;
+  const holeDive = { diveId: 'sat-0', byId, viewport };
+  assert.equal(collapsed(hole, holeScale, holeDive), false);
+  assert.equal(lodHidden(byId.get('moon'), byId, holeScale, new Set(), holeDive), false);
   const open = lodOpen(byId, ['moon']);
   assert.equal(open.has('core'), true);
   assert.equal(open.has('sat-0'), true);
-  assert.equal(lodHidden(byId.get('moon'), byId, hide, open), false);
-  assert.equal(lodHidden(byId.get('sat-1'), byId, hide, open), true);
+  assert.equal(lodHidden(byId.get('moon'), byId, 0.02, open, overview), false);
+  assert.equal(lodHidden(byId.get('sat-1'), byId, 0.02, open, overview), true);
+});
+
+test('family recency heat uses the newest descendant edit', () => {
+  const now = Date.now();
+  const layout = createLayout({
+    nodes: [{ id: 'core', depth: 0, updatedAt: 1 },
+      { id: 'old', depth: 1, parentId: 'core', updatedAt: now - 8 * 86400000 },
+      { id: 'fresh', depth: 1, parentId: 'core', updatedAt: now - 3600000 }],
+  });
+  assert.ok(layout.byId.get('core').heatAt >= layout.byId.get('fresh').updatedAt);
+  assert.ok(recencyHeat(layout.byId.get('core'), now) > 0.8);
+  assert.equal(recencyHeat({ updatedAt: now - 8 * 86400000 }, now), 0);
+  assert.equal(recencyHeat({ updatedAt: now }, now), 1);
 });
 
 test('satellites sit on packed rings that do not overlap sibling subsystems', () => {

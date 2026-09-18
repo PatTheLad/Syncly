@@ -1,4 +1,4 @@
-import { collapsed, createLayout, hash, lodHidden, lodOpen, sunColorFor, sunHighlightFor, sunRimFor } from './galaxy-layout.mjs';
+import { collapsed, createLayout, hash, lodHidden, lodOpen, recencyHeat, sunColorFor, sunHighlightFor, sunRimFor } from './galaxy-layout.mjs';
 
 const instances = new Map();
 const palettes = {
@@ -22,7 +22,7 @@ export function mount(id, dotnet) {
   const stored = read(localStorage, optionsKey);
   const view = { id, canvas, context, dotnet, layout: createLayout(), spaceKey: null,
     width: 1, height: 1, dpr: 1, camera: { x: 0, y: 0, scale: 1 },
-    currentId: null, selectedId: null, hoverId: null, mode: 'all', filter: 'all', query: '',
+    currentId: null, selectedId: null, hoverId: null, diveId: null, mode: 'all', filter: 'all', query: '',
     options: { labels: stored?.labels !== false, recent: stored?.recent === true },
     frame: 0, disposed: false, initialFit: true, flight: null, overview: null,
     pointers: new Map(), gesture: null, longPress: 0, abort: new AbortController(),
@@ -97,7 +97,7 @@ export function update(id, data) {
       && Math.abs(camera.x) < 1e6 && Math.abs(camera.y) < 1e6 && camera.scale >= scaleMin && camera.scale <= scaleMax;
     view.camera = valid ? { ...camera } : { x: 0, y: 0, scale: 1 };
     view.initialFit = !valid;
-    view.selectedId = view.hoverId = null;
+    view.selectedId = view.hoverId = view.diveId = null;
     view.overview = view.flight = null;
     view.mode = 'all';
     view.filter = 'all';
@@ -109,6 +109,7 @@ export function update(id, data) {
   view.currentId = data.currentId;
   if (!view.layout.byId.has(view.selectedId)) { view.selectedId = null; view.mode = 'all'; }
   if (!view.layout.byId.has(view.hoverId)) view.hoverId = null;
+  if (view.diveId && !view.layout.byId.has(view.diveId)) clearDive(view);
   wake(view);
 }
 
@@ -153,13 +154,18 @@ export function focus(id, nodeId) {
   const node = view?.layout.byId.get(nodeId);
   if (!node) return;
   view.initialFit = false;
-  moveCamera(view, { x: node.x, y: node.y, scale: clamp(view.camera.scale, 0.8, 1.6) });
+  const target = diveNode(node, view.layout.byId);
+  setDive(view, target);
+  const viewport = Math.min(view.width, view.height);
+  const extent = Math.max(40, target.systemRadius || target.radius || 40);
+  moveCamera(view, { x: target.x, y: target.y, scale: clamp((viewport * 0.7) / extent, scaleMin, scaleMax) });
 }
 
 export function fit(id) {
   const view = instances.get(id);
   if (!view) return;
   view.initialFit = false;
+  clearDive(view);
   moveCamera(view, fitCamera(view));
 }
 
@@ -170,7 +176,7 @@ export function zoom(id, factor) {
 
 export function reset(id) {
   const view = instances.get(id);
-  if (view) { view.layout.reset(); view.initialFit = true; wake(view); }
+  if (view) { view.layout.reset(); view.initialFit = true; clearDive(view); wake(view); }
 }
 
 export function focusElement(id) { document.getElementById(id)?.focus({ preventScroll: true }); }
@@ -326,7 +332,43 @@ function zoomAt(view, x, y, factor) {
   view.camera.scale = clamp(view.camera.scale * factor, scaleMin, scaleMax);
   view.camera.x = anchor.x - (x - view.width / 2) / view.camera.scale;
   view.camera.y = anchor.y - (y - view.height / 2) / view.camera.scale;
+  maybePopDive(view);
   wake(view);
+}
+
+function diveNode(node, byId) {
+  if (node.kind === 'galaxy' || node.kind === 'blackhole' || node.kind === 'sun') return node;
+  let parent = node.parentId ? byId.get(node.parentId) : null;
+  while (parent) {
+    if (parent.kind === 'sun' || parent.kind === 'blackhole' || parent.kind === 'galaxy') return parent;
+    parent = parent.parentId ? byId.get(parent.parentId) : null;
+  }
+  return node;
+}
+
+function setDive(view, node) {
+  const id = node?.id ?? null;
+  if (view.diveId === id) return;
+  view.diveId = id;
+  notify(view, 'OnDive', id, node?.title ?? null);
+}
+
+function clearDive(view) {
+  if (!view.diveId) return;
+  view.diveId = null;
+  notify(view, 'OnDive', null, null);
+}
+
+function maybePopDive(view) {
+  if (!view.diveId) return;
+  const node = view.layout.byId.get(view.diveId);
+  if (!node) { clearDive(view); return; }
+  const size = (node.systemRadius || node.radius || 0) * view.camera.scale;
+  if (size < Math.min(view.width, view.height) * 0.28) clearDive(view);
+}
+
+function lodState(view) {
+  return { diveId: view.diveId, byId: view.layout.byId, viewport: Math.min(view.width, view.height) };
 }
 
 function hit(view, x, y, touch = false) {
@@ -494,7 +536,7 @@ function frame(view, time) {
     view.maxTickMs = Math.max(view.maxTickMs, performance.now() - tickStarted);
   }
   const ambient = !reduced;
-  if (ambient) view.layout.orbit(time, view.camera.scale, lodKeepIds(view));
+  if (ambient) view.layout.orbit(time, view.camera.scale, lodKeepIds(view), lodState(view));
   if (view.initialFit) view.camera = fitCamera(view);
   if (view.flight) {
     const progress = clamp((time - view.flight.started) / 260, 0, 1);
@@ -529,12 +571,25 @@ function lodKeepIds(view) {
   return keep;
 }
 
-function colorFor(node) {
-  if (node.kind === 'sun') return sunColorFor(node.radius);
-  if (node.kind === 'galaxy') return '#c9d4ff';
-  if (node.kind === 'blackhole') return '#ffb14e';
-  const set = palettes[node.kind] || palettes.planet;
-  return set[hash(node.id) % set.length];
+function mixHex(left, right, amount) {
+  const parse = hex => [1, 3, 5].map(index => parseInt(hex.slice(index, index + 2), 16));
+  const from = parse(left);
+  const to = parse(right);
+  if (from.some(Number.isNaN) || to.some(Number.isNaN)) return left;
+  const t = Math.max(0, Math.min(1, amount));
+  return '#' + from.map((channel, index) => Math.round(channel + (to[index] - channel) * t).toString(16).padStart(2, '0')).join('');
+}
+
+function heatFor(view, node) {
+  return view.options.recent ? recencyHeat(node) : 0;
+}
+
+function colorFor(node, heat = 0) {
+  let color = node.kind === 'sun' ? sunColorFor(node.radius)
+    : node.kind === 'galaxy' ? '#c9d4ff'
+      : node.kind === 'blackhole' ? '#ffb14e'
+        : (palettes[node.kind] || palettes.planet)[hash(node.id) % (palettes[node.kind] || palettes.planet).length];
+  return heat > 0 ? mixHex(color, '#ff9a4a', heat * 0.55) : color;
 }
 
 function screenRadius(node, scale) {
@@ -585,12 +640,13 @@ function drawGalaxy(view, item, time, alpha) {
   const context = view.context;
   const reduced = view.media.matches;
   const spin = reduced ? (hash(node.id) % 628) / 100 : time * 0.00018 + hash(node.id);
+  const heat = heatFor(view, node);
   context.save();
   context.globalAlpha = alpha;
   const haze = context.createRadialGradient(x, y, radius * 0.15, x, y, radius * 2.6);
-  haze.addColorStop(0, '#e8f0ff66');
-  haze.addColorStop(0.35, '#8aa4ff33');
-  haze.addColorStop(0.7, '#6a4dff18');
+  haze.addColorStop(0, (heat > 0 ? mixHex('#e8f0ff', '#ffe3b8', heat) : '#e8f0ff') + '66');
+  haze.addColorStop(0.35, (heat > 0 ? mixHex('#8aa4ff', '#ff9a4a', heat * 0.85) : '#8aa4ff') + '33');
+  haze.addColorStop(0.7, (heat > 0 ? mixHex('#6a4dff', '#ff6a24', heat * 0.7) : '#6a4dff') + '18');
   haze.addColorStop(1, '#00000000');
   context.fillStyle = haze;
   context.beginPath(); context.arc(x, y, radius * 2.6, 0, Math.PI * 2); context.fill();
@@ -599,6 +655,17 @@ function drawGalaxy(view, item, time, alpha) {
   context.scale(1, 0.58);
   context.drawImage(galaxySprite(view), -radius * 1.4, -radius * 1.4, radius * 2.8, radius * 2.8);
   context.restore();
+  if (heat > 0) {
+    context.save();
+    context.globalAlpha = alpha * (0.28 + heat * 0.5);
+    const core = context.createRadialGradient(x, y, 0, x, y, radius * 0.72);
+    core.addColorStop(0, '#fff6d8');
+    core.addColorStop(0.45, '#ffb14e99');
+    core.addColorStop(1, '#ff6a2400');
+    context.fillStyle = core;
+    context.beginPath(); context.arc(x, y, radius * 0.72, 0, Math.PI * 2); context.fill();
+    context.restore();
+  }
 }
 
 function galaxySprite(view) {
@@ -658,16 +725,17 @@ function drawBlackHole(view, item, time, alpha) {
   const { x, y, radius, node } = item;
   const context = view.context;
   const reduced = view.media.matches;
+  const heat = heatFor(view, node);
   const spin = reduced ? hash(node.id) % 1000 : time * 0.0011 + hash(node.id);
-  const pulse = reduced ? 1 : 1 + Math.sin(time * 0.003 + hash(node.id) % 80) * 0.08;
+  const pulse = reduced ? 1 : 1 + Math.sin(time * 0.003 + hash(node.id) % 80) * (0.08 + heat * 0.06);
   const rx = radius * 1.55;
   const ry = radius * 0.48;
   context.save();
   context.globalAlpha = alpha;
   const haze = context.createRadialGradient(x, y, radius * 0.2, x, y, radius * 3.1);
   haze.addColorStop(0, '#140818d8');
-  haze.addColorStop(0.28, '#5a1a7a66');
-  haze.addColorStop(0.55, '#ff6a2428');
+  haze.addColorStop(0.28, (heat > 0 ? mixHex('#5a1a7a', '#ff6a24', heat * 0.7) : '#5a1a7a') + '66');
+  haze.addColorStop(0.55, (heat > 0 ? mixHex('#ff6a24', '#ffe29a', heat) : '#ff6a24') + '28');
   haze.addColorStop(1, '#00000000');
   context.fillStyle = haze;
   context.beginPath(); context.arc(x, y, radius * 3.1 * pulse, 0, Math.PI * 2); context.fill();
@@ -764,11 +832,12 @@ function draw(view, time = performance.now()) {
   const focusId = view.hoverId || view.selectedId;
   const neighborhood = view.layout.neighbors.get(focusId);
   const open = lodOpen(view.layout.byId, lodKeepIds(view));
+  const lod = lodState(view);
   const projected = new Map();
   view.screenNodes = [];
   view.hitGrid.clear();
   for (const node of view.layout.nodes) {
-    if (!visible(view, node) || lodHidden(node, view.layout.byId, view.camera.scale, open)) continue;
+    if (!visible(view, node) || lodHidden(node, view.layout.byId, view.camera.scale, open, lod)) continue;
     const point = screen(view, node);
     const radius = screenRadius(node, view.camera.scale);
     const relevant = !focusId || node.id === focusId || neighborhood?.has(node.id);
@@ -783,9 +852,9 @@ function draw(view, time = performance.now()) {
   }
   for (const node of view.layout.nodes) {
     if (node.depth <= 0 || !visible(view, node)) continue;
-    if (lodHidden(node, view.layout.byId, view.camera.scale, open)) continue;
+    if (lodHidden(node, view.layout.byId, view.camera.scale, open, lod)) continue;
     const parent = view.layout.byId.get(node.parentId);
-    if (!parent || collapsed(parent, view.camera.scale)) continue;
+    if (!parent || collapsed(parent, view.camera.scale, lod)) continue;
     const center = screen(view, parent);
     const radius = node.orbitRadius * view.camera.scale;
     if (radius < 8 || radius > Math.max(view.width, view.height) * 1.6) continue;
@@ -800,18 +869,14 @@ function draw(view, time = performance.now()) {
   }
   context.setLineDash([]);
   const directed = new Set(view.layout.edges.map(edge => JSON.stringify([edge.from, edge.to])));
+  const reduced = view.media.matches;
   for (const link of view.layout.links) {
     const source = projected.get(link.source.id), target = projected.get(link.target.id);
     if (!source || !target) continue;
     if ((source.x < 0 && target.x < 0) || (source.x > view.width && target.x > view.width)
       || (source.y < 0 && target.y < 0) || (source.y > view.height && target.y > view.height)) continue;
     const highlighted = source.node.id === focusId || target.node.id === focusId;
-    context.strokeStyle = highlighted ? '#bcd8f2' : '#79858f';
-    context.globalAlpha = highlighted ? 0.8 : focusId || view.query ? 0.065 : 0.23;
-    context.lineWidth = highlighted ? 1.4 : 0.8;
-    if (highlighted) { context.setLineDash([5, 4]); context.lineDashOffset = -(time * 0.026) % 9; }
-    context.beginPath(); context.moveTo(source.x, source.y); context.lineTo(target.x, target.y); context.stroke();
-    context.setLineDash([]);
+    drawWormhole(context, source, target, time, highlighted, reduced, focusId || view.query);
     if (highlighted) {
       if (directed.has(JSON.stringify([source.node.id, target.node.id]))) arrow(context, source, target);
       if (directed.has(JSON.stringify([target.node.id, source.node.id]))) arrow(context, target, source);
@@ -819,19 +884,21 @@ function draw(view, time = performance.now()) {
   }
   for (const item of view.screenNodes) {
     const { node, x, y, radius, alpha } = item;
-    const color = colorFor(node);
+    const heat = heatFor(view, node);
+    const color = colorFor(node, heat);
     context.globalAlpha = alpha;
     if (node.kind === 'galaxy') {
       drawGalaxy(view, item, time, alpha);
     } else if (node.kind === 'blackhole') {
       drawBlackHole(view, item, time, alpha);
     } else if (node.kind === 'sun') {
-      const pulse = 1 + Math.sin(time * 0.0012 + hash(node.id) % 1000) * 0.16;
-      const glow = context.createRadialGradient(x, y, radius * 0.3, x, y, radius * 2.6 * pulse);
-      glow.addColorStop(0, color + 'b0');
+      const pulse = reduced ? 1 : 1 + Math.sin(time * 0.0012 + hash(node.id) % 1000) * (0.16 + heat * 0.1);
+      const glowScale = 2.6 + heat * 1.15;
+      const glow = context.createRadialGradient(x, y, radius * 0.3, x, y, radius * glowScale * pulse);
+      glow.addColorStop(0, color + (heat > 0.25 ? 'e8' : 'b0'));
       glow.addColorStop(1, color + '00');
       context.fillStyle = glow;
-      context.beginPath(); context.arc(x, y, radius * 2.6 * pulse, 0, Math.PI * 2); context.fill();
+      context.beginPath(); context.arc(x, y, radius * glowScale * pulse, 0, Math.PI * 2); context.fill();
     } else if (node.kind === 'planet' && hash(node.id) % 3 === 0) {
       context.strokeStyle = color + '80'; context.lineWidth = Math.max(1, radius * 0.16);
       context.beginPath(); context.ellipse(x, y, radius * 1.75, radius * 0.55, 0.5, 0, Math.PI * 2); context.stroke();
@@ -852,14 +919,52 @@ function draw(view, time = performance.now()) {
     if (node.id === view.currentId) {
       context.fillStyle = '#ffffff'; context.beginPath(); context.arc(x + radius, y - radius, 3, 0, Math.PI * 2); context.fill();
     }
-    const updated = typeof node.updatedAt === 'number' ? node.updatedAt : Date.parse(node.updatedAt);
-    if (view.options.recent && updated && Date.now() - updated < 7 * 86400000) {
-      context.strokeStyle = '#8bdbad'; context.lineWidth = 2; context.beginPath();
-      context.arc(x, y, radius + 2, -Math.PI / 2, Math.PI / 2); context.stroke();
-    }
   }
   labels(view);
   context.globalAlpha = 1;
+}
+
+function drawWormhole(context, source, target, time, highlighted, reduced, dimmed) {
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const length = Math.hypot(dx, dy);
+  if (length < 4) return;
+  const nx = dx / length;
+  const ny = dy / length;
+  const sx = source.x + nx * source.radius;
+  const sy = source.y + ny * source.radius;
+  const tx = target.x - nx * target.radius;
+  const ty = target.y - ny * target.radius;
+  const tube = context.createLinearGradient(sx, sy, tx, ty);
+  tube.addColorStop(0, '#7cf0d8');
+  tube.addColorStop(0.5, highlighted ? '#e0c8ff' : '#8a7cff');
+  tube.addColorStop(1, '#7ecbff');
+  context.strokeStyle = tube;
+  context.globalAlpha = highlighted ? 0.95 : dimmed ? 0.12 : 0.42;
+  context.lineWidth = highlighted ? 3.2 : 1.8;
+  context.lineCap = 'round';
+  if (!reduced) {
+    context.setLineDash([10, 14]);
+    context.lineDashOffset = -(time * 0.045) % 24;
+  }
+  context.beginPath(); context.moveTo(sx, sy); context.lineTo(tx, ty); context.stroke();
+  context.setLineDash([]);
+  context.lineCap = 'butt';
+  drawPortal(context, sx, sy, highlighted);
+  drawPortal(context, tx, ty, highlighted);
+}
+
+function drawPortal(context, x, y, highlighted) {
+  const radius = highlighted ? 6.5 : 4.5;
+  const glow = context.createRadialGradient(x, y, 0, x, y, radius * 2.4);
+  glow.addColorStop(0, '#e8fff8cc');
+  glow.addColorStop(0.4, '#a78bfa88');
+  glow.addColorStop(1, '#7ecbff00');
+  context.fillStyle = glow;
+  context.beginPath(); context.arc(x, y, radius * 2.4, 0, Math.PI * 2); context.fill();
+  context.strokeStyle = '#d4f7ff';
+  context.lineWidth = highlighted ? 1.6 : 1;
+  context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.stroke();
 }
 
 function arrow(context, source, target) {
@@ -918,7 +1023,7 @@ function labels(view) {
 export function inspect(id) {
   const view = instances.get(id);
   if (!view) return null;
-  return { camera: { ...view.camera }, selectedId: view.selectedId, mode: view.mode,
+  return { camera: { ...view.camera }, selectedId: view.selectedId, diveId: view.diveId, mode: view.mode,
     active: view.layout.active, scheduled: !!view.frame, frames: view.frames, maxTickMs: view.maxTickMs,
     // Physically settled: force layout finished and no camera flight running. Ambient orbit/twinkle/comet
     // redraws keep `scheduled` true forever by design, so callers waiting for a stable graph should use this.
