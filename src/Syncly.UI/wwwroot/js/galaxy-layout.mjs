@@ -24,7 +24,7 @@ function lerpStops(stops, amount) {
 }
 
 export function sunHeat(radius) {
-  return clamp01((radius - 18) / 30);
+  return clamp01((radius - 18) / 22);
 }
 
 export function sunColorFor(radius) {
@@ -54,17 +54,21 @@ export function sunHighlightFor(radius) {
 }
 
 export function kindFor(depth, descendants = 0) {
+  if (descendants >= 32) return 'blackhole';
   if (depth <= 0 || descendants >= 8) return 'sun';
   if (depth === 1 || descendants >= 3) return 'planet';
   if (depth === 2) return 'moon';
   return 'asteroid';
 }
 
+const massive = kind => kind === 'blackhole' || kind === 'sun' || kind === 'planet';
+
 export function radiusFor(depth, degree = 0, missing = false, descendants = 0) {
   if (missing) return 6;
   const kind = kindFor(depth, descendants);
   const family = Math.log2(1 + descendants);
   const links = Math.min(2, Math.log2(1 + degree) * 0.35);
+  if (kind === 'blackhole') return 22 + family * 4.6 + links;
   if (kind === 'sun') return 18 + family * 4.2 + links;
   if (kind === 'planet') return 11 + family * 2.1 + links * 0.5;
   if (kind === 'moon') return 7 + family * 1.2 + links * 0.3;
@@ -111,12 +115,11 @@ function assignOrbits(nodes, byId) {
     children.sort((left, right) => compare(left.id, right.id));
     let outer = parent.radius;
     children.forEach((child, index) => {
-      const gap = child.kind === 'sun' || child.kind === 'planet' ? 36 : child.kind === 'moon' ? 18 : 12;
+      const gap = massive(child.kind) ? 36 : child.kind === 'moon' ? 18 : 12;
       child.orbitRadius = outer + gap + child.systemRadius;
       outer = child.orbitRadius + child.systemRadius;
       const direction = hash(child.id) % 2 === 0 ? 1 : -1;
-      const base = child.kind === 'sun' || child.kind === 'planet' ? 0.000062
-        : child.kind === 'moon' ? 0.00016 : 0.00028;
+      const base = massive(child.kind) ? 0.000062 : child.kind === 'moon' ? 0.00016 : 0.00028;
       child.orbitSpeed = direction * base / (1 + index * 0.12);
       child.orbitAngle0 = (hash(child.id + ':a') % 6283) / 1000;
     });

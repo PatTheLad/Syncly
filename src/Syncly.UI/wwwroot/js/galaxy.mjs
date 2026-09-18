@@ -335,7 +335,8 @@ function hit(view, x, y, touch = false) {
     for (let offsetY = -1; offsetY <= 1; offsetY++) {
       for (const item of view.hitGrid.get(`${cellX + offsetX}:${cellY + offsetY}`) || []) {
         const distance = Math.hypot(item.x - x, item.y - y);
-        if (distance <= Math.max(item.radius + 5, touch ? 22 : 12) && distance < closest) {
+        const reach = item.node.kind === 'blackhole' ? item.radius * 1.6 + 5 : Math.max(item.radius + 5, touch ? 22 : 12);
+        if (distance <= Math.max(reach, touch ? 22 : 12) && distance < closest) {
           winner = item.node; closest = distance;
         }
       }
@@ -515,13 +516,15 @@ function frame(view, time) {
 
 function colorFor(node) {
   if (node.kind === 'sun') return sunColorFor(node.radius);
+  if (node.kind === 'blackhole') return '#ffb14e';
   const set = palettes[node.kind] || palettes.planet;
   return set[hash(node.id) % set.length];
 }
 
 function screenRadius(node, scale) {
-  const maximum = node.kind === 'sun' ? 52 : node.kind === 'planet' ? 28 : node.kind === 'moon' ? 16 : 10;
-  const minimum = node.kind === 'sun' ? 8 : 3;
+  const maximum = node.kind === 'blackhole' ? 58 : node.kind === 'sun' ? 52
+    : node.kind === 'planet' ? 28 : node.kind === 'moon' ? 16 : 10;
+  const minimum = node.kind === 'blackhole' || node.kind === 'sun' ? 8 : 3;
   return clamp(node.radius * Math.sqrt(scale), minimum, maximum);
 }
 
@@ -560,6 +563,68 @@ function sprite(view, color, kind, radius = 18) {
   view.sprites.set(key, canvas);
   return canvas;
 }
+
+function drawBlackHole(view, item, time, alpha) {
+  const { x, y, radius, node } = item;
+  const context = view.context;
+  const reduced = view.media.matches;
+  const spin = reduced ? hash(node.id) % 1000 : time * 0.0011 + hash(node.id);
+  const pulse = reduced ? 1 : 1 + Math.sin(time * 0.003 + hash(node.id) % 80) * 0.08;
+  const rx = radius * 1.55;
+  const ry = radius * 0.48;
+  context.save();
+  context.globalAlpha = alpha;
+  const haze = context.createRadialGradient(x, y, radius * 0.2, x, y, radius * 3.1);
+  haze.addColorStop(0, '#140818d8');
+  haze.addColorStop(0.28, '#5a1a7a66');
+  haze.addColorStop(0.55, '#ff6a2428');
+  haze.addColorStop(1, '#00000000');
+  context.fillStyle = haze;
+  context.beginPath(); context.arc(x, y, radius * 3.1 * pulse, 0, Math.PI * 2); context.fill();
+  context.translate(x, y);
+  context.rotate(-0.38);
+  context.strokeStyle = '#9ecbff3a';
+  context.lineWidth = Math.max(1, radius * 0.07);
+  context.beginPath();
+  context.moveTo(0, -radius * 2.6); context.lineTo(0, -radius * 0.95);
+  context.moveTo(0, radius * 0.95); context.lineTo(0, radius * 2.6);
+  context.stroke();
+  const paintDisk = (start, sweep) => {
+    const band = context.createLinearGradient(-rx, 0, rx, 0);
+    band.addColorStop(0, '#4aa3ffee');
+    band.addColorStop(0.18, '#ff4c2ccc');
+    band.addColorStop(0.5, '#ffe29a');
+    band.addColorStop(0.82, '#ff6b3dcc');
+    band.addColorStop(1, '#6a1408ee');
+    context.strokeStyle = band;
+    context.lineWidth = Math.max(3, radius * 0.42);
+    context.setLineDash([radius * 0.85, radius * 0.35]);
+    context.lineDashOffset = -spin * radius * 0.25;
+    context.beginPath(); context.ellipse(0, 0, rx, ry, 0, start, start + sweep); context.stroke();
+    context.setLineDash([]);
+    context.strokeStyle = `rgba(255,236,210,${0.5 + Math.sin(spin) * 0.12})`;
+    context.lineWidth = Math.max(1.2, radius * 0.14);
+    context.beginPath(); context.ellipse(0, 0, rx * 0.7, ry * 0.7, 0, start, start + sweep); context.stroke();
+  };
+  paintDisk(Math.PI, Math.PI);
+  const hole = context.createRadialGradient(-radius * 0.12, -radius * 0.1, radius * 0.08, 0, 0, radius * 0.78);
+  hole.addColorStop(0, '#1a1018');
+  hole.addColorStop(0.45, '#050208');
+  hole.addColorStop(1, '#000000');
+  context.fillStyle = hole;
+  context.beginPath(); context.arc(0, 0, radius * 0.78, 0, Math.PI * 2); context.fill();
+  context.strokeStyle = '#ffe7b8';
+  context.globalAlpha = alpha * (reduced ? 0.85 : 0.7 + Math.sin(time * 0.0045) * 0.2);
+  context.lineWidth = Math.max(1.5, radius * 0.09);
+  context.beginPath(); context.arc(0, 0, radius * 0.84, 0, Math.PI * 2); context.stroke();
+  context.globalAlpha = alpha;
+  context.strokeStyle = '#ffffff55';
+  context.lineWidth = Math.max(0.8, radius * 0.04);
+  context.beginPath(); context.arc(0, 0, radius * 0.9, 0, Math.PI * 2); context.stroke();
+  paintDisk(0, Math.PI);
+  context.restore();
+}
+
 
 function drawStars(view, time) {
   if (!view.stars.length) return;
@@ -633,7 +698,8 @@ function draw(view, time = performance.now()) {
     const radius = node.orbitRadius * view.camera.scale;
     if (radius < 8 || radius > Math.max(view.width, view.height) * 1.6) continue;
     context.globalAlpha = node.id === focusId ? 0.4 : 0.14;
-    context.strokeStyle = node.kind === 'planet' || node.kind === 'sun' ? '#ffcf8a'
+    context.strokeStyle = parent.kind === 'blackhole' ? '#c9a0ff'
+      : node.kind === 'planet' || node.kind === 'sun' || node.kind === 'blackhole' ? '#ffcf8a'
       : node.kind === 'moon' ? '#9fd6ff' : '#c3c8d4';
     context.lineWidth = 1;
     context.setLineDash([1.5, 5]);
@@ -662,7 +728,9 @@ function draw(view, time = performance.now()) {
     const { node, x, y, radius, alpha } = item;
     const color = colorFor(node);
     context.globalAlpha = alpha;
-    if (node.kind === 'sun') {
+    if (node.kind === 'blackhole') {
+      drawBlackHole(view, item, time, alpha);
+    } else if (node.kind === 'sun') {
       const pulse = 1 + Math.sin(time * 0.0012 + hash(node.id) % 1000) * 0.16;
       const glow = context.createRadialGradient(x, y, radius * 0.3, x, y, radius * 2.6 * pulse);
       glow.addColorStop(0, color + 'b0');
@@ -677,12 +745,12 @@ function draw(view, time = performance.now()) {
     if (node.id === view.selectedId || node.id === view.hoverId) {
       context.strokeStyle = node.id === view.selectedId ? '#ffffff' : '#9ba6b3';
       context.lineWidth = node.id === view.selectedId ? 1.7 : 1;
-      context.beginPath(); context.arc(x, y, radius + 5, 0, Math.PI * 2); context.stroke();
+      context.beginPath(); context.arc(x, y, radius + (node.kind === 'blackhole' ? 8 : 5), 0, Math.PI * 2); context.stroke();
     }
     if (node.missing) {
       context.strokeStyle = '#a6a3b3'; context.lineWidth = 1.4; context.setLineDash([3, 3]);
       context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.stroke(); context.setLineDash([]);
-    } else {
+    } else if (node.kind !== 'blackhole') {
       context.drawImage(sprite(view, color, node.kind, node.radius), x - radius, y - radius, radius * 2, radius * 2);
     }
     if (node.id === view.currentId) {
@@ -730,7 +798,8 @@ function labels(view) {
     if (width === undefined) { width = context.measureText(text).width + 12; view.labelWidths.set(text, width); }
     let rectangle;
     for (const direction of [1, -1]) {
-      const candidate = { x: item.x - width / 2, y: item.y + direction * (item.radius + 17) - 10, width, height: 20 };
+      const pad = item.node.kind === 'blackhole' ? 28 : 17;
+      const candidate = { x: item.x - width / 2, y: item.y + direction * (item.radius + pad) - 10, width, height: 20 };
       const topInset = view.canvas.classList.contains('graph-canvas') ? 40 : 4;
       if (candidate.x < 4 || candidate.x + width > view.width - 4 || candidate.y < topInset || candidate.y + 20 > view.height - 4) continue;
       if (placed.some(other => candidate.x < other.x + other.width + 4 && candidate.x + width + 4 > other.x

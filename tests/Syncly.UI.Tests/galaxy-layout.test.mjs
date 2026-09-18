@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createLayout, radiusFor, restorePositions } from '../../src/Syncly.UI/wwwroot/js/galaxy-layout.mjs';
+import { createLayout, kindFor, radiusFor, restorePositions, sunColorFor } from '../../src/Syncly.UI/wwwroot/js/galaxy-layout.mjs';
 
 const fixture = () => ({
   nodes: [{ id: 'parent' }, { id: 'child', parentId: 'parent' }, { id: 'other' }, { id: 'isolated' }],
@@ -86,14 +86,105 @@ test('restoration rejects corrupt coordinates and layouts do not share state', (
   assert.equal(separate.active, false);
 });
 
-test('node size is bounded and missing nodes are distinct', () => {
-  assert.equal(radiusFor(0, 0), 21);
-  assert.ok(radiusFor(0, 10) > radiusFor(0, 1));
-  assert.equal(radiusFor(0, 100000), 30);
+test('node size grows with descendants and missing nodes stay small', () => {
+  assert.ok(radiusFor(0, 0, false, 10) > radiusFor(0, 0, false, 0));
+  assert.ok(radiusFor(1, 0, false, 6) > radiusFor(1, 0, false, 0));
+  assert.ok(radiusFor(2, 0, false, 4) > radiusFor(2, 0, false, 0));
+  assert.ok(radiusFor(0, 10, false, 0) > radiusFor(0, 1, false, 0));
   assert.equal(radiusFor(0, 30, true), 6);
   assert.ok(radiusFor(1, 0) < radiusFor(0, 0));
   assert.ok(radiusFor(2, 0) < radiusFor(1, 0));
   assert.ok(radiusFor(10, 0) < radiusFor(2, 0));
+});
+
+test('nested notes promote from moon to planet to sun to black hole; empty roots stay suns', () => {
+  assert.equal(kindFor(0, 0), 'sun');
+  assert.equal(kindFor(1, 0), 'planet');
+  assert.equal(kindFor(2, 0), 'moon');
+  assert.equal(kindFor(3, 0), 'asteroid');
+  assert.equal(kindFor(2, 3), 'planet');
+  assert.equal(kindFor(3, 3), 'planet');
+  assert.equal(kindFor(1, 8), 'sun');
+  assert.equal(kindFor(2, 8), 'sun');
+  assert.equal(kindFor(0, 31), 'sun');
+  assert.equal(kindFor(0, 32), 'blackhole');
+  assert.equal(kindFor(1, 32), 'blackhole');
+  const moon = createLayout({
+    nodes: [{ id: 'sun', depth: 0 }, { id: 'planet', depth: 1, parentId: 'sun' },
+      { id: 'moon', depth: 2, parentId: 'planet' },
+      ...Array.from({ length: 3 }, (_, index) => ({ id: `nested-${index}`, depth: 3, parentId: 'moon' }))],
+  });
+  assert.equal(moon.byId.get('moon').kind, 'planet');
+  assert.equal(moon.byId.get('moon').descendants, 3);
+  const heavy = createLayout({
+    nodes: [{ id: 'sun', depth: 0 }, { id: 'planet', depth: 1, parentId: 'sun' },
+      ...Array.from({ length: 8 }, (_, index) => ({ id: `moon-${index}`, depth: 2, parentId: 'planet' }))],
+  });
+  assert.equal(heavy.byId.get('planet').kind, 'sun');
+  assert.equal(heavy.byId.get('sun').kind, 'sun');
+  const collapsed = createLayout({
+    nodes: [{ id: 'core', depth: 0 },
+      ...Array.from({ length: 32 }, (_, index) => ({ id: `sat-${index}`, depth: 1, parentId: 'core' }))],
+  });
+  assert.equal(collapsed.byId.get('core').kind, 'blackhole');
+  assert.ok(collapsed.byId.get('core').radius > radiusFor(0, 0, false, 8));
+});
+
+test('satellites sit on packed rings that do not overlap sibling subsystems', () => {
+  const layout = createLayout({
+    nodes: [
+      { id: 'sun', depth: 0 },
+      { id: 'earth', depth: 1, parentId: 'sun' },
+      { id: 'mars', depth: 1, parentId: 'sun' },
+      { id: 'luna', depth: 2, parentId: 'earth' },
+      { id: 'phobos', depth: 2, parentId: 'mars' },
+      { id: 'deimos', depth: 2, parentId: 'mars' },
+    ],
+  });
+  layout.orbit(0);
+  for (const id of ['earth', 'mars', 'luna', 'phobos', 'deimos']) {
+    const node = layout.byId.get(id);
+    const parent = layout.byId.get(node.parentId);
+    const distance = Math.hypot(node.x - parent.x, node.y - parent.y);
+    assert.ok(Math.abs(distance - node.orbitRadius) < 1e-6);
+  }
+  const earth = layout.byId.get('earth');
+  const mars = layout.byId.get('mars');
+  assert.ok(Math.abs(earth.orbitRadius - mars.orbitRadius) + 1e-6 >= earth.systemRadius + mars.systemRadius);
+  const phobos = layout.byId.get('phobos');
+  const deimos = layout.byId.get('deimos');
+  assert.ok(Math.abs(phobos.orbitRadius - deimos.orbitRadius) + 1e-6 >= phobos.systemRadius + deimos.systemRadius);
+  assert.ok(earth.orbitRadius - earth.systemRadius >= layout.byId.get('sun').radius);
+});
+
+test('settled sun systems keep their outer orbit rings from overlapping', () => {
+  const moons = (prefix, parent, count, depth) =>
+    Array.from({ length: count }, (_, index) => ({ id: `${prefix}-${index}`, depth, parentId: parent }));
+  const layout = settle(createLayout({
+    nodes: [
+      { id: 'sol', depth: 0 }, { id: 'vega', depth: 0 },
+      ...moons('sol-p', 'sol', 4, 1),
+      ...moons('sol-p0-m', 'sol-p-0', 3, 2),
+      ...moons('vega-p', 'vega', 4, 1),
+      ...moons('vega-p-0-m', 'vega-p-0', 3, 2),
+    ],
+  }));
+  const sol = layout.byId.get('sol');
+  const vega = layout.byId.get('vega');
+  const distance = Math.hypot(sol.x - vega.x, sol.y - vega.y);
+  assert.ok(distance + 1e-6 >= sol.systemRadius + vega.systemRadius);
+  const planet = layout.byId.get('sol-p-0');
+  assert.ok(Math.abs(Math.hypot(planet.x - sol.x, planet.y - sol.y) - planet.orbitRadius) < 1e-6);
+});
+
+test('larger suns are bluer and smaller suns are redder', () => {
+  const rgb = hex => [1, 3, 5].map(index => parseInt(hex.slice(index, index + 2), 16));
+  const dwarf = rgb(sunColorFor(18));
+  const giant = rgb(sunColorFor(48));
+  assert.ok(dwarf[0] > dwarf[2]);
+  assert.ok(giant[2] > giant[0]);
+  assert.ok(giant[2] > dwarf[2]);
+  assert.ok(dwarf[0] > giant[0]);
 });
 
 test('returning to an unchanged graph restores its settled layout exactly', () => {
