@@ -127,19 +127,14 @@ export function divePath(byId, diveId) {
 
 export function openAmount(node, scale) {
   const body = (node.radius || 0) * scale;
-  if (node.kind === 'galaxy') return clamp01((body - 4) / 24);
-  const nested = (node.childCount || 0) > 0 || (node.descendants || 0) > 0;
-  if ((node.kind === 'blackhole' || node.kind === 'sun') && nested) return clamp01((body - 8) / 20);
+  if (node.kind === 'galaxy') return clamp01((body - 3) / 16);
   return 1;
 }
 
 export function collapsed(node, scale, options = {}) {
   const size = (node.systemRadius || node.radius || 0) * scale;
-  if (node.kind === 'planet') return size < 8;
-  if (node.kind === 'galaxy') return openAmount(node, scale) < 0.1;
-  const nested = (node.childCount || 0) > 0 || (node.descendants || 0) > 0;
-  if ((node.kind === 'blackhole' || node.kind === 'sun') && nested) return openAmount(node, scale) < 0.1;
-  if (node.kind === 'blackhole' || node.kind === 'sun') return size < 14;
+  if (node.kind === 'galaxy') return openAmount(node, scale) < 0.08;
+  if (node.kind === 'planet') return size < 4;
   return false;
 }
 

@@ -149,8 +149,8 @@ test('nested notes promote from moon to planet to sun to black hole to galaxy', 
 });
 
 test('galaxies stay collapsed until zoomed in, except a kept path', () => {
-  assert.equal(collapsed({ kind: 'planet', systemRadius: 6, radius: 11 }, 1), true);
-  assert.equal(collapsed({ kind: 'planet', systemRadius: 12, radius: 11 }, 1), false);
+  assert.equal(collapsed({ kind: 'planet', systemRadius: 3, radius: 11 }, 1), true);
+  assert.equal(collapsed({ kind: 'planet', systemRadius: 8, radius: 11 }, 1), false);
   const layout = createLayout({
     nodes: [{ id: 'core', depth: 0 },
       ...Array.from({ length: 80 }, (_, index) => ({ id: `sat-${index}`, depth: 1, parentId: 'core' })),
@@ -158,18 +158,14 @@ test('galaxies stay collapsed until zoomed in, except a kept path', () => {
   });
   const byId = layout.byId;
   const core = byId.get('core');
-  const hole = byId.get('sat-0');
   assert.equal(core.kind, 'galaxy');
   assert.equal(collapsed(core, 0.02), true);
   assert.equal(lodHidden(byId.get('sat-0'), byId, 0.02, new Set()), true);
   assert.equal(lodHidden(byId.get('moon'), byId, 0.02, new Set()), true);
-  const galaxyOpen = 18 / core.radius;
+  const galaxyOpen = 12 / core.radius;
   assert.equal(collapsed(core, galaxyOpen), false);
   assert.equal(lodHidden(byId.get('sat-0'), byId, galaxyOpen, new Set()), false);
-  assert.equal(lodHidden(byId.get('moon'), byId, galaxyOpen, new Set()), true);
-  const holeOpen = 16 / hole.radius;
-  assert.equal(collapsed(hole, holeOpen), false);
-  assert.equal(lodHidden(byId.get('moon'), byId, holeOpen, new Set()), false);
+  assert.equal(lodHidden(byId.get('moon'), byId, galaxyOpen, new Set()), false);
   const open = lodOpen(byId, ['moon']);
   assert.equal(open.has('core'), true);
   assert.equal(open.has('sat-0'), true);

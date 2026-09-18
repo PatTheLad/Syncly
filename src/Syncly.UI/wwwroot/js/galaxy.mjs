@@ -644,7 +644,10 @@ function colorFor(node, heat = 0) {
 }
 
 function screenRadius(node, scale) {
-  const minimum = node.kind === 'galaxy' ? 10 : node.kind === 'blackhole' || node.kind === 'sun' ? 6 : 2.5;
+  const minimum = node.kind === 'galaxy' ? 10
+    : node.kind === 'blackhole' ? 7
+    : node.kind === 'sun' ? 5
+    : node.kind === 'planet' ? 4 : 2.5;
   return Math.max(minimum, (node.radius || 4) * scale);
 }
 
