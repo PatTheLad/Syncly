@@ -136,6 +136,29 @@ export function diveCrumbs(byId, diveId) {
   return crumbs;
 }
 
+export function lifeDiff(previous, next) {
+  if (!previous?.size) return { born: [], died: [] };
+  const born = [];
+  const died = [];
+  for (const id of next) if (!previous.has(id)) born.push(id);
+  for (const id of previous) if (!next.has(id)) died.push(id);
+  return { born, died };
+}
+
+export function pointToSegment(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const length = dx * dx + dy * dy;
+  if (length < 1) return Math.hypot(px - ax, py - ay);
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / length));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+export function wormholeDestination(source, target, click) {
+  const da = Math.hypot(source.x - click.x, source.y - click.y);
+  const db = Math.hypot(target.x - click.x, target.y - click.y);
+  return da <= db ? target : source;
+}
+
 export function miniMapRect(width, height, size = 128, margin = 12, minWidth = 420) {
   if (!(width >= minWidth) || !(height >= size + margin * 2)) return null;
   return { x: margin, y: height - margin - size, width: size, height: size };

@@ -1,4 +1,4 @@
-import { collapsed, createLayout, diveCrumbs, hash, lodHidden, lodOpen, miniMapBounds, miniMapRect, miniToWorld, miniViewport, openAmount, recencyHeat, sunColorFor, sunHighlightFor, sunRimFor, worldToMini } from './galaxy-layout.mjs';
+import { collapsed, createLayout, diveCrumbs, hash, lifeDiff, lodHidden, lodOpen, miniMapBounds, miniMapRect, miniToWorld, miniViewport, openAmount, pointToSegment, recencyHeat, sunColorFor, sunHighlightFor, sunRimFor, wormholeDestination, worldToMini } from './galaxy-layout.mjs';
 
 const instances = new Map();
 const palettes = {
@@ -28,7 +28,8 @@ export function mount(id, dotnet) {
     pointers: new Map(), gesture: null, longPress: 0, abort: new AbortController(),
     sprites: new Map(), labelWidths: new Map(), screenNodes: [], hitGrid: new Map(),
     labels: [], frames: 0, maxTickMs: 0, media: matchMedia('(prefers-reduced-motion: reduce)'),
-    stars: [], comets: [], nextComet: 0, startedAt: performance.now(), lastSave: 0 };
+    stars: [], comets: [], nextComet: 0, startedAt: performance.now(), lastSave: 0,
+    known: new Set(), lastBodies: new Map(), births: new Map(), deaths: [], hoverLink: null };
 
   instances.set(id, view);
   const on = (target, event, handler, options = {}) => target.addEventListener(event, handler, { ...options, signal: view.abort.signal });
@@ -64,7 +65,7 @@ export function mount(id, dotnet) {
   on(canvas, 'pointerup', event => pointerUp(view, event));
   on(canvas, 'pointercancel', event => cancelPointer(view, event));
   on(canvas, 'lostpointercapture', event => cancelPointer(view, event));
-  on(canvas, 'pointerleave', () => { if (!view.pointers.size) { view.hoverId = null; invalidate(view); } });
+  on(canvas, 'pointerleave', () => { if (!view.pointers.size) { view.hoverId = null; view.hoverLink = null; invalidate(view); } });
   on(canvas, 'contextmenu', event => {
     event.preventDefault();
     clearTimeout(view.longPress);
@@ -104,6 +105,11 @@ export function update(id, data) {
     view.filter = 'all';
     view.query = '';
     view.sprites.clear();
+    view.births.clear();
+    view.deaths = [];
+    view.known = new Set();
+    view.lastBodies = new Map();
+    view.hoverLink = null;
   } else {
     view.layout.update(data);
   }
@@ -111,7 +117,48 @@ export function update(id, data) {
   if (!view.layout.byId.has(view.selectedId)) { view.selectedId = null; view.mode = 'all'; }
   if (!view.layout.byId.has(view.hoverId)) view.hoverId = null;
   if (view.diveId && !view.layout.byId.has(view.diveId)) clearDive(view);
+  syncLife(view, changedSpace);
   wake(view);
+}
+
+function syncLife(view, changedSpace) {
+  const next = new Set(view.layout.byId.keys());
+  if (changedSpace || view.media.matches) {
+    view.births.clear();
+    view.deaths = [];
+    view.known = next;
+    rememberBodies(view);
+    return;
+  }
+  const { born, died } = lifeDiff(view.known, next);
+  const now = performance.now();
+  for (const id of born) view.births.set(id, now);
+  for (const node of view.layout.nodes) {
+    const prior = view.lastBodies.get(node.id);
+    if (prior?.missing && !node.missing) view.births.set(node.id, now);
+  }
+  for (const id of died) {
+    const prior = view.lastBodies.get(id);
+    if (!prior) continue;
+    view.deaths.push({ ...prior, at: now });
+  }
+  view.known = next;
+  rememberBodies(view);
+}
+
+function rememberBodies(view) {
+  view.lastBodies = new Map(view.layout.nodes.map(node => [node.id, {
+    id: node.id, x: node.x, y: node.y, radius: node.radius, kind: node.kind, title: node.title,
+    color: colorFor(node, 0), missing: !!node.missing,
+  }]));
+}
+
+function birthProgress(view, id, now) {
+  const at = view.births.get(id);
+  if (at == null) return 1;
+  const amount = clamp((now - at) / 780, 0, 1);
+  if (amount >= 1) view.births.delete(id);
+  return amount;
 }
 
 export function configure(id, settings) {
@@ -329,10 +376,10 @@ function fitCamera(view) {
       Math.max(80, view.height - 140) / Math.max(120, bottom - top)), scaleMin, 1.35) };
 }
 
-function moveCamera(view, camera) {
+function moveCamera(view, camera, duration = 260) {
   view.zoomTo = view.zoomAnchor = view.zoomScreen = null;
   if (view.media.matches) { view.camera = { ...camera }; view.flight = null; }
-  else view.flight = { from: { ...view.camera }, to: { ...camera }, started: performance.now() };
+  else view.flight = { from: { ...view.camera }, to: { ...camera }, started: performance.now(), duration };
   wake(view);
 }
 
@@ -463,6 +510,35 @@ function hitMini(rect, point) {
     && point.y >= rect.y && point.y <= rect.y + rect.height;
 }
 
+function linkKey(from, to) {
+  return from < to ? `${from}|${to}` : `${to}|${from}`;
+}
+
+function hitWormhole(view, x, y, touch = false) {
+  let winner = null;
+  let closest = touch ? 16 : 9;
+  for (const link of view.layout.links) {
+    const source = screen(view, link.source);
+    const target = screen(view, link.target);
+    const distance = pointToSegment(x, y, source.x, source.y, target.x, target.y);
+    if (distance < closest) {
+      winner = link;
+      closest = distance;
+    }
+  }
+  return winner;
+}
+
+function travelWormhole(view, link, point) {
+  const source = { ...screen(view, link.source), node: link.source };
+  const target = { ...screen(view, link.target), node: link.target };
+  const pick = wormholeDestination(source, target, point).node;
+  focus(view.id, pick.id);
+  if (view.flight) view.flight.duration = 560;
+  select(view.id, pick.id);
+  notify(view, 'OnSelect', pick.id);
+}
+
 function jumpMini(view, mini, point, animate) {
   const worldPoint = miniToWorld(point, mini.bounds, mini.rect);
   if (animate) moveCamera(view, { x: worldPoint.x, y: worldPoint.y, scale: view.camera.scale });
@@ -497,7 +573,8 @@ function pointerDown(view, event) {
     return;
   }
   const node = hit(view, point.x, point.y, event.pointerType === 'touch');
-  view.gesture = { kind: 'pending', start: point, last: point, nodeId: node?.id, suppress: false };
+  const wormhole = node ? null : hitWormhole(view, point.x, point.y, event.pointerType === 'touch');
+  view.gesture = { kind: 'pending', start: point, last: point, nodeId: node?.id, wormhole, suppress: false };
   if (event.pointerType === 'touch') {
     view.longPress = setTimeout(() => {
       if (view.gesture?.kind !== 'pending') return;
@@ -514,13 +591,19 @@ function pointerMove(view, event) {
     if (event.pointerType !== 'touch') {
       const mini = miniState(view);
       if (mini && hitMini(mini.rect, point)) {
-        if (view.hoverId) { view.hoverId = null; wake(view); }
+        if (view.hoverId || view.hoverLink) { view.hoverId = null; view.hoverLink = null; wake(view); }
         view.canvas.style.cursor = 'pointer';
         return;
       }
       const hovered = hit(view, point.x, point.y)?.id ?? null;
-      if (hovered !== view.hoverId) { view.hoverId = hovered; wake(view); }
-      view.canvas.style.cursor = hovered ? 'pointer' : 'grab';
+      const link = hovered ? null : hitWormhole(view, point.x, point.y);
+      const pair = link ? linkKey(link.source.id, link.target.id) : null;
+      if (hovered !== view.hoverId || pair !== view.hoverLink) {
+        view.hoverId = hovered;
+        view.hoverLink = pair;
+        wake(view);
+      }
+      view.canvas.style.cursor = hovered || link ? 'pointer' : 'grab';
     }
     return;
   }
@@ -581,8 +664,15 @@ function pointerUp(view, event) {
     const point = local(view, event);
     if (Math.hypot(point.x - gesture.start.x, point.y - gesture.start.y) <= 6) {
       const nodeId = hit(view, point.x, point.y, event.pointerType === 'touch')?.id ?? null;
-      select(view.id, nodeId);
-      notify(view, 'OnSelect', nodeId);
+      if (nodeId) {
+        select(view.id, nodeId);
+        notify(view, 'OnSelect', nodeId);
+      } else if (gesture.wormhole) {
+        travelWormhole(view, gesture.wormhole, point);
+      } else {
+        select(view.id, null);
+        notify(view, 'OnSelect', null);
+      }
     }
   }
   view.gesture = view.pointers.size ? { kind: 'cancelled', suppress: true } : null;
@@ -669,7 +759,8 @@ function frame(view, time) {
   if (view.initialFit) view.camera = fitCamera(view);
   applyZoomLerp(view);
   if (view.flight) {
-    const progress = clamp((time - view.flight.started) / 260, 0, 1);
+    const duration = Math.max(1, view.flight.duration || 260);
+    const progress = clamp((time - view.flight.started) / duration, 0, 1);
     const eased = 1 - (1 - progress) ** 3;
     for (const key of ['x', 'y', 'scale']) view.camera[key] = view.flight.from[key] + (view.flight.to[key] - view.flight.from[key]) * eased;
     if (progress === 1) { view.camera = { ...view.flight.to }; view.flight = null; syncDive(view); }
@@ -681,8 +772,11 @@ function frame(view, time) {
       vx: (fromLeft ? 1 : -1) * (240 + Math.random() * 180), vy: 70 + Math.random() * 70, born: time, life: 1100 });
   }
   draw(view, clock);
+  rememberBodies(view);
   view.frames++;
-  const animating = (!still && !view.pointers.size) || (view.layout.active && !view.pointers.size) || view.flight || view.zoomTo != null;
+  const living = !view.media.matches && (view.births.size > 0 || view.deaths.length > 0);
+  const animating = (!still && !view.pointers.size) || (view.layout.active && !view.pointers.size)
+    || view.flight || view.zoomTo != null || living;
   if (animating) invalidate(view);
   else if (!view.pointers.size) { view.initialFit = false; save(view); }
   if (time - view.lastSave > 4000) { view.lastSave = time; save(view); }
@@ -840,88 +934,156 @@ function drawGalacticHalo(view, item, time, alpha) {
 }
 
 function drawSupermassiveCore(view, item, time, alpha) {
+  drawKerrHole(view, item, time, alpha, true);
+}
+
+function drawBlackHole(view, item, time, alpha) {
+  drawKerrHole(view, item, time, alpha, false);
+}
+
+function drawKerrHole(view, item, time, alpha, massive) {
   const { x, y, radius, node } = item;
   const context = view.context;
   const reduced = frozen(view);
   const heat = heatFor(view, node);
-  const spin = reduced ? hash(node.id) % 1000 : time * 0.00055 + hash(node.id);
-  const pulse = reduced ? 1 : 1 + Math.sin(time * 0.0018 + hash(node.id) % 80) * (0.05 + heat * 0.04);
-  const rx = radius * 1.22;
-  const ry = radius * 0.42;
+  const spin = reduced ? hash(node.id) % 1000 : time * (massive ? 0.00042 : 0.0009) + hash(node.id);
+  const pulse = reduced ? 1 : 1 + Math.sin(time * (massive ? 0.0014 : 0.0026) + hash(node.id) % 80) * (0.04 + heat * 0.05);
+  const tilt = massive ? -0.16 : -0.28 - (hash(node.id) % 18) / 90;
+  const hole = radius * (massive ? 0.48 : 0.58);
+  const rx = hole * (massive ? 2.4 : 2.15);
+  const ry = hole * (massive ? 0.78 : 0.88);
   context.save();
   context.globalAlpha = alpha;
-  const corona = context.createRadialGradient(x, y, radius * 0.15, x, y, radius * 2.4);
-  corona.addColorStop(0, '#0a0614f0');
-  corona.addColorStop(0.22, (heat > 0 ? mixHex('#3a1860', '#ff6a24', heat * 0.5) : '#2a1458') + '99');
-  corona.addColorStop(0.5, '#7ecbff22');
+  const corona = context.createRadialGradient(x, y, hole * 0.4, x, y, radius * (massive ? 2.8 : 3.2));
+  corona.addColorStop(0, massive ? '#08040ee8' : '#10060cd0');
+  corona.addColorStop(0.22, (heat > 0 ? mixHex(massive ? '#3a1860' : '#5a1a3a', '#ff6a24', heat * 0.55) : massive ? '#24103a' : '#4a1428') + '88');
+  corona.addColorStop(0.48, (massive ? '#7ecbff' : '#ff8a3a') + '24');
   corona.addColorStop(1, '#00000000');
   context.fillStyle = corona;
-  context.beginPath(); context.arc(x, y, radius * 2.4 * pulse, 0, Math.PI * 2); context.fill();
+  context.beginPath(); context.arc(x, y, radius * (massive ? 2.8 : 3.2) * pulse, 0, Math.PI * 2); context.fill();
   context.translate(x, y);
-  context.rotate(-0.2);
-  const jetGlow = context.createLinearGradient(0, -radius * 3.2, 0, radius * 3.2);
-  jetGlow.addColorStop(0, '#9ecbff00');
-  jetGlow.addColorStop(0.28, '#c9e7ff55');
-  jetGlow.addColorStop(0.5, '#ffffff00');
-  jetGlow.addColorStop(0.72, '#c9e7ff55');
-  jetGlow.addColorStop(1, '#9ecbff00');
-  context.strokeStyle = jetGlow;
-  context.lineWidth = Math.max(3, radius * 0.12);
-  context.lineCap = 'round';
-  context.beginPath();
-  context.moveTo(0, -radius * 3.1); context.lineTo(0, -radius * 0.72);
-  context.moveTo(0, radius * 0.72); context.lineTo(0, radius * 3.1);
-  context.stroke();
-  context.lineCap = 'butt';
-  context.strokeStyle = '#e8f4ffaa';
-  context.lineWidth = Math.max(1.2, radius * 0.035);
-  context.beginPath();
-  context.moveTo(0, -radius * 2.7); context.lineTo(0, -radius * 0.78);
-  context.moveTo(0, radius * 0.78); context.lineTo(0, radius * 2.7);
-  context.stroke();
-  const paintDisk = (start, sweep, inner) => {
-    const band = context.createLinearGradient(-rx, 0, rx, 0);
-    band.addColorStop(0, '#1c3a6eee');
-    band.addColorStop(0.16, '#4aa3ffcc');
-    band.addColorStop(0.38, '#ffe29a');
-    band.addColorStop(0.5, '#fff6e8');
-    band.addColorStop(0.62, '#ffd27a');
-    band.addColorStop(0.84, '#ff6b3dcc');
-    band.addColorStop(1, '#4a1408ee');
-    context.strokeStyle = band;
-    context.lineWidth = Math.max(3.5, radius * (inner ? 0.16 : 0.32));
-    if (!reduced && !inner) {
-      context.setLineDash([radius * 1.1, radius * 0.45]);
-      context.lineDashOffset = -spin * radius * 0.18;
-    }
-    context.beginPath(); context.ellipse(0, 0, inner ? rx * 0.62 : rx, inner ? ry * 0.62 : ry, 0, start, start + sweep); context.stroke();
-    context.setLineDash([]);
-  };
-  paintDisk(Math.PI, Math.PI, false);
-  paintDisk(Math.PI, Math.PI, true);
-  const shadow = context.createRadialGradient(-radius * 0.1, -radius * 0.08, radius * 0.05, 0, 0, radius * 0.58);
-  shadow.addColorStop(0, '#1a121c');
-  shadow.addColorStop(0.42, '#050208');
+  context.rotate(tilt);
+  if (massive) {
+    drawRelativisticJet(context, radius, spin, false);
+    drawRelativisticJet(context, radius, spin, true);
+  }
+  drawAccretionBand(context, rx, ry, hole, spin, massive, Math.PI, Math.PI);
+  drawLensedWrap(context, hole, rx, ry, massive);
+  const shadow = context.createRadialGradient(-hole * 0.18, -hole * 0.16, hole * 0.04, 0, 0, hole);
+  shadow.addColorStop(0, massive ? '#14081c' : '#1a1014');
+  shadow.addColorStop(0.38, '#050208');
   shadow.addColorStop(1, '#000000');
   context.fillStyle = shadow;
-  context.beginPath(); context.arc(0, 0, radius * 0.55, 0, Math.PI * 2); context.fill();
-  const crescent = context.createRadialGradient(radius * 0.14, -radius * 0.05, radius * 0.03, 0, 0, radius * 0.55);
-  crescent.addColorStop(0, '#00000000');
-  crescent.addColorStop(0.55, '#00000000');
-  crescent.addColorStop(0.78, '#ffe7b866');
-  crescent.addColorStop(1, '#fff4d400');
-  context.fillStyle = crescent;
-  context.beginPath(); context.arc(0, 0, radius * 0.55, 0, Math.PI * 2); context.fill();
-  context.strokeStyle = '#fff6d8';
-  context.globalAlpha = alpha * (reduced ? 0.9 : 0.78 + Math.sin(time * 0.003) * 0.12);
-  context.lineWidth = Math.max(2, radius * 0.07);
-  context.beginPath(); context.arc(0, 0, radius * 0.62, 0, Math.PI * 2); context.stroke();
+  context.beginPath(); context.arc(0, 0, hole, 0, Math.PI * 2); context.fill();
+  const photon = context.createRadialGradient(0, 0, hole * 0.92, 0, 0, hole * 1.16);
+  photon.addColorStop(0, '#00000000');
+  photon.addColorStop(0.55, massive ? '#fff4d8cc' : '#ffe7b8aa');
+  photon.addColorStop(0.78, massive ? '#9ecbff66' : '#ffb14e55');
+  photon.addColorStop(1, '#00000000');
+  context.fillStyle = photon;
+  context.beginPath(); context.arc(0, 0, hole * 1.16, 0, Math.PI * 2); context.fill();
+  context.strokeStyle = massive ? '#f8fbff' : '#fff6d8';
+  context.globalAlpha = alpha * (reduced ? 0.95 : 0.82 + Math.sin(time * 0.0032) * 0.1);
+  context.lineWidth = Math.max(1.4, hole * (massive ? 0.085 : 0.07));
+  context.beginPath(); context.arc(0, 0, hole * 1.04, 0, Math.PI * 2); context.stroke();
   context.globalAlpha = alpha;
-  context.strokeStyle = '#9ecbff88';
-  context.lineWidth = Math.max(1, radius * 0.03);
-  context.beginPath(); context.arc(0, 0, radius * 0.7, 0, Math.PI * 2); context.stroke();
-  paintDisk(0, Math.PI, false);
-  paintDisk(0, Math.PI, true);
+  if (massive) {
+    context.strokeStyle = '#9ecbff55';
+    context.lineWidth = Math.max(1, hole * 0.04);
+    context.beginPath(); context.arc(0, 0, hole * 1.14, 0, Math.PI * 2); context.stroke();
+  }
+  drawAccretionBand(context, rx, ry, hole, spin, massive, 0, Math.PI);
+  context.restore();
+}
+
+function drawAccretionBand(context, rx, ry, hole, spin, massive, start, sweep) {
+  context.save();
+  context.beginPath();
+  context.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+  context.ellipse(0, 0, hole * 1.02, Math.max(1, hole * (ry / rx) * 1.02), 0, 0, Math.PI * 2, true);
+  context.clip('evenodd');
+  context.beginPath();
+  context.rect(-rx - 2, start === 0 ? 0 : -ry - 2, rx * 2 + 4, ry + 2);
+  context.clip();
+  const shift = Math.sin(spin) * rx * 0.06;
+  const band = context.createLinearGradient(-rx + shift, 0, rx + shift, 0);
+  if (massive) {
+    band.addColorStop(0, '#081428');
+    band.addColorStop(0.14, '#1c4a8a');
+    band.addColorStop(0.32, '#7ecbff');
+    band.addColorStop(0.46, '#fff7e4');
+    band.addColorStop(0.54, '#ffe29a');
+    band.addColorStop(0.7, '#ff8a3a');
+    band.addColorStop(0.88, '#8a220c');
+    band.addColorStop(1, '#2a0808');
+  } else {
+    band.addColorStop(0, '#2a0c08');
+    band.addColorStop(0.16, '#c43a12');
+    band.addColorStop(0.34, '#ff7a2c');
+    band.addColorStop(0.48, '#ffe29a');
+    band.addColorStop(0.56, '#fff4d8');
+    band.addColorStop(0.7, '#ff9a4a');
+    band.addColorStop(0.86, '#8a240c');
+    band.addColorStop(1, '#240804');
+  }
+  context.fillStyle = band;
+  context.fillRect(-rx, -ry, rx * 2, ry * 2);
+  context.restore();
+  context.strokeStyle = massive ? '#d4ecff66' : '#ffd7a366';
+  context.lineWidth = Math.max(1, ry * 0.16);
+  context.beginPath(); context.ellipse(0, 0, rx, ry, 0, start, start + sweep); context.stroke();
+}
+
+function drawLensedWrap(context, hole, rx, ry, massive) {
+  context.save();
+  const wrap = context.createLinearGradient(-hole, 0, hole, 0);
+  wrap.addColorStop(0, massive ? '#4aa3ff00' : '#ff6b3d00');
+  wrap.addColorStop(0.35, massive ? '#c9e7ffcc' : '#ffe29acc');
+  wrap.addColorStop(0.5, '#fffaf0');
+  wrap.addColorStop(0.65, massive ? '#ffd27acc' : '#ff9a4acc');
+  wrap.addColorStop(1, massive ? '#4aa3ff00' : '#ff6b3d00');
+  context.strokeStyle = wrap;
+  context.lineWidth = Math.max(2, hole * (massive ? 0.16 : 0.14));
+  context.lineCap = 'round';
+  context.beginPath();
+  context.ellipse(0, 0, hole * 0.98, hole * 0.98, 0, -Math.PI * 0.78, -Math.PI * 0.22);
+  context.stroke();
+  context.lineWidth = Math.max(1.2, hole * 0.08);
+  context.beginPath();
+  context.ellipse(0, 0, hole * 0.98, hole * 0.98, 0, Math.PI * 0.22, Math.PI * 0.78);
+  context.stroke();
+  context.restore();
+}
+
+function drawRelativisticJet(context, radius, spin, down) {
+  context.save();
+  context.rotate(down ? Math.PI : 0);
+  context.rotate(Math.sin(spin) * 0.04);
+  const length = radius * 3.15;
+  const jet = context.createLinearGradient(0, -radius * 0.55, 0, -length);
+  jet.addColorStop(0, '#ffffffd8');
+  jet.addColorStop(0.08, '#e8f4ffcc');
+  jet.addColorStop(0.22, '#9ecbff88');
+  jet.addColorStop(0.55, '#6a8cff33');
+  jet.addColorStop(1, '#7ecbff00');
+  context.fillStyle = jet;
+  context.beginPath();
+  context.moveTo(-radius * 0.11, -radius * 0.55);
+  context.lineTo(radius * 0.11, -radius * 0.55);
+  context.lineTo(radius * 0.028, -length);
+  context.lineTo(-radius * 0.028, -length);
+  context.closePath();
+  context.fill();
+  const core = context.createLinearGradient(0, -radius * 0.55, 0, -length * 0.72);
+  core.addColorStop(0, '#ffffffee');
+  core.addColorStop(1, '#9ecbff00');
+  context.strokeStyle = core;
+  context.lineWidth = Math.max(1.2, radius * 0.04);
+  context.lineCap = 'round';
+  context.beginPath();
+  context.moveTo(0, -radius * 0.62);
+  context.lineTo(0, -length * 0.78);
+  context.stroke();
   context.restore();
 }
 
@@ -977,69 +1139,6 @@ function galaxySprite(view) {
   view.sprites.set(key, canvas);
   return canvas;
 }
-
-function drawBlackHole(view, item, time, alpha) {
-  const { x, y, radius, node } = item;
-  const context = view.context;
-  const reduced = frozen(view);
-  const heat = heatFor(view, node);
-  const spin = reduced ? hash(node.id) % 1000 : time * 0.0011 + hash(node.id);
-  const pulse = reduced ? 1 : 1 + Math.sin(time * 0.003 + hash(node.id) % 80) * (0.08 + heat * 0.06);
-  const rx = radius * 1.55;
-  const ry = radius * 0.48;
-  context.save();
-  context.globalAlpha = alpha;
-  const haze = context.createRadialGradient(x, y, radius * 0.2, x, y, radius * 3.1);
-  haze.addColorStop(0, '#140818d8');
-  haze.addColorStop(0.28, (heat > 0 ? mixHex('#5a1a7a', '#ff6a24', heat * 0.7) : '#5a1a7a') + '66');
-  haze.addColorStop(0.55, (heat > 0 ? mixHex('#ff6a24', '#ffe29a', heat) : '#ff6a24') + '28');
-  haze.addColorStop(1, '#00000000');
-  context.fillStyle = haze;
-  context.beginPath(); context.arc(x, y, radius * 3.1 * pulse, 0, Math.PI * 2); context.fill();
-  context.translate(x, y);
-  context.rotate(-0.38);
-  context.strokeStyle = '#9ecbff3a';
-  context.lineWidth = Math.max(1, radius * 0.07);
-  context.beginPath();
-  context.moveTo(0, -radius * 2.6); context.lineTo(0, -radius * 0.95);
-  context.moveTo(0, radius * 0.95); context.lineTo(0, radius * 2.6);
-  context.stroke();
-  const paintDisk = (start, sweep) => {
-    const band = context.createLinearGradient(-rx, 0, rx, 0);
-    band.addColorStop(0, '#4aa3ffee');
-    band.addColorStop(0.18, '#ff4c2ccc');
-    band.addColorStop(0.5, '#ffe29a');
-    band.addColorStop(0.82, '#ff6b3dcc');
-    band.addColorStop(1, '#6a1408ee');
-    context.strokeStyle = band;
-    context.lineWidth = Math.max(3, radius * 0.42);
-    context.setLineDash([radius * 0.85, radius * 0.35]);
-    context.lineDashOffset = -spin * radius * 0.25;
-    context.beginPath(); context.ellipse(0, 0, rx, ry, 0, start, start + sweep); context.stroke();
-    context.setLineDash([]);
-    context.strokeStyle = `rgba(255,236,210,${0.5 + Math.sin(spin) * 0.12})`;
-    context.lineWidth = Math.max(1.2, radius * 0.14);
-    context.beginPath(); context.ellipse(0, 0, rx * 0.7, ry * 0.7, 0, start, start + sweep); context.stroke();
-  };
-  paintDisk(Math.PI, Math.PI);
-  const hole = context.createRadialGradient(-radius * 0.12, -radius * 0.1, radius * 0.08, 0, 0, radius * 0.78);
-  hole.addColorStop(0, '#1a1018');
-  hole.addColorStop(0.45, '#050208');
-  hole.addColorStop(1, '#000000');
-  context.fillStyle = hole;
-  context.beginPath(); context.arc(0, 0, radius * 0.78, 0, Math.PI * 2); context.fill();
-  context.strokeStyle = '#ffe7b8';
-  context.globalAlpha = alpha * (reduced ? 0.85 : 0.7 + Math.sin(time * 0.0045) * 0.2);
-  context.lineWidth = Math.max(1.5, radius * 0.09);
-  context.beginPath(); context.arc(0, 0, radius * 0.84, 0, Math.PI * 2); context.stroke();
-  context.globalAlpha = alpha;
-  context.strokeStyle = '#ffffff55';
-  context.lineWidth = Math.max(0.8, radius * 0.04);
-  context.beginPath(); context.arc(0, 0, radius * 0.9, 0, Math.PI * 2); context.stroke();
-  paintDisk(0, Math.PI);
-  context.restore();
-}
-
 
 function drawStars(view, time) {
   if (!view.stars.length) return;
@@ -1135,7 +1234,8 @@ function draw(view, time = performance.now()) {
     if (!source || !target) continue;
     if ((source.x < 0 && target.x < 0) || (source.x > view.width && target.x > view.width)
       || (source.y < 0 && target.y < 0) || (source.y > view.height && target.y > view.height)) continue;
-    const highlighted = source.node.id === focusId || target.node.id === focusId;
+    const highlighted = source.node.id === focusId || target.node.id === focusId
+      || view.hoverLink === linkKey(source.node.id, target.node.id);
     drawWormhole(context, source, target, time, highlighted, reduced, focusId || view.query);
     if (highlighted) {
       if (directed.has(JSON.stringify([source.node.id, target.node.id]))) arrow(context, source, target);
@@ -1144,9 +1244,13 @@ function draw(view, time = performance.now()) {
   }
   for (const item of view.screenNodes) {
     const { node, x, y, radius, alpha } = item;
+    const ignite = view.media.matches ? 1 : birthProgress(view, node.id, performance.now());
+    const grow = 0.18 + ignite * 0.82;
+    item.radius = radius * grow;
     const heat = heatFor(view, node);
     const color = colorFor(node, heat);
-    context.globalAlpha = alpha;
+    context.globalAlpha = alpha * Math.max(0.2, ignite);
+    if (ignite < 1) drawIgnite(view, item, ignite, color);
     if (node.missing) {
       drawGhostMoon(view, item);
     } else if (node.kind === 'galaxy') {
@@ -1156,30 +1260,93 @@ function draw(view, time = performance.now()) {
     } else if (node.kind === 'sun') {
       const pulse = reduced ? 1 : 1 + Math.sin(time * 0.0012 + hash(node.id) % 1000) * (0.16 + heat * 0.1);
       const glowScale = 2.6 + heat * 1.15;
-      const glow = context.createRadialGradient(x, y, radius * 0.3, x, y, radius * glowScale * pulse);
+      const glow = context.createRadialGradient(x, y, item.radius * 0.3, x, y, item.radius * glowScale * pulse);
       glow.addColorStop(0, color + (heat > 0.25 ? 'e8' : 'b0'));
       glow.addColorStop(1, color + '00');
       context.fillStyle = glow;
-      context.beginPath(); context.arc(x, y, radius * glowScale * pulse, 0, Math.PI * 2); context.fill();
+      context.beginPath(); context.arc(x, y, item.radius * glowScale * pulse, 0, Math.PI * 2); context.fill();
     } else if (node.kind === 'planet' && hash(node.id) % 3 === 0) {
-      context.strokeStyle = color + '80'; context.lineWidth = Math.max(1, radius * 0.16);
-      context.beginPath(); context.ellipse(x, y, radius * 1.75, radius * 0.55, 0.5, 0, Math.PI * 2); context.stroke();
+      context.strokeStyle = color + '80'; context.lineWidth = Math.max(1, item.radius * 0.16);
+      context.beginPath(); context.ellipse(x, y, item.radius * 1.75, item.radius * 0.55, 0.5, 0, Math.PI * 2); context.stroke();
     }
-    context.globalAlpha = alpha;
+    context.globalAlpha = alpha * Math.max(0.2, ignite);
     if (node.id === view.selectedId || node.id === view.hoverId) {
       context.strokeStyle = node.id === view.selectedId ? '#ffffff' : '#9ba6b3';
       context.lineWidth = node.id === view.selectedId ? 1.7 : 1;
       const halo = item.expanded ? 16 : node.kind === 'galaxy' ? 10 : node.kind === 'blackhole' ? 8 : 5;
-      context.beginPath(); context.arc(x, y, radius + halo, 0, Math.PI * 2); context.stroke();
+      context.beginPath(); context.arc(x, y, item.radius + halo, 0, Math.PI * 2); context.stroke();
     }
     if (!node.missing && node.kind !== 'blackhole' && node.kind !== 'galaxy') {
-      context.drawImage(sprite(view, color, node.kind, node.radius), x - radius, y - radius, radius * 2, radius * 2);
+      context.drawImage(sprite(view, color, node.kind, node.radius), x - item.radius, y - item.radius, item.radius * 2, item.radius * 2);
     }
     if (node.id === view.currentId && !node.missing) drawLighthouse(view, item, time, reduced);
   }
+  drawDeaths(view);
   labels(view);
   drawMiniMap(view);
   context.globalAlpha = 1;
+}
+
+function drawIgnite(view, item, amount, color) {
+  const { x, y, radius, node } = item;
+  const context = view.context;
+  const dust = 1 - amount;
+  const seed = hash(node.id);
+  context.save();
+  for (let index = 0; index < 8; index++) {
+    const angle = (seed + index * 2.4) + amount * 2.1;
+    const reach = radius * (2.8 + (index % 3) * 0.7) * dust;
+    const px = x + Math.cos(angle) * reach;
+    const py = y + Math.sin(angle) * reach;
+    context.globalAlpha = item.alpha * dust * 0.85;
+    context.fillStyle = index % 2 ? '#f4e4c4' : color;
+    context.beginPath();
+    context.arc(px, py, Math.max(1.1, radius * 0.18 * dust), 0, Math.PI * 2);
+    context.fill();
+  }
+  const glow = context.createRadialGradient(x, y, 0, x, y, radius * 5 * dust + 8);
+  glow.addColorStop(0, '#fff6d8aa');
+  glow.addColorStop(1, '#fff6d800');
+  context.globalAlpha = item.alpha * dust;
+  context.fillStyle = glow;
+  context.beginPath(); context.arc(x, y, radius * 5 * dust + 8, 0, Math.PI * 2); context.fill();
+  context.restore();
+}
+
+function drawDeaths(view) {
+  const now = performance.now();
+  const context = view.context;
+  const life = 920;
+  view.deaths = view.deaths.filter(death => now - death.at < life);
+  for (const death of view.deaths) {
+    const t = clamp((now - death.at) / life, 0, 1);
+    const point = screen(view, death);
+    const radius = Math.max(4, (death.radius || 8) * view.camera.scale);
+    const shock = radius * (1 + t * 4.8);
+    context.save();
+    context.globalAlpha = (1 - t) * 0.9;
+    context.strokeStyle = '#ffd7a3';
+    context.lineWidth = Math.max(1.2, 3.2 * (1 - t));
+    context.beginPath(); context.arc(point.x, point.y, shock, 0, Math.PI * 2); context.stroke();
+    const flash = context.createRadialGradient(point.x, point.y, 0, point.x, point.y, shock);
+    flash.addColorStop(0, `rgba(255,244,210,${0.55 * (1 - t)})`);
+    flash.addColorStop(0.35, `rgba(255,140,70,${0.28 * (1 - t)})`);
+    flash.addColorStop(1, 'rgba(255,80,40,0)');
+    context.fillStyle = flash;
+    context.beginPath(); context.arc(point.x, point.y, shock, 0, Math.PI * 2); context.fill();
+    const seed = hash(death.id);
+    for (let index = 0; index < 10; index++) {
+      const angle = seed + index * 0.66;
+      const dist = radius * (0.6 + t * 5.5) * (0.65 + (hash(death.id + ':' + index) % 40) / 100);
+      context.fillStyle = index % 3 ? '#ffe7c2' : (death.color || '#ffb14e');
+      context.globalAlpha = (1 - t) * 0.8;
+      context.beginPath();
+      context.arc(point.x + Math.cos(angle) * dist, point.y + Math.sin(angle) * dist,
+        Math.max(1.2, radius * 0.22 * (1 - t)), 0, Math.PI * 2);
+      context.fill();
+    }
+    context.restore();
+  }
 }
 
 function drawWormhole(context, source, target, time, highlighted, reduced, dimmed) {

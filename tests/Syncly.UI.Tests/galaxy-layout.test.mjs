@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collapsed, createLayout, diveCrumbs, kindFor, lodHidden, lodOpen, miniMapBounds, miniMapRect, miniToWorld, miniViewport, radiusFor, recencyHeat, restorePositions, sunColorFor, worldToMini } from '../../src/Syncly.UI/wwwroot/js/galaxy-layout.mjs';
+import { collapsed, createLayout, diveCrumbs, kindFor, lifeDiff, lodHidden, lodOpen, miniMapBounds, miniMapRect, miniToWorld, miniViewport, pointToSegment, radiusFor, recencyHeat, restorePositions, sunColorFor, wormholeDestination, worldToMini } from '../../src/Syncly.UI/wwwroot/js/galaxy-layout.mjs';
 
 const fixture = () => ({
   nodes: [{ id: 'parent' }, { id: 'child', parentId: 'parent' }, { id: 'other' }, { id: 'isolated' }],
@@ -297,4 +297,19 @@ test('mini-map mapping keeps the camera view inside the radar', () => {
   const click = miniToWorld(mapped, bounds, rect);
   assert.ok(Math.abs(click.x - 100) < 1e-6);
   assert.ok(Math.abs(click.y - 0) < 1e-6);
+});
+
+test('lifeDiff skips the first load and reports later births and deaths', () => {
+  assert.deepEqual(lifeDiff(new Set(), new Set(['a', 'b'])), { born: [], died: [] });
+  assert.deepEqual(lifeDiff(new Set(['a', 'b']), new Set(['b', 'c'])), { born: ['c'], died: ['a'] });
+  assert.deepEqual(lifeDiff(new Set(['a']), new Set(['a'])), { born: [], died: [] });
+});
+
+test('wormhole destination is the farther portal from the click', () => {
+  const source = { x: 0, y: 0, id: 'a' };
+  const target = { x: 100, y: 0, id: 'b' };
+  assert.equal(wormholeDestination(source, target, { x: 5, y: 0 }).id, 'b');
+  assert.equal(wormholeDestination(source, target, { x: 90, y: 0 }).id, 'a');
+  assert.equal(pointToSegment(50, 0, 0, 0, 100, 0), 0);
+  assert.ok(Math.abs(pointToSegment(50, 8, 0, 0, 100, 0) - 8) < 1e-6);
 });
