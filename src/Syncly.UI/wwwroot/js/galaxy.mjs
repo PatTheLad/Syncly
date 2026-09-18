@@ -1,4 +1,4 @@
-import { collapsed, createLayout, hash, lodHidden, lodOpen, openAmount, recencyHeat, sunColorFor, sunHighlightFor, sunRimFor } from './galaxy-layout.mjs';
+import { collapsed, createLayout, diveCrumbs, hash, lodHidden, lodOpen, miniMapBounds, miniMapRect, miniToWorld, miniViewport, openAmount, recencyHeat, sunColorFor, sunHighlightFor, sunRimFor, worldToMini } from './galaxy-layout.mjs';
 
 const instances = new Map();
 const palettes = {
@@ -23,7 +23,7 @@ export function mount(id, dotnet) {
   const view = { id, canvas, context, dotnet, layout: createLayout(), spaceKey: null,
     width: 1, height: 1, dpr: 1, camera: { x: 0, y: 0, scale: 1 },
     currentId: null, selectedId: null, hoverId: null, diveId: null, zoomTo: null, zoomAnchor: null, zoomScreen: null, mode: 'all', filter: 'all', query: '',
-    options: { labels: stored?.labels !== false, recent: stored?.recent === true },
+    options: { labels: stored?.labels !== false, recent: stored?.recent === true, orbit: stored?.orbit !== false },
     frame: 0, disposed: false, initialFit: true, flight: null, overview: null,
     pointers: new Map(), gesture: null, longPress: 0, abort: new AbortController(),
     sprites: new Map(), labelWidths: new Map(), screenNodes: [], hitGrid: new Map(),
@@ -132,6 +132,7 @@ export function configure(id, settings) {
   if (settings.query !== undefined) view.query = settings.query.trim().toLocaleLowerCase();
   if (settings.labels !== undefined) view.options.labels = !!settings.labels;
   if (settings.recent !== undefined) view.options.recent = !!settings.recent;
+  if (settings.orbit !== undefined) view.options.orbit = !!settings.orbit;
   write(localStorage, optionsKey, view.options);
   wake(view);
 }
@@ -382,13 +383,20 @@ function setDive(view, node) {
   const id = node?.id ?? null;
   if (view.diveId === id) return;
   view.diveId = id;
-  notify(view, 'OnDive', id, node?.title ?? null);
+  notify(view, 'OnDive', id, diveCrumbs(view.layout.byId, id));
 }
 
 function clearDive(view) {
   if (!view.diveId) return;
   view.diveId = null;
-  notify(view, 'OnDive', null, null);
+  notify(view, 'OnDive', null, []);
+}
+
+function popDive(view) {
+  const node = view.layout.byId.get(view.diveId);
+  const parent = node?.parentId ? view.layout.byId.get(node.parentId) : null;
+  if (parent) focus(view.id, parent.id);
+  else fit(view.id);
 }
 
 function syncDive(view) {
@@ -438,6 +446,36 @@ function hit(view, x, y, touch = false) {
   return winner;
 }
 
+function miniCandidates(view) {
+  return view.layout.nodes.filter(node => visible(view, node)
+    && (node.depth <= 2 || node.kind === 'galaxy' || node.kind === 'blackhole' || node.kind === 'sun'
+      || node.id === view.currentId));
+}
+
+function miniState(view) {
+  const rect = miniMapRect(view.width, view.height);
+  if (!rect) return null;
+  return { rect, bounds: miniMapBounds(miniCandidates(view)) };
+}
+
+function hitMini(rect, point) {
+  return point.x >= rect.x && point.x <= rect.x + rect.width
+    && point.y >= rect.y && point.y <= rect.y + rect.height;
+}
+
+function jumpMini(view, mini, point, animate) {
+  const worldPoint = miniToWorld(point, mini.bounds, mini.rect);
+  if (animate) moveCamera(view, { x: worldPoint.x, y: worldPoint.y, scale: view.camera.scale });
+  else {
+    view.zoomTo = view.zoomAnchor = view.zoomScreen = null;
+    view.flight = null;
+    view.camera.x = worldPoint.x;
+    view.camera.y = worldPoint.y;
+    syncDive(view);
+    wake(view);
+  }
+}
+
 function pointerDown(view, event) {
   if (event.button !== 0) return;
   view.canvas.focus({ preventScroll: true });
@@ -451,6 +489,11 @@ function pointerDown(view, event) {
     const [first, second] = [...view.pointers.values()];
     view.gesture = { kind: 'pinch', distance: Math.hypot(first.x - second.x, first.y - second.y),
       midpoint: { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 }, suppress: true };
+    return;
+  }
+  const mini = miniState(view);
+  if (mini && hitMini(mini.rect, point)) {
+    view.gesture = { kind: 'minimap', start: point, last: point, suppress: true, dragged: false };
     return;
   }
   const node = hit(view, point.x, point.y, event.pointerType === 'touch');
@@ -469,6 +512,12 @@ function pointerMove(view, event) {
   const point = local(view, event);
   if (!view.pointers.has(event.pointerId)) {
     if (event.pointerType !== 'touch') {
+      const mini = miniState(view);
+      if (mini && hitMini(mini.rect, point)) {
+        if (view.hoverId) { view.hoverId = null; wake(view); }
+        view.canvas.style.cursor = 'pointer';
+        return;
+      }
       const hovered = hit(view, point.x, point.y)?.id ?? null;
       if (hovered !== view.hoverId) { view.hoverId = hovered; wake(view); }
       view.canvas.style.cursor = hovered ? 'pointer' : 'grab';
@@ -478,6 +527,16 @@ function pointerMove(view, event) {
   view.pointers.set(event.pointerId, point);
   const gesture = view.gesture;
   if (!gesture) return;
+  if (gesture.kind === 'minimap') {
+    if (Math.hypot(point.x - gesture.start.x, point.y - gesture.start.y) > 4) gesture.dragged = true;
+    if (gesture.dragged) {
+      const mini = miniState(view);
+      if (mini) jumpMini(view, mini, point, false);
+    }
+    view.canvas.style.cursor = 'grabbing';
+    wake(view);
+    return;
+  }
   if (gesture.kind === 'pinch') {
     const [first, second] = [...view.pointers.values()];
     if (!second) return;
@@ -515,7 +574,10 @@ function pointerUp(view, event) {
   clearTimeout(view.longPress);
   const gesture = view.gesture;
   view.pointers.delete(event.pointerId);
-  if (gesture?.kind === 'pending' && !gesture.suppress) {
+  if (gesture?.kind === 'minimap' && !gesture.dragged) {
+    const mini = miniState(view);
+    if (mini) jumpMini(view, mini, local(view, event), true);
+  } else if (gesture?.kind === 'pending' && !gesture.suppress) {
     const point = local(view, event);
     if (Math.hypot(point.x - gesture.start.x, point.y - gesture.start.y) <= 6) {
       const nodeId = hit(view, point.x, point.y, event.pointerType === 'touch')?.id ?? null;
@@ -542,13 +604,14 @@ function cancelPointer(view, event) {
 function keydown(view, event) {
   if (event.ctrlKey || event.metaKey || event.altKey) return;
   const key = event.key;
-  if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', 'Escape', 'Home', '+', '=', '-', '/', 'f', 'F'].includes(key)) return;
+  if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', 'Escape', 'Home', 'Backspace', '+', '=', '-', '/', 'f', 'F'].includes(key)) return;
   event.preventDefault();
   event.stopPropagation();
   if (key === 'Enter' && view.selectedId) notify(view, 'OnOpen', view.selectedId);
   else if (key === 'Escape') notify(view, 'OnEscape');
   else if (key === '/') notify(view, 'OnFocusSearch');
   else if (key === 'Home') fit(view.id);
+  else if (key === 'Backspace') popDive(view);
   else if (key === '+' || key === '=') zoom(view.id, 1.25);
   else if (key === '-') zoom(view.id, 0.8);
   else if (key.toLowerCase() === 'f' && view.selectedId) focus(view.id, view.selectedId);
@@ -566,6 +629,22 @@ function keydown(view, event) {
   }
 }
 
+function frozen(view) {
+  return view.media.matches || view.options.orbit === false;
+}
+
+function orbitClock(view, time) {
+  if (frozen(view)) {
+    view.orbitHold ??= time - (view.orbitShift || 0);
+    return view.orbitHold;
+  }
+  if (view.orbitHold != null) {
+    view.orbitShift = time - view.orbitHold;
+    view.orbitHold = null;
+  }
+  return time - (view.orbitShift || 0);
+}
+
 function invalidate(view) {
   if (!view.frame && !view.disposed && !document.hidden) view.frame = requestAnimationFrame(time => frame(view, time));
 }
@@ -578,15 +657,15 @@ function wake(view) {
 function frame(view, time) {
   view.frame = 0;
   if (view.disposed || document.hidden) return;
-  const reduced = view.media.matches;
+  const still = frozen(view);
+  const clock = orbitClock(view, time);
   const started = performance.now();
   while (view.layout.active && performance.now() - started < 4 && !view.pointers.size) {
     const tickStarted = performance.now();
     view.layout.tick();
     view.maxTickMs = Math.max(view.maxTickMs, performance.now() - tickStarted);
   }
-  const ambient = !reduced;
-  if (ambient) view.layout.orbit(time);
+  view.layout.orbit(clock);
   if (view.initialFit) view.camera = fitCamera(view);
   applyZoomLerp(view);
   if (view.flight) {
@@ -595,15 +674,15 @@ function frame(view, time) {
     for (const key of ['x', 'y', 'scale']) view.camera[key] = view.flight.from[key] + (view.flight.to[key] - view.flight.from[key]) * eased;
     if (progress === 1) { view.camera = { ...view.flight.to }; view.flight = null; syncDive(view); }
   }
-  if (ambient && !view.pointers.size && time >= view.nextComet) {
+  if (!still && !view.pointers.size && time >= view.nextComet) {
     view.nextComet = time + 7000 + Math.random() * 11000;
     const fromLeft = Math.random() < 0.5;
     view.comets.push({ x: fromLeft ? -30 : view.width + 30, y: Math.random() * view.height * 0.65,
       vx: (fromLeft ? 1 : -1) * (240 + Math.random() * 180), vy: 70 + Math.random() * 70, born: time, life: 1100 });
   }
-  draw(view, time);
+  draw(view, clock);
   view.frames++;
-  const animating = (ambient && !view.pointers.size) || (view.layout.active && !view.pointers.size) || view.flight || view.zoomTo != null;
+  const animating = (!still && !view.pointers.size) || (view.layout.active && !view.pointers.size) || view.flight || view.zoomTo != null;
   if (animating) invalidate(view);
   else if (!view.pointers.size) { view.initialFit = false; save(view); }
   if (time - view.lastSave > 4000) { view.lastSave = time; save(view); }
@@ -706,7 +785,7 @@ function drawGalaxy(view, item, time, alpha) {
 function drawGalaxyGlyph(view, item, time, alpha) {
   const { x, y, radius, node } = item;
   const context = view.context;
-  const reduced = view.media.matches;
+  const reduced = frozen(view);
   const spin = reduced ? (hash(node.id) % 628) / 100 : time * 0.00018 + hash(node.id);
   const heat = heatFor(view, node);
   context.save();
@@ -739,7 +818,7 @@ function drawGalaxyGlyph(view, item, time, alpha) {
 function drawGalacticHalo(view, item, time, alpha) {
   const { x, y, radius, node } = item;
   const context = view.context;
-  const reduced = view.media.matches;
+  const reduced = frozen(view);
   const spin = reduced ? (hash(node.id) % 628) / 100 : time * 0.00008 + hash(node.id);
   const heat = heatFor(view, node);
   const span = radius * 2.3;
@@ -763,7 +842,7 @@ function drawGalacticHalo(view, item, time, alpha) {
 function drawSupermassiveCore(view, item, time, alpha) {
   const { x, y, radius, node } = item;
   const context = view.context;
-  const reduced = view.media.matches;
+  const reduced = frozen(view);
   const heat = heatFor(view, node);
   const spin = reduced ? hash(node.id) % 1000 : time * 0.00055 + hash(node.id);
   const pulse = reduced ? 1 : 1 + Math.sin(time * 0.0018 + hash(node.id) % 80) * (0.05 + heat * 0.04);
@@ -902,7 +981,7 @@ function galaxySprite(view) {
 function drawBlackHole(view, item, time, alpha) {
   const { x, y, radius, node } = item;
   const context = view.context;
-  const reduced = view.media.matches;
+  const reduced = frozen(view);
   const heat = heatFor(view, node);
   const spin = reduced ? hash(node.id) % 1000 : time * 0.0011 + hash(node.id);
   const pulse = reduced ? 1 : 1 + Math.sin(time * 0.003 + hash(node.id) % 80) * (0.08 + heat * 0.06);
@@ -965,7 +1044,7 @@ function drawBlackHole(view, item, time, alpha) {
 function drawStars(view, time) {
   if (!view.stars.length) return;
   const context = view.context;
-  const reduced = view.media.matches;
+  const reduced = frozen(view);
   context.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
   for (const star of view.stars) {
     const twinkle = reduced ? star.base : star.base + Math.sin(time * star.speed + star.phase) * 0.1;
@@ -1050,7 +1129,7 @@ function draw(view, time = performance.now()) {
   }
   context.setLineDash([]);
   const directed = new Set(view.layout.edges.map(edge => JSON.stringify([edge.from, edge.to])));
-  const reduced = view.media.matches;
+  const reduced = frozen(view);
   for (const link of view.layout.links) {
     const source = projected.get(link.source.id), target = projected.get(link.target.id);
     if (!source || !target) continue;
@@ -1068,7 +1147,9 @@ function draw(view, time = performance.now()) {
     const heat = heatFor(view, node);
     const color = colorFor(node, heat);
     context.globalAlpha = alpha;
-    if (node.kind === 'galaxy') {
+    if (node.missing) {
+      drawGhostMoon(view, item);
+    } else if (node.kind === 'galaxy') {
       drawGalaxy(view, item, time, alpha);
     } else if (node.kind === 'blackhole') {
       drawBlackHole(view, item, time, alpha);
@@ -1091,17 +1172,13 @@ function draw(view, time = performance.now()) {
       const halo = item.expanded ? 16 : node.kind === 'galaxy' ? 10 : node.kind === 'blackhole' ? 8 : 5;
       context.beginPath(); context.arc(x, y, radius + halo, 0, Math.PI * 2); context.stroke();
     }
-    if (node.missing) {
-      context.strokeStyle = '#a6a3b3'; context.lineWidth = 1.4; context.setLineDash([3, 3]);
-      context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.stroke(); context.setLineDash([]);
-    } else if (node.kind !== 'blackhole' && node.kind !== 'galaxy') {
+    if (!node.missing && node.kind !== 'blackhole' && node.kind !== 'galaxy') {
       context.drawImage(sprite(view, color, node.kind, node.radius), x - radius, y - radius, radius * 2, radius * 2);
     }
-    if (node.id === view.currentId) {
-      context.fillStyle = '#ffffff'; context.beginPath(); context.arc(x + radius, y - radius, 3, 0, Math.PI * 2); context.fill();
-    }
+    if (node.id === view.currentId && !node.missing) drawLighthouse(view, item, time, reduced);
   }
   labels(view);
+  drawMiniMap(view);
   context.globalAlpha = 1;
 }
 
@@ -1148,6 +1225,99 @@ function drawPortal(context, x, y, highlighted) {
   context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.stroke();
 }
 
+function drawGhostMoon(view, item) {
+  const { x, y, radius } = item;
+  const context = view.context;
+  context.save();
+  context.globalAlpha = item.alpha * 0.55;
+  context.strokeStyle = '#b7b0c8';
+  context.lineWidth = 1;
+  context.setLineDash([2.5, 3.5]);
+  context.beginPath(); context.arc(x, y, radius * 1.55, 0, Math.PI * 2); context.stroke();
+  context.setLineDash([]);
+  context.fillStyle = 'rgba(176, 170, 196, 0.22)';
+  context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.fill();
+  context.save();
+  context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.clip();
+  context.fillStyle = 'rgba(210, 206, 224, 0.5)';
+  context.beginPath(); context.arc(x - radius * 0.38, y - radius * 0.12, radius, 0, Math.PI * 2); context.fill();
+  context.restore();
+  context.strokeStyle = '#c4bfd4';
+  context.lineWidth = 1.2;
+  context.setLineDash([3, 3]);
+  context.beginPath(); context.arc(x, y, radius, 0, Math.PI * 2); context.stroke();
+  context.setLineDash([]);
+  context.restore();
+}
+
+function drawLighthouse(view, item, time, reduced) {
+  const { x, y, radius } = item;
+  const context = view.context;
+  context.save();
+  const glow = context.createRadialGradient(x, y, radius * 0.4, x, y, radius * 4.2);
+  glow.addColorStop(0, 'rgba(255,248,216,0.4)');
+  glow.addColorStop(1, 'rgba(255,248,216,0)');
+  context.globalAlpha = 1;
+  context.fillStyle = glow;
+  context.beginPath(); context.arc(x, y, radius * 4.2, 0, Math.PI * 2); context.fill();
+  context.strokeStyle = '#fff4c8';
+  context.lineWidth = 1.7;
+  context.beginPath(); context.arc(x, y, radius + 5.5, 0, Math.PI * 2); context.stroke();
+  if (!reduced) {
+    const angle = time * 0.00105;
+    const span = 0.38;
+    context.translate(x, y);
+    context.rotate(angle);
+    const sweep = context.createRadialGradient(0, 0, 0, 0, 0, radius * 9);
+    sweep.addColorStop(0, 'rgba(255,250,230,0.48)');
+    sweep.addColorStop(0.4, 'rgba(255,236,170,0.14)');
+    sweep.addColorStop(1, 'rgba(255,236,170,0)');
+    context.fillStyle = sweep;
+    context.beginPath();
+    context.moveTo(0, 0);
+    context.arc(0, 0, radius * 9, -span, span);
+    context.closePath();
+    context.fill();
+  }
+  context.restore();
+}
+
+function drawMiniMap(view) {
+  const mini = miniState(view);
+  if (!mini) return;
+  const { rect, bounds } = mini;
+  const context = view.context;
+  context.save();
+  context.globalAlpha = 1;
+  context.fillStyle = '#0c0d12ee';
+  context.strokeStyle = '#3b3e48';
+  context.lineWidth = 1;
+  context.beginPath();
+  if (context.roundRect) context.roundRect(rect.x, rect.y, rect.width, rect.height, 8);
+  else context.rect(rect.x, rect.y, rect.width, rect.height);
+  context.fill();
+  context.stroke();
+  context.beginPath();
+  context.rect(rect.x, rect.y, rect.width, rect.height);
+  context.clip();
+  const dots = miniCandidates(view).filter(node => node.kind === 'galaxy' || node.kind === 'blackhole'
+    || node.kind === 'sun' || node.id === view.currentId);
+  for (const node of dots) {
+    const point = worldToMini(node, bounds, rect);
+    const size = node.kind === 'galaxy' ? 3.2 : node.kind === 'blackhole' ? 2.4 : 1.6;
+    context.fillStyle = node.id === view.currentId ? '#fff4c8'
+      : node.id === view.diveId ? '#d8dec6'
+        : node.kind === 'galaxy' ? '#9ecbff'
+          : node.kind === 'blackhole' ? '#c9a0ff' : '#ffcf8a';
+    context.beginPath(); context.arc(point.x, point.y, size, 0, Math.PI * 2); context.fill();
+  }
+  const viewport = miniViewport(view.camera, view.width, view.height, bounds, rect);
+  context.strokeStyle = '#e8e4c8';
+  context.lineWidth = 1;
+  context.strokeRect(viewport.x, viewport.y, viewport.width, viewport.height);
+  context.restore();
+}
+
 function arrow(context, source, target) {
   const angle = Math.atan2(target.y - source.y, target.x - source.x);
   const distance = Math.hypot(target.x - source.x, target.y - source.y);
@@ -1163,7 +1333,6 @@ function arrow(context, source, target) {
 
 function labels(view) {
   const context = view.context;
-  context.font = '500 12px "Segoe UI", sans-serif';
   context.textAlign = 'center'; context.textBaseline = 'middle';
   const priority = item => (item.node.id === view.selectedId ? 100000 : 0)
     + (item.node.id === view.hoverId ? 90000 : 0) + (item.node.id === view.currentId ? 80000 : 0)
@@ -1171,19 +1340,24 @@ function labels(view) {
   const candidates = [...view.screenNodes].sort((left, right) => priority(right) - priority(left));
   const placed = [];
   const budget = Math.max(10, Math.floor(view.width * view.height / 7500));
+  const mini = miniMapRect(view.width, view.height);
+  const topInset = view.canvas.classList.contains('graph-canvas') ? 58 : 4;
+  const bottomInset = mini ? view.height - mini.y + 4 : 4;
   for (const item of candidates) {
     const important = priority(item) >= 80000;
+    const ghost = !!item.node.missing;
     if ((!view.options.labels || placed.length >= budget || item.radius < 5.5 || item.alpha < 0.5) && !important) continue;
     let text = item.node.title;
     if (text.length > 26) text = text.slice(0, 25) + '\u2026';
-    let width = view.labelWidths.get(text);
-    if (width === undefined) { width = context.measureText(text).width + 12; view.labelWidths.set(text, width); }
+    context.font = `${ghost ? 'italic ' : ''}500 12px "Segoe UI", sans-serif`;
+    const key = (ghost ? 'i:' : '') + text;
+    let width = view.labelWidths.get(key);
+    if (width === undefined) { width = context.measureText(text).width + 12; view.labelWidths.set(key, width); }
     let rectangle;
     for (const direction of [1, -1]) {
       const pad = item.expanded ? 52 : item.node.kind === 'galaxy' ? 34 : item.node.kind === 'blackhole' ? 28 : 17;
       const candidate = { x: item.x - width / 2, y: item.y + direction * (item.radius + pad) - 10, width, height: 20 };
-      const topInset = view.canvas.classList.contains('graph-canvas') ? 40 : 4;
-      if (candidate.x < 4 || candidate.x + width > view.width - 4 || candidate.y < topInset || candidate.y + 20 > view.height - 4) continue;
+      if (candidate.x < 4 || candidate.x + width > view.width - 4 || candidate.y < topInset || candidate.y + 20 > view.height - bottomInset) continue;
       if (placed.some(other => candidate.x < other.x + other.width + 4 && candidate.x + width + 4 > other.x
         && candidate.y < other.y + other.height + 3 && candidate.y + 23 > other.y)) continue;
       if (view.screenNodes.some(other => other !== item && other.x + other.radius > candidate.x
@@ -1192,9 +1366,9 @@ function labels(view) {
     }
     if (!rectangle) continue;
     placed.push(rectangle);
-    context.globalAlpha = important ? 1 : 0.9;
+    context.globalAlpha = important ? 1 : ghost ? 0.7 : 0.9;
     context.fillStyle = '#090a0deb'; context.fillRect(rectangle.x, rectangle.y, width, 20);
-    context.fillStyle = important ? '#ffffff' : '#c4c8d0';
+    context.fillStyle = important ? '#ffffff' : ghost ? '#9b97a8' : '#c4c8d0';
     context.fillText(text, rectangle.x + width / 2, rectangle.y + 10);
   }
   if (view.labelWidths.size > 2000) view.labelWidths.clear();

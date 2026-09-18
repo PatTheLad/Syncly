@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collapsed, createLayout, kindFor, lodHidden, lodOpen, radiusFor, recencyHeat, restorePositions, sunColorFor } from '../../src/Syncly.UI/wwwroot/js/galaxy-layout.mjs';
+import { collapsed, createLayout, diveCrumbs, kindFor, lodHidden, lodOpen, miniMapBounds, miniMapRect, miniToWorld, miniViewport, radiusFor, recencyHeat, restorePositions, sunColorFor, worldToMini } from '../../src/Syncly.UI/wwwroot/js/galaxy-layout.mjs';
 
 const fixture = () => ({
   nodes: [{ id: 'parent' }, { id: 'child', parentId: 'parent' }, { id: 'other' }, { id: 'isolated' }],
@@ -257,4 +257,44 @@ test('returning to an unchanged graph restores its settled layout exactly', () =
   const updated = createLayout(changed, first.snapshot(), first.topology);
   assert.equal(updated.active, true);
   settle(updated);
+});
+
+test('diveCrumbs is root-to-leaf and empty when dive is null', () => {
+  const layout = createLayout({
+    nodes: [
+      { id: 'core', title: 'Andromeda', depth: 0 },
+      ...Array.from({ length: 80 }, (_, index) => ({ id: `sat-${index}`, title: `Arm ${index}`, depth: 1, parentId: 'core' })),
+      { id: 'world', title: 'Earth', depth: 2, parentId: 'sat-0' },
+    ],
+  });
+  assert.deepEqual(diveCrumbs(layout.byId, null), []);
+  assert.deepEqual(diveCrumbs(layout.byId, undefined), []);
+  const hole = diveCrumbs(layout.byId, 'sat-0');
+  assert.equal(hole[0].id, 'core');
+  assert.equal(hole[0].title, 'Andromeda');
+  assert.equal(hole[0].kind, 'galaxy');
+  assert.equal(hole.at(-1).id, 'sat-0');
+  assert.equal(hole.at(-1).kind, 'blackhole');
+  assert.equal(hole.length, 2);
+  const world = diveCrumbs(layout.byId, 'world');
+  assert.deepEqual(world.map(crumb => crumb.id), ['core', 'sat-0', 'world']);
+});
+
+test('mini-map mapping keeps the camera view inside the radar', () => {
+  assert.equal(miniMapRect(300, 600), null);
+  const rect = miniMapRect(800, 600);
+  assert.ok(rect);
+  assert.equal(rect.width, 128);
+  const bounds = miniMapBounds([
+    { x: 0, y: 0, radius: 20, systemRadius: 80, depth: 0, kind: 'galaxy' },
+    { x: 200, y: 0, radius: 10, depth: 1, kind: 'blackhole' },
+  ]);
+  const camera = { x: 100, y: 0, scale: 1 };
+  const viewport = miniViewport(camera, 800, 600, bounds, rect);
+  const mapped = worldToMini({ x: 100, y: 0 }, bounds, rect);
+  assert.ok(mapped.x >= viewport.x - 0.5 && mapped.x <= viewport.x + viewport.width + 0.5);
+  assert.ok(mapped.y >= viewport.y - 0.5 && mapped.y <= viewport.y + viewport.height + 0.5);
+  const click = miniToWorld(mapped, bounds, rect);
+  assert.ok(Math.abs(click.x - 100) < 1e-6);
+  assert.ok(Math.abs(click.y - 0) < 1e-6);
 });

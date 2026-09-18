@@ -60,6 +60,12 @@
 .graph-status { position: absolute; top: 16px; left: 20px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 11px; line-height: 1.5; color: #999eaa; pointer-events: none; max-width: calc(100% - 40px); }
 .graph-status-dot { width: 2px; height: 2px; border-radius: 50%; background: #70747d; }
 .graph-status-filter { color: #d8dec6; }
+.graph-crumbs { position: absolute; top: 38px; left: 20px; z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; max-width: calc(100% - 40px); pointer-events: auto; }
+.graph-crumb { margin: 0; padding: 2px 6px; border: 0; border-radius: 4px; background: transparent; color: #d8dec6; font-size: 11px; line-height: 1.4; cursor: pointer; }
+.graph-crumb:hover { background: #24262d; color: #fff; }
+.graph-crumb.current { color: #fff; cursor: default; }
+.graph-crumb.current:hover { background: transparent; }
+.graph-crumb-sep { color: #70747d; font-size: 11px; pointer-events: none; }
 .graph-camera { position: absolute; right: 16px; bottom: 8px; display: flex; align-items: center; gap: 1px; padding: 3px; border: 1px solid var(--graph-line); background: #15161c; border-radius: 7px; }
 .graph-tool-divider { height: 22px; width: 1px; background: var(--graph-line); margin: 0 3px; }
 .graph-settings { position: absolute; top: 12px; right: 12px; width: min(280px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow-y: auto; z-index: 5; padding: 8px 16px 16px; border: 1px solid #3b3e48; border-radius: 8px; background: #17181e; box-shadow: 0 12px 40px #0006; }
@@ -145,6 +151,7 @@
   .graph-expand { display: inline-flex; }
   .graph-camera { bottom: 8px; right: 12px; }
   .graph-status { top: 12px; left: 16px; }
+  .graph-crumbs { top: 34px; left: 16px; }
   .graph-page-actions > div { top: auto; bottom: 48px; }
 }
 @media (max-height: 500px) and (min-width: 640px) {

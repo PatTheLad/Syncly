@@ -125,6 +125,59 @@ export function divePath(byId, diveId) {
   return path;
 }
 
+export function diveCrumbs(byId, diveId) {
+  const crumbs = [];
+  let node = diveId && byId ? byId.get(diveId) : null;
+  while (node) {
+    crumbs.push({ id: node.id, title: node.title || 'Untitled', kind: node.kind || 'sun' });
+    node = node.parentId ? byId.get(node.parentId) : null;
+  }
+  crumbs.reverse();
+  return crumbs;
+}
+
+export function miniMapRect(width, height, size = 128, margin = 12, minWidth = 420) {
+  if (!(width >= minWidth) || !(height >= size + margin * 2)) return null;
+  return { x: margin, y: height - margin - size, width: size, height: size };
+}
+
+export function miniMapBounds(nodes) {
+  let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
+  for (const node of nodes || []) {
+    if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) continue;
+    const extent = node.depth > 0 ? (node.radius || 0) : (node.systemRadius || node.radius || 0);
+    left = Math.min(left, node.x - extent);
+    right = Math.max(right, node.x + extent);
+    top = Math.min(top, node.y - extent);
+    bottom = Math.max(bottom, node.y + extent);
+  }
+  if (!Number.isFinite(left)) return { x: -1, y: -1, width: 2, height: 2 };
+  const span = Math.max(40, right - left, bottom - top) * 1.12;
+  return { x: (left + right) / 2 - span / 2, y: (top + bottom) / 2 - span / 2, width: span, height: span };
+}
+
+export function worldToMini(point, bounds, rect) {
+  return {
+    x: rect.x + (point.x - bounds.x) / Math.max(1e-6, bounds.width) * rect.width,
+    y: rect.y + (point.y - bounds.y) / Math.max(1e-6, bounds.height) * rect.height,
+  };
+}
+
+export function miniToWorld(point, bounds, rect) {
+  return {
+    x: bounds.x + (point.x - rect.x) / Math.max(1e-6, rect.width) * bounds.width,
+    y: bounds.y + (point.y - rect.y) / Math.max(1e-6, rect.height) * bounds.height,
+  };
+}
+
+export function miniViewport(camera, viewWidth, viewHeight, bounds, rect) {
+  const halfW = viewWidth / 2 / Math.max(1e-6, camera.scale);
+  const halfH = viewHeight / 2 / Math.max(1e-6, camera.scale);
+  const topLeft = worldToMini({ x: camera.x - halfW, y: camera.y - halfH }, bounds, rect);
+  const bottomRight = worldToMini({ x: camera.x + halfW, y: camera.y + halfH }, bounds, rect);
+  return { x: topLeft.x, y: topLeft.y, width: bottomRight.x - topLeft.x, height: bottomRight.y - topLeft.y };
+}
+
 export function openAmount(node, scale) {
   const body = (node.radius || 0) * scale;
   if (node.kind === 'galaxy') return clamp01((body - 3) / 16);

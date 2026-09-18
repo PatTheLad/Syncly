@@ -28,15 +28,34 @@
     </header>
     <div class="graph-workspace">
     <div class="graph-stage">
-        <canvas id="@CanvasId" class="graph-canvas" tabindex="0" aria-label="Note connections. Arrow keys select, Enter opens, Home fits, plus and minus zoom."></canvas>
+        <canvas id="@CanvasId" class="graph-canvas" tabindex="0" aria-label="Note connections. Arrow keys select, Enter opens, Home fits, Backspace pops out, plus and minus zoom."></canvas>
         <div class="graph-status" aria-live="polite">
             @if (_loaded)
             {
                 <span>@_graph.Nodes.Count(node => !node.Missing) notes</span><span class="graph-status-dot"></span><span>@_graph.Edges.Count links</span>
-                @if (!string.IsNullOrEmpty(_diveTitle)) { <span class="graph-status-filter">@_diveTitle</span> }
                 @if (_filter != "all") { <span class="graph-status-filter">@(_filter == "unlinked" ? "Unlinked" : "Unresolved")</span> }
             }
         </div>
+        @if (_crumbs.Count > 0)
+        {
+            <nav class="graph-crumbs" aria-label="Dive path">
+                @for (var index = 0; index < _crumbs.Count; index++)
+                {
+                    var crumb = _crumbs[index];
+                    var last = index == _crumbs.Count - 1;
+                    if (index > 0) { <span class="graph-crumb-sep" aria-hidden="true">›</span> }
+                    if (last)
+                    {
+                        <span class="graph-crumb current" aria-current="location">@crumb.Title</span>
+                    }
+                    else
+                    {
+                        var id = crumb.Id;
+                        <button type="button" class="graph-crumb" @onclick="() => FocusCrumbAsync(id)">@crumb.Title</button>
+                    }
+                }
+            </nav>
+        }
         <div class="graph-camera" role="group" aria-label="Graph camera">
             <button type="button" class="graph-tool" title="Zoom in" aria-label="Zoom in" @onclick='() => CanvasAsync("zoom", 1.25)'><span class="graph-icon icon-plus" aria-hidden="true"></span></button>
             <button type="button" class="graph-tool" title="Zoom out" aria-label="Zoom out" @onclick='() => CanvasAsync("zoom", 0.8)'><span class="graph-icon icon-minus" aria-hidden="true"></span></button>
@@ -50,6 +69,7 @@
                 <header><h2>View</h2><button type="button" class="graph-tool" title="Close settings" aria-label="Close settings" @onclick="() => _settingsOpen = false"><span class="graph-icon icon-x" aria-hidden="true"></span></button></header>
                 <label><span>Notes</span><select aria-label="Filter notes" value="@_filter" @onchange="OnFilterAsync"><option value="all">All notes</option><option value="unlinked">Unlinked</option><option value="unresolved">Unresolved</option></select></label>
                 <label><span>Labels</span><input type="checkbox" checked="@_labels" @onchange="ToggleLabelsAsync" /></label>
+                <label><span>Orbits</span><input type="checkbox" checked="@_orbit" @onchange="ToggleOrbitAsync" /></label>
                 <label><span>Recent edits</span><input type="checkbox" checked="@_recent" @onchange="ToggleRecentAsync" /></label>
                 <button type="button" class="graph-command" @onclick='() => CanvasAsync("reset")'><span class="graph-icon icon-rotate-ccw" aria-hidden="true"></span>Reset layout</button>
             </section>
@@ -110,8 +130,9 @@
 
 @code {
     private const string CanvasId = "galaxy-canvas";
-    private sealed record ViewOptions(bool Labels, bool Recent);
+    private sealed record ViewOptions(bool Labels, bool Recent, bool Orbit);
     private sealed record CtxMenuState(double Left, double Top, IReadOnlyList<ContextMenu.MenuItem> Items);
+    public sealed record DiveCrumb(string Id, string Title, string Kind);
     [SupplyParameterFromQuery(Name = "focus")] public string? Focus { get; set; }
     private PageGraph _graph = new([], []);
     private Dictionary<string, GraphNode> _byId = new(StringComparer.Ordinal);
@@ -121,10 +142,11 @@
     private IJSObjectReference? _module;
     private DotNetObjectReference<Graph>? _self;
     private bool _mounted, _disposed, _loaded, _busy, _settingsOpen, _showPages, _expanded, _actionsOpen;
-    private bool _connections, _labels = true, _recent, _previewLoading;
-    private string? _selectedId, _spaceKey, _pendingFocus, _handledFocus, _dialog, _focusElement, _diveTitle;
+    private bool _connections, _labels = true, _orbit = true, _recent, _previewLoading;
+    private string? _selectedId, _spaceKey, _pendingFocus, _handledFocus, _dialog, _focusElement;
     private string? _loadError, _rendererError, _previewError, _notice;
     private string _query = string.Empty, _filter = "all", _renameText = string.Empty;
+    private List<DiveCrumb> _crumbs = [];
     private long _loadGeneration;
     private GraphPreview? _preview;
     private CancellationTokenSource? _previewCts;
@@ -172,6 +194,7 @@
             var options = await _module.InvokeAsync<ViewOptions>("mount", CanvasId, _self);
             _labels = options.Labels;
             _recent = options.Recent;
+            _orbit = options.Orbit;
             _mounted = true;
             _rendererError = null;
             if (_loaded) await PushAsync();
@@ -213,7 +236,8 @@
                 _connections = _showPages = _expanded = _actionsOpen = false;
                 _query = string.Empty;
                 _filter = "all";
-                _dialog = _notice = _diveTitle = null;
+                _dialog = _notice = null;
+                _crumbs = [];
                 _previewCts?.Cancel();
                 _preview = null;
             }
@@ -266,7 +290,7 @@
     private IReadOnlyList<GraphNode> ConnectionsTo(bool incoming) => _selectedId is null ? []
         : (incoming ? _incoming : _outgoing).GetValueOrDefault(_selectedId) ?? [];
 
-    private Task ConfigureAsync() => CanvasAsync("configure", new { mode = _connections ? "connections" : "all", filter = _filter, query = _query, labels = _labels, recent = _recent });
+    private Task ConfigureAsync() => CanvasAsync("configure", new { mode = _connections ? "connections" : "all", filter = _filter, query = _query, labels = _labels, recent = _recent, orbit = _orbit });
 
     private async Task SetScopeAsync(bool connections)
     {
@@ -300,6 +324,7 @@
 
     private Task ClearFilterAsync() => OnFilterAsync(new ChangeEventArgs { Value = "all" });
     private async Task ToggleLabelsAsync(ChangeEventArgs args) { _labels = args.Value is true; await ConfigureAsync(); }
+    private async Task ToggleOrbitAsync(ChangeEventArgs args) { _orbit = args.Value is true; await ConfigureAsync(); }
     private async Task ToggleRecentAsync(ChangeEventArgs args) { _recent = args.Value is true; await ConfigureAsync(); }
     private void TogglePages() { _showPages = !_showPages; _expanded = _showPages; _settingsOpen = false; UpdateResults(); }
     private void ToggleExpanded() => _expanded = !_expanded;
@@ -362,10 +387,12 @@
     }
 
     private Task LocateAsync() => State.CurrentPageId is { } id ? SelectResultAsync(id) : Task.CompletedTask;
+    private Task FocusCrumbAsync(string id) => CanvasAsync("focus", id);
     [JSInvokable] public Task OnSelect(string? id) => InvokeAsync(() => SelectAsync(id, false));
-    [JSInvokable] public Task OnDive(string? id, string? title) => InvokeAsync(() =>
+    [JSInvokable] public Task OnDive(string? id, DiveCrumb[]? crumbs) => InvokeAsync(() =>
     {
-        _diveTitle = string.IsNullOrWhiteSpace(title) ? null : title;
+        _crumbs = crumbs is { Length: > 0 } ? [.. crumbs] : [];
+        StateHasChanged();
     });
     [JSInvokable] public Task OnOpen(string id) => InvokeAsync(() => OpenAsync(id));
     [JSInvokable] public Task OnFocusSearch() => CallAsync("focusElement", "graph-search");
